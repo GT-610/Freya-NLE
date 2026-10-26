@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to AviQtl-Plus are documented in this file.
+All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
@@ -20,6 +20,18 @@ All notable changes to AviQtl-Plus are documented in this file.
   shell, or a `open`/`xdg-open` hand-off lands on the project instead of on an
   empty launcher. `--help` prints the options and `--version` prints the version
   instead of both being rejected as unknown arguments
+
+### Changed
+- The project is called Freya NLE. Crate names, the binary, the macOS bundle
+  identifier, the user data directory, and the window titles follow the new
+  name; `NAMING.md` records the whole mapping. Everything a user already has
+  keeps working: an existing data directory and portable settings file are
+  carried over on first launch, `.aviqtl` projects and `.aviqtlfrag` fragments
+  still open, and scripts written against the `aviqtl` Lua table still run
+  because that name is still installed next to `freya`
+- Projects are saved as `.freya` and fragments as `.freyafrag`, and the
+  fragment format marker is now `freya.fragment`. A fragment saved before the
+  rename is rewritten in the current format the next time it is saved
 
 ### Fixed
 - An object whose `transform` effect omits a parameter - `scale`, `opacity`, a

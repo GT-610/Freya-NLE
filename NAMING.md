@@ -36,6 +36,10 @@ reads out of those files.
 Renaming the C ABI now would mean editing both sides of a contract that is
 scheduled for deletion, so it waits for the Qt removal.
 
+The package runtime identifier `aviqtl-wgsl-v1` also keeps its spelling. It is
+declared in effect packages that live outside this repository and work under a
+versioned name, so it changes only with a new runtime identifier.
+
 ## Names that are not ours
 
 `AviUtl`, `AviUtl2`, `ExEdit`, and `.exo` belong to other projects. References

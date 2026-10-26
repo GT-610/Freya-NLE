@@ -36,7 +36,7 @@ These are expected type-identity failures from having wgpu 29 and 30 in the same
 not renderer, preview, export, shader, or Metal backend failures.
 
 wgpu 30 also adds `apply_limit_buckets` to `RequestAdapterOptions`. Using
-`..Default::default()` after AviQtl's explicit adapter preferences is sufficient.
+`..Default::default()` after Freya NLE's explicit adapter preferences is sufficient.
 
 ## Upgrade and rollback plan
 

@@ -1,4 +1,4 @@
-# AviQtl Rust workspace
+# Freya NLE Rust workspace
 
 Rust + Slint is the default application built by `BUILD.py`. The workspace contains nine crates:
 
@@ -20,7 +20,7 @@ Carla, graphics, and audio dependencies are separate from migration of the appli
 See [migration status and Qt retirement criteria](MIGRATION_STATUS.md) and the
 [dependency inventory](../audits/2026-09-rust-dependency-boundary.md).
 
-The Rust core is the portable domain foundation of AviQtl. New validation, normalization,
+The Rust core is the portable domain foundation of Freya NLE. New validation, normalization,
 planning, interpolation, serialization, catalog, and DSP rules belong here unless they require a
 native framework object to perform their work. C++ must not keep a second implementation of a
 Rust-owned rule.

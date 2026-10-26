@@ -2,23 +2,26 @@
   <img src="../../assets/splash.svg" width="256">
 </p>
 
-<p align="center"><b>AviUtlを踏襲し凌駕する次世代動画編集ソフト</b></p>
+<p align="center"><b>AviUtlの編集感覚をRust・Slint・wgpuで作り直した動画編集ソフト</b></p>
 
 <p align="center">
-  <a href="https://github.com/GT-610/AviQtl-Plus">GitHub</a>
-  / <a href="https://github.com/GT-610/AviQtl-Plus/releases">リリース</a>
+  <a href="https://github.com/GT-610/freya-nle">GitHub</a>
+  / <a href="https://github.com/GT-610/freya-nle/releases">リリース</a>
 </p>
 
 <p align="center">
   <a href="../../README.md">English</a> / <b>日本語</b> / <a href="./README.zh_CN.md">简体中文</a>
 </p>
 
+> [!NOTE]
+> Freya NLEは0.8までAviQtl-Plusという名前でした。古いリンクはリダイレクトされ、`.aviqtl`プロジェクトと`.aviqtlfrag`フラグメントは引き続き開けます。変更点は[NAMING.md](../../NAMING.md)にあります。
+
 > [!IMPORTANT]
-> AviQtl-Plusは[taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl)のforkであり、上流プロジェクトが**Rust + Slint + wgpu**で再構築された後も**Qt Quick + QRhi + ECS**の開発路線を継続しています。その後フロントエンドも同じ方向へ移行しました。**Rust + Slint + wgpuがデフォルトビルドであり、リリースビルドです**。従来のQtフロントエンドは`python3 BUILD.py --frontend qt`で引き続きビルドでき、挙動の参照用としてのみ残しています。詳しい経緯は[プロジェクトについて](https://aviqtl.gt610.dpdns.org/guide/start-here/about)をご覧ください。
+> Freya NLEは[taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl)のforkであり、上流プロジェクトが**Rust + Slint + wgpu**で再構築された後も**Qt Quick + QRhi + ECS**の開発路線を継続しています。その後フロントエンドも同じ方向へ移行しました。**Rust + Slint + wgpuがデフォルトビルドであり、リリースビルドです**。従来のQtフロントエンドは`python3 BUILD.py --frontend qt`で引き続きビルドでき、挙動の参照用としてのみ残しています。詳しい経緯は[プロジェクトについて](https://aviqtl.gt610.dpdns.org/guide/start-here/about)をご覧ください。
 
-## [AviQtl-Plus](https://github.com/GT-610/AviQtl-Plus)とは
+## [Freya NLE](https://github.com/GT-610/freya-nle)とは
 
-<img src="../../assets/screenshot.webp" alt="AviQtl-Plusのスクリーンショット">
+<img src="../../assets/screenshot.webp" alt="Freya NLEのスクリーンショット">
 
 **AviUtl 1.10** & **ExEdit 0.92**の操作感を踏襲しつつ、**AviUtlを超える性能**を持つ動画編集ソフトを開発するプロジェクトです。
 
@@ -44,7 +47,7 @@
 
 ## エフェクトパッケージ
 
-AviQtl-Plus はモジュラーなエフェクトシステムを備えています。`effect-packages/` ディレクトリには、拡張システムを示す即利用可能なエフェクトパッケージが含まれています：
+Freya NLE はモジュラーなエフェクトシステムを備えています。`effect-packages/` ディレクトリには、拡張システムを示す即利用可能なエフェクトパッケージが含まれています：
 
 | パッケージ | タイプ | 内容 |
 |-----------|--------|------|
@@ -54,14 +57,14 @@ AviQtl-Plus はモジュラーなエフェクトシステムを備えていま�
 
 ## 関連リンク
 
-AviQtl-Plusは、多くの素晴らしいプロジェクトの上に成り立っています。
+Freya NLEは、多くの素晴らしいプロジェクトの上に成り立っています。
 
 | プロジェクト | ライセンス | 役割 |
 | :--- | :--- | :--- |
 | AviUtl | 非自由 | リスペクト元 |
 | AviQtl | AGPLv3 | 元のQt Quick版プロジェクト；上流の`aviqtl`ブランチ |
 | NeoUtl | AGPLv3 | 原作者によるRust + Slint + wgpu版 |
-| AviQtl-Plus | AGPLv3 | このプロジェクト — Qt Quick + QRhi + ECS から Rust + Slint + wgpu へ移行中 |
+| Freya NLE | AGPLv3 | このプロジェクト — Qt Quick + QRhi + ECS から Rust + Slint + wgpu へ移行中 |
 | Carla | GPLv2+ | 音声エフェクト（VST3/LV2等）のホスト |
 | FFmpeg | GPLv2+ | 動画・音声のデコード / エンコード |
 | LuaJIT | MIT | 旧Qtフロントエンドのスクリプトエンジン |
@@ -72,6 +75,6 @@ AviQtl-Plusは、多くの素晴らしいプロジェクトの上に成り立っ
 
 ## ライセンス
 
-AviQtl-Plusは[GNU Affero General Public License](https://www.gnu.org/licenses/agpl-3.0.txt)に基づいて公開されています。
+Freya NLEは[GNU Affero General Public License](https://www.gnu.org/licenses/agpl-3.0.txt)に基づいて公開されています。
 
-AviQtl-Plus内で使用されている[Remix Icon](https://remixicon.com/)は[Remix Icon License](https://raw.githubusercontent.com/Remix-Design/RemixIcon/refs/heads/master/License)に基づいて提供されています。
+Freya NLE内で使用されている[Remix Icon](https://remixicon.com/)は[Remix Icon License](https://raw.githubusercontent.com/Remix-Design/RemixIcon/refs/heads/master/License)に基づいて提供されています。

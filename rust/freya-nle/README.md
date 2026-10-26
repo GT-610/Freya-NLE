@@ -1,6 +1,6 @@
-# AviQtl Slint frontend
+# Freya NLE frontend
 
-This crate is the Rust desktop frontend for AviQtl. It preserves the existing layer/object,
+This crate is the Rust desktop frontend for Freya NLE. It preserves the existing layer/object,
 start/end parameter, independent-window, project ownership, and save-confirmation workflows.
 The September 2026 workflow improvements deliberately extend the Qt baseline with AviUtl-style
 numeric scrubbing and layer selection, standard Slint menu shortcuts, compact object settings,
@@ -142,7 +142,7 @@ when moving presentation code so callbacks and translation contexts retain their
 
 ### GPU requirement
 
-AviQtl requires a **GPU-backed wgpu adapter**. It does not ship a software or CPU
+Freya NLE requires a **GPU-backed wgpu adapter**. It does not ship a software or CPU
 renderer, matching how Premiere documents GPU requirements and removed its
 "Mercury Playback Engine Software Only" option, and how DaVinci Resolve requires
 a discrete GPU with sufficient VRAM.

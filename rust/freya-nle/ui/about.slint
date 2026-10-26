@@ -1,7 +1,7 @@
 import { AppTheme } from "theme.slint";
 
 export component AboutWindow inherits Window {
-    title: @tr("About AviQtl Plus");
+    title: @tr("About Freya NLE");
     preferred-width: 420px;
     preferred-height: 260px;
     min-width: 420px;
@@ -29,7 +29,7 @@ export component AboutWindow inherits Window {
                 alignment: center;
                 spacing: 4px;
                 Text {
-                    text: "AviQtl Plus " + root.version;
+                    text: "Freya NLE " + root.version;
                     color: AppTheme.foreground;
                     font-size: 28px;
                     font-weight: 700;
@@ -45,7 +45,7 @@ export component AboutWindow inherits Window {
         }
         Rectangle { height: 1px; background: AppTheme.border; }
         Text {
-            text: @tr("AviQtl Plus is not AviUtl.\n\nThis software is released under the GNU Affero General Public License Version 3.");
+            text: @tr("Freya NLE is not AviUtl.\n\nThis software is released under the GNU Affero General Public License Version 3.");
             color: AppTheme.muted-foreground;
             font-size: 13px;
             wrap: word-wrap;
@@ -53,7 +53,7 @@ export component AboutWindow inherits Window {
         Rectangle {
             height: 24px;
             link-text := Text {
-                text: "https://codeberg.org/taisho-guy/AviQtl";
+                text: "https://github.com/GT-610/freya-nle";
                 color: AppTheme.accent;
                 font-size: 13px;
                 vertical-alignment: center;
@@ -61,7 +61,7 @@ export component AboutWindow inherits Window {
             link-touch := TouchArea {
                 mouse-cursor: pointer;
                 accessible-role: button;
-                accessible-label: @tr("AviQtl Plus project page");
+                accessible-label: @tr("Freya NLE project page");
                 accessible-description: link-text.text;
                 accessible-action-default => { root.open-project-page(); }
                 clicked => { root.open-project-page(); }
