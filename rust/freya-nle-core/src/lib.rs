@@ -7,6 +7,7 @@ mod bake_plan;
 mod effect;
 pub mod exo;
 mod export;
+mod expression;
 mod keyframe;
 mod keyframe_document;
 mod midpoint;

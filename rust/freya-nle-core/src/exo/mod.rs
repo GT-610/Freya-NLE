@@ -238,7 +238,12 @@ impl ExoFilter {
         if digits.len() % 2 != 0 {
             return None;
         }
-        digits.as_chunks::<2>().0.iter().map(|pair| hex_byte(pair)).collect()
+        digits
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| hex_byte(pair))
+            .collect()
     }
 
     /// The object's text content, which ExEdit stores as hex-encoded UTF-16LE.

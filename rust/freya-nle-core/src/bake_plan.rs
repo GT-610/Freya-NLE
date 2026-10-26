@@ -4,6 +4,7 @@ use crate::abi::{
     STATUS_INVALID_ARGUMENT, STATUS_INVALID_JSON, STATUS_OK, STATUS_OVERLAPPING_BUFFERS,
     ranges_overlap, slice_is_valid,
 };
+use crate::expression;
 use crate::keyframe_document::{evaluate_resolved_track, parse_hex_color, resolve_track};
 use crate::policy::{PlaybackMode, playback_mode, resolve_video_time};
 use crate::project::{
@@ -618,6 +619,7 @@ struct CachedEffect {
     id: String,
     enabled: bool,
     known: bool,
+    fps: f64,
     params: BTreeMap<String, Value>,
     extra: ExtraFields,
     tracks: BTreeMap<String, ResolvedTrack>,
@@ -628,7 +630,7 @@ struct CachedEffect {
 }
 
 impl CachedEffect {
-    fn new(input: EffectInput, duration: i32) -> Self {
+    fn new(input: EffectInput, duration: i32, fps: f64) -> Self {
         let mut all_keys: BTreeSet<String> = input.params.keys().cloned().collect();
         all_keys.insert("time".to_owned());
         let mut tracks = BTreeMap::new();
@@ -642,6 +644,7 @@ impl CachedEffect {
             id: input.id,
             enabled: input.enabled,
             known: input.known,
+            fps,
             params: input.params,
             extra: ExtraFields::new(),
             tracks,
@@ -652,7 +655,7 @@ impl CachedEffect {
         }
     }
 
-    fn from_document(effect: &EffectDocument, duration: i32) -> Self {
+    fn from_document(effect: &EffectDocument, duration: i32, fps: f64) -> Self {
         let params = effect
             .params
             .iter()
@@ -676,6 +679,7 @@ impl CachedEffect {
             id: effect.id.clone(),
             enabled: effect.enabled,
             known: true,
+            fps,
             params,
             extra: effect.extra.clone(),
             tracks,
@@ -686,7 +690,7 @@ impl CachedEffect {
         }
     }
 
-    fn from_audio_plugin(plugin: &AudioPluginDocument, duration: i32) -> Self {
+    fn from_audio_plugin(plugin: &AudioPluginDocument, duration: i32, fps: f64) -> Self {
         let params = plugin
             .params
             .iter()
@@ -709,6 +713,7 @@ impl CachedEffect {
             id: plugin.id.clone(),
             enabled: plugin.enabled,
             known: true,
+            fps,
             params,
             extra: plugin.extra.clone(),
             tracks,
@@ -742,13 +747,37 @@ impl CachedEffect {
         if name == "time" {
             return Value::from(frame);
         }
-        if let Some(value) = self.numeric_values.get(name) {
-            return Value::from(*value);
+        let base = if let Some(value) = self.numeric_values.get(name) {
+            Value::from(*value)
+        } else if let Some(track) = self.tracks.get(name) {
+            track.evaluate(frame)
+        } else {
+            self.params.get(name).cloned().unwrap_or(Value::Null)
+        };
+        self.expression_value(name, frame, base)
+    }
+
+    /// Applies an AviUtl `=expression` stored for `name` on top of the keyframe
+    /// value, which is what ExEdit exposes to the expression as `value`.
+    fn expression_value(&self, name: &str, frame: i32, base: Value) -> Value {
+        let Some(Value::String(expression)) = self.params.get(name) else {
+            return base;
+        };
+        if !expression::is_expression(expression) {
+            return base;
         }
-        if let Some(track) = self.tracks.get(name) {
-            return track.evaluate(frame);
+        let current = numeric_value(&base).unwrap_or(0.0);
+        let time_seconds = if self.fps > 0.0 {
+            f64::from(frame) / self.fps
+        } else {
+            0.0
+        };
+        match expression::evaluate(&expression[1..], time_seconds, 0, current) {
+            Some(value) => Value::from(value),
+            // A broken expression keeps the literal fallback rather than
+            // dropping the parameter to zero.
+            None => base,
         }
-        self.params.get(name).cloned().unwrap_or(Value::Null)
     }
 
     fn float(&self, name: &str, frame: i32) -> f32 {
@@ -760,6 +789,14 @@ impl CachedEffect {
             return fallback;
         }
         self.float(name, frame)
+    }
+
+    /// Resolves a boolean parameter, which an expression can also produce.
+    fn flag_or(&self, name: &str, fallback: bool, frame: i32) -> bool {
+        if !self.params.contains_key(name) && !self.tracks.contains_key(name) {
+            return fallback;
+        }
+        qt_bool(Some(&self.value(name, frame)), fallback)
     }
 }
 
@@ -790,11 +827,11 @@ struct EvaluatedGroupControl {
 }
 
 impl CachedClip {
-    fn new(input: ClipInput) -> Self {
+    fn new(input: ClipInput, fps: f64) -> Self {
         let effects = input
             .effects
             .into_iter()
-            .map(|effect| CachedEffect::new(effect, input.duration_frames))
+            .map(|effect| CachedEffect::new(effect, input.duration_frames, fps))
             .collect();
         Self {
             clip_id: input.id,
@@ -811,16 +848,16 @@ impl CachedClip {
         }
     }
 
-    fn from_document(clip: &ClipDocument) -> Self {
+    fn from_document(clip: &ClipDocument, fps: f64) -> Self {
         let audio_plugins = clip
             .audio_plugins
             .iter()
-            .map(|plugin| CachedEffect::from_audio_plugin(plugin, clip.duration))
+            .map(|plugin| CachedEffect::from_audio_plugin(plugin, clip.duration, fps))
             .collect();
         let effects = clip
             .effects
             .iter()
-            .map(|effect| CachedEffect::from_document(effect, clip.duration))
+            .map(|effect| CachedEffect::from_document(effect, clip.duration, fps))
             .collect();
         Self {
             clip_id: clip.id,
@@ -874,18 +911,15 @@ impl BakePlan {
         if input.max_clip_id <= 0 {
             return Err(());
         }
+        let fps = input.fps;
+        let max_clip_id = input.max_clip_id;
         let clips = input
             .clips
             .into_iter()
-            .filter(|clip| clip.id >= 0 && clip.id < input.max_clip_id)
-            .map(CachedClip::new)
+            .filter(|clip| clip.id >= 0 && clip.id < max_clip_id)
+            .map(|clip| CachedClip::new(clip, fps))
             .collect();
-        Ok(Self::from_clips(
-            input.fps,
-            input.height,
-            clips,
-            HashMap::new(),
-        ))
+        Ok(Self::from_clips(fps, input.height, clips, HashMap::new()))
     }
 
     fn from_document(
@@ -901,7 +935,7 @@ impl BakePlan {
             .clips
             .iter()
             .filter(|clip| clip.scene_id == scene_id)
-            .map(CachedClip::from_document)
+            .map(|clip| CachedClip::from_document(clip, scene.fps))
             .collect();
         let scene_durations = document
             .scenes
@@ -1079,9 +1113,9 @@ impl BakePlan {
                     input.pan = effect.float_or("pan", 0.0, relative_frame);
                     input.fade_in_seconds = effect.float_or("fadeIn", 0.0, relative_frame);
                     input.fade_out_seconds = effect.float_or("fadeOut", 0.0, relative_frame);
-                    input.mute = u32::from(qt_bool(effect.params.get("mute"), false));
-                    input.solo = u32::from(qt_bool(effect.params.get("solo"), false));
-                    input.limiter = u32::from(qt_bool(effect.params.get("limiter"), true));
+                    input.mute = u32::from(effect.flag_or("mute", false, relative_frame));
+                    input.solo = u32::from(effect.flag_or("solo", false, relative_frame));
+                    input.limiter = u32::from(effect.flag_or("limiter", true, relative_frame));
                 }
                 let mut output = bake_audio(input);
                 // Scene projection needs a stable entity key even when the legacy single-clip
@@ -2242,6 +2276,72 @@ mod tests {
         let repeated = plan.compute(key);
         assert_eq!(repeated.counts.numeric_batch_calls, 0);
         assert_eq!(repeated.counts.numeric_track_count, 0);
+    }
+
+    #[test]
+    fn expression_parameters_are_evaluated_per_frame_with_time_and_keyframe_value() {
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 1,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 120,
+                "type": "video",
+                "effects": [{
+                    "id": "transform",
+                    "enabled": true,
+                    "known": true,
+                    "params": {"x": "=time*10", "y": "=value+2", "scale": 100.0},
+                    "keyframes": {"y": [
+                        {"frame": 0, "value": 0.0, "interp": "linear"},
+                        {"frame": 120, "value": 120.0, "interp": "linear"}
+                    ]}
+                }]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute(EvaluationKey {
+            current_frame: 60,
+            full_bake: true,
+            prefetch_frames: 30,
+        });
+        // `time` is seconds from the object start and `value` is the keyframe result:
+        // at frame 60 of a 60 fps scene, x = 1.0 * 10 and y = 60 + 2.
+        assert_eq!(output.renders[0].x, 10.0);
+        assert_eq!(output.renders[0].y, 62.0);
+        // A broken expression keeps the keyframe value instead of dropping the parameter.
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 2,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 60,
+                "type": "text",
+                "effects": [{
+                    "id": "transform",
+                    "enabled": true,
+                    "known": true,
+                    "params": {"x": "=1 +", "scale": 100.0},
+                    "keyframes": {"x": [
+                        {"frame": 0, "value": 7.0, "interp": "linear"},
+                        {"frame": 60, "value": 7.0, "interp": "linear"}
+                    ]}
+                }]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute(EvaluationKey {
+            current_frame: 30,
+            full_bake: true,
+            prefetch_frames: 30,
+        });
+        assert_eq!(output.renders[0].x, 7.0);
     }
 
     #[test]
