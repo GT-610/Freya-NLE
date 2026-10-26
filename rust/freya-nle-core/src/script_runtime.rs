@@ -450,7 +450,12 @@ fn install_aviqtl_api(vm: &mut Vm) -> Result<(), ScriptRuntimeError> {
         .with("undo", undo)
         .with("redo", redo)
         .build();
-    vm.set_global("aviqtl", LuaValue::Table(aviqtl))
+    let api = LuaValue::Table(aviqtl);
+    vm.set_global("freya", api)
+        .map_err(|error| runtime_error(vm, error))?;
+    // The pre-rename spelling stays available so scripts written before the
+    // rename keep running; new scripts should use `freya`.
+    vm.set_global("aviqtl", api)
         .map_err(|error| runtime_error(vm, error))
 }
 
@@ -968,6 +973,31 @@ mod tests {
                 .dispatch(ScriptHook::Update, &permissions, snapshot)
                 .commands,
             vec![ScriptHostCommand::TransportSeek(11)]
+        );
+    }
+
+    #[test]
+    fn the_script_namespace_answers_to_both_names() {
+        let source = r#"
+            freya.log("new")
+            aviqtl.log("old")
+        "#;
+        let permissions = permissions(&[PluginPermission::LogOutput]);
+        let (_, execution) = ScriptRuntime::load(
+            "plugin",
+            source,
+            "plugin.lua",
+            &BTreeMap::new(),
+            &permissions,
+            ScriptHostSnapshot::default(),
+        )
+        .expect("plugin loads");
+        assert_eq!(
+            execution.commands,
+            vec![
+                ScriptHostCommand::Log("new".to_owned()),
+                ScriptHostCommand::Log("old".to_owned()),
+            ]
         );
     }
 
