@@ -53,6 +53,10 @@ All notable changes to Freya NLE are documented in this file.
   the keyframe `value` in scope, in the preview, the export, and the audio plan
   alike. A broken expression keeps the keyframe value instead of zeroing the
   parameter
+- macOS exports can use the Apple VideoToolbox encoders (`h264_videotoolbox`,
+  `hevc_videotoolbox`) when the linked FFmpeg provides them. A hardware encoder
+  that cannot open still falls back to `libx264`/`libx265`/`libaom-av1`, so the
+  export completes either way
 - Lua plugins keep the conveniences they had under the Qt frontend: LuaJIT's
   signed `bit` library (`tobit`, `bswap`, and `tohex` included), the flat
   `aviqtl_*` function spellings next to the `aviqtl.*` tables, and `print`

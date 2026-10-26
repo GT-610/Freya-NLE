@@ -464,8 +464,12 @@ fn codec_backend(codec_name: &str) -> u32 {
 
 fn codec_fallback(codec_name: &str) -> Option<&'static str> {
     match codec_name {
-        "h264_nvenc" | "h264_amf" | "h264_qsv" | "h264_vaapi" => Some("libx264"),
-        "hevc_nvenc" | "hevc_amf" | "hevc_qsv" | "hevc_vaapi" => Some("libx265"),
+        "h264_nvenc" | "h264_amf" | "h264_qsv" | "h264_vaapi" | "h264_videotoolbox" => {
+            Some("libx264")
+        }
+        "hevc_nvenc" | "hevc_amf" | "hevc_qsv" | "hevc_vaapi" | "hevc_videotoolbox" => {
+            Some("libx265")
+        }
         "av1_nvenc" | "av1_amf" | "av1_vaapi" => Some("libaom-av1"),
         _ => None,
     }
@@ -862,6 +866,8 @@ mod tests {
         assert_eq!(codec_backend("h264_amf"), CODEC_BACKEND_AMF);
         assert_eq!(codec_backend("libx264"), CODEC_BACKEND_SOFTWARE);
         assert_eq!(codec_fallback("hevc_qsv"), Some("libx265"));
+        assert_eq!(codec_fallback("h264_videotoolbox"), Some("libx264"));
+        assert_eq!(codec_fallback("hevc_videotoolbox"), Some("libx265"));
         assert_eq!(codec_fallback("libx264"), None);
         assert_eq!(fixed_gop_mode("libx264"), FIXED_GOP_X264);
         assert_eq!(fixed_gop_mode("h264_nvenc"), FIXED_GOP_NVENC);

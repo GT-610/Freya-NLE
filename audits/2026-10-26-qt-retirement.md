@@ -99,6 +99,9 @@ These were recorded as gaps by the audit and are implemented on the same branch:
   it hands to the renderer, the exporter, and the audio planner
   (`freya-nle-core/src/bake_plan.rs`, `CachedEffect::expression_value`). A broken
   expression keeps the literal fallback instead of zeroing the parameter.
+- **Hardware encoding on macOS.** `h264_videotoolbox` and `hevc_videotoolbox` joined the
+  encoder catalog and the export dialog, with `libx264`/`libx265` as their fallback. A
+  real three-frame encode was run against the linked FFmpeg on Apple Silicon.
 - **Text justification.** `Text.AlignJustify` now distributes the leftover width
   over the word gaps of every line except the last one
   (`freya-nle-render/src/text.rs`, `justified_glyphs`).
@@ -116,15 +119,17 @@ These were recorded as gaps by the audit and are implemented on the same branch:
 Ordered roughly by user impact. Each is Rust-side work; the Qt implementation that
 documented the behavior is in git history.
 
-1. **Hardware video decode and encode.** Qt probed cuda/vaapi/d3d11va/dxva2/videotoolbox
-   and created device contexts and hardware frame pools
-   (`core/src/video_decoder.cpp:183-206`, `core/src/video_encoder.cpp:233-342`). The
-   Rust media path decodes in software (`freya-nle-media/src/lib.rs:447-471`) and the
-   encoder opens a hardware encoder by name but only uploads software pixel formats
-   (`freya-nle-media/src/encoder.rs:19-34,493-498`). That works for encoders that accept
-   software frames and fails for the ones that need a hardware frames context (VAAPI);
-   `h264_videotoolbox`/`hevc_videotoolbox` are not in the catalog at all. Preview and
-   export still work in software.
+1. **Hardware video decode, and hardware frames for encode.** Qt probed
+   cuda/vaapi/d3d11va/dxva2/videotoolbox and created device contexts and hardware frame
+   pools (`core/src/video_decoder.cpp:183-206`, `core/src/video_encoder.cpp:233-342`).
+   The Rust media path decodes in software (`freya-nle-media/src/lib.rs:447-471`).
+   Encoding now offers the Apple VideoToolbox encoders next to the NVENC/AMF/QSV/VAAPI
+   entries and was verified end-to-end on macOS; an encoder that cannot open - VAAPI
+   without a hardware frames context, for one - falls back to
+   `libx264`/`libx265`/`libaom-av1` through `export_codec_fallback`, so the export still
+   completes. What is left of Qt's path is the explicit `AVHWDeviceContext` /
+   `hw_frames_ctx` setup: hardware-frame decoding, and a hardware upload path for
+   VAAPI/QSV instead of the software fallback.
 2. **Compute-shader effects.** Qt's `ComputeEffect` exposed work-group sizes and extra
    input textures (`core/src/compute_effect.cpp:54,94,189`) and 10 shipped `.comp`
    shaders used them. The native package contract allows one fragment pass, up to 16

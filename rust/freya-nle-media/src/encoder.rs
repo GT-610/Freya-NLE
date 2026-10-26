@@ -16,17 +16,19 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-const VIDEO_CODEC_CANDIDATES: [&str; 14] = [
+const VIDEO_CODEC_CANDIDATES: [&str; 16] = [
     "libx264",
     "h264_nvenc",
     "h264_amf",
     "h264_qsv",
     "h264_vaapi",
+    "h264_videotoolbox",
     "libx265",
     "hevc_nvenc",
     "hevc_amf",
     "hevc_qsv",
     "hevc_vaapi",
+    "hevc_videotoolbox",
     "libaom-av1",
     "av1_nvenc",
     "av1_amf",
@@ -624,6 +626,54 @@ mod tests {
             profile: String::new(),
         })
         .expect("software encoder opens");
+        for pts in 0..3 {
+            let color = (pts * 80) as u8;
+            encoder
+                .push_frame(
+                    &VideoFrame {
+                        width: 64,
+                        height: 64,
+                        rgba: [color, 40, 180, 255].repeat(64 * 64),
+                        timestamp_seconds: f64::from(pts) / 30.0,
+                    },
+                    i64::from(pts),
+                )
+                .expect("video frame encodes");
+            encoder
+                .push_audio(&vec![0.0; 1_600 * 2])
+                .expect("audio frame encodes");
+        }
+        encoder.finish().expect("container finalizes");
+        assert!(std::fs::metadata(&path).expect("video exists").len() > 0);
+        std::fs::remove_file(path).expect("generated video removes");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires the macOS VideoToolbox encoder"]
+    fn encodes_with_the_videotoolbox_encoder_when_available() {
+        if !available_video_encoders().contains(&"h264_videotoolbox") {
+            panic!("h264_videotoolbox is required for this test");
+        }
+        let path = temporary_path("mp4");
+        let mut encoder = VideoEncoder::open(&VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 30,
+            fps_den: 1,
+            bitrate: 2_000_000,
+            // VideoToolbox does not take libx264's CRF or preset options.
+            crf: None,
+            gop_size: None,
+            codec_name: "h264_videotoolbox".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: path.clone(),
+            preset: String::new(),
+            profile: String::new(),
+        })
+        .expect("hardware encoder opens");
         for pts in 0..3 {
             let color = (pts * 80) as u8;
             encoder

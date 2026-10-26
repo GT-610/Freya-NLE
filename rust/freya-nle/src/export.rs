@@ -18,17 +18,19 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-pub(super) const VIDEO_CODECS: [(&str, &str); 14] = [
+pub(super) const VIDEO_CODECS: [(&str, &str); 16] = [
     ("H.264 – libx264 (SW)", "libx264"),
     ("H.264 – NVENC (NVIDIA)", "h264_nvenc"),
     ("H.264 – AMF (AMD)", "h264_amf"),
     ("H.264 – QSV (Intel)", "h264_qsv"),
     ("H.264 – VAAPI (Linux)", "h264_vaapi"),
+    ("H.264 – VideoToolbox (Apple)", "h264_videotoolbox"),
     ("HEVC – libx265 (SW)", "libx265"),
     ("HEVC – NVENC (NVIDIA)", "hevc_nvenc"),
     ("HEVC – AMF (AMD)", "hevc_amf"),
     ("HEVC – QSV (Intel)", "hevc_qsv"),
     ("HEVC – VAAPI (Linux)", "hevc_vaapi"),
+    ("HEVC – VideoToolbox (Apple)", "hevc_videotoolbox"),
     ("AV1 – libaom (SW)", "libaom-av1"),
     ("AV1 – NVENC (NVIDIA)", "av1_nvenc"),
     ("AV1 – AMF (AMD)", "av1_amf"),
