@@ -650,49 +650,65 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    #[ignore = "requires the macOS VideoToolbox encoder"]
-    fn encodes_with_the_videotoolbox_encoder_when_available() {
-        if !available_video_encoders().contains(&"h264_videotoolbox") {
-            panic!("h264_videotoolbox is required for this test");
-        }
-        let path = temporary_path("mp4");
-        let mut encoder = VideoEncoder::open(&VideoEncoderConfig {
-            width: 64,
-            height: 64,
-            fps_num: 30,
-            fps_den: 1,
-            bitrate: 2_000_000,
-            // VideoToolbox does not take libx264's CRF or preset options.
-            crf: None,
-            gop_size: None,
-            codec_name: "h264_videotoolbox".to_owned(),
-            audio_codec_name: "aac".to_owned(),
-            audio_bitrate: 96_000,
-            sample_rate: 48_000,
-            output_path: path.clone(),
-            preset: String::new(),
-            profile: String::new(),
-        })
-        .expect("hardware encoder opens");
-        for pts in 0..3 {
-            let color = (pts * 80) as u8;
+    #[ignore = "requires the macOS VideoToolbox encoders"]
+    fn encodes_with_the_videotoolbox_encoders_when_available() {
+        let mut encoded = Vec::new();
+        for codec in ["h264_videotoolbox", "hevc_videotoolbox"] {
+            if !available_video_encoders().contains(&codec) {
+                continue;
+            }
+            let path = temporary_path("mp4");
+            let mut encoder = VideoEncoder::open(&VideoEncoderConfig {
+                width: 64,
+                height: 64,
+                fps_num: 30,
+                fps_den: 1,
+                bitrate: 2_000_000,
+                // The export dialog's defaults: a CRF and preset that libx264 would
+                // consume and VideoToolbox ignores.
+                crf: Some(20),
+                gop_size: None,
+                codec_name: codec.to_owned(),
+                audio_codec_name: "aac".to_owned(),
+                audio_bitrate: 96_000,
+                sample_rate: 48_000,
+                output_path: path.clone(),
+                preset: "medium".to_owned(),
+                profile: String::new(),
+            })
+            .unwrap_or_else(|error| panic!("{codec} encoder opens: {error}"));
+            for pts in 0..3 {
+                let color = (pts * 80) as u8;
+                encoder
+                    .push_frame(
+                        &VideoFrame {
+                            width: 64,
+                            height: 64,
+                            rgba: [color, 40, 180, 255].repeat(64 * 64),
+                            timestamp_seconds: f64::from(pts) / 30.0,
+                        },
+                        i64::from(pts),
+                    )
+                    .unwrap_or_else(|error| panic!("{codec} video frame encodes: {error}"));
+                encoder
+                    .push_audio(&vec![0.0; 1_600 * 2])
+                    .unwrap_or_else(|error| panic!("{codec} audio frame encodes: {error}"));
+            }
             encoder
-                .push_frame(
-                    &VideoFrame {
-                        width: 64,
-                        height: 64,
-                        rgba: [color, 40, 180, 255].repeat(64 * 64),
-                        timestamp_seconds: f64::from(pts) / 30.0,
-                    },
-                    i64::from(pts),
-                )
-                .expect("video frame encodes");
-            encoder
-                .push_audio(&vec![0.0; 1_600 * 2])
-                .expect("audio frame encodes");
+                .finish()
+                .unwrap_or_else(|error| panic!("{codec} container finalizes: {error}"));
+            assert!(
+                std::fs::metadata(&path)
+                    .unwrap_or_else(|error| panic!("{codec} video exists: {error}"))
+                    .len()
+                    > 0
+            );
+            std::fs::remove_file(path).expect("generated video removes");
+            encoded.push(codec);
         }
-        encoder.finish().expect("container finalizes");
-        assert!(std::fs::metadata(&path).expect("video exists").len() > 0);
-        std::fs::remove_file(path).expect("generated video removes");
+        assert!(
+            encoded.contains(&"h264_videotoolbox"),
+            "the macOS build must provide the H.264 VideoToolbox encoder; found {encoded:?}"
+        );
     }
 }
