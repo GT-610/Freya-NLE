@@ -259,13 +259,33 @@ fn rasterize_with_face(
     } else {
         natural_line_advance
     };
-    let lines = plan
+    let line_texts = plan
         .content
         .split('\n')
         .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect::<Vec<_>>();
+    let mut lines = line_texts
+        .iter()
         .map(|line| shape_line(&face, line, scale, plan.letter_spacing))
         .collect::<Vec<_>>();
     let logical_width = lines.iter().map(|line| line.width).fold(0.0_f32, f32::max);
+    if plan.alignment == TextAlignment::Justify {
+        // Qt justifies every line of a paragraph except its last one.
+        for index in 0..lines.len().saturating_sub(1) {
+            if let Some(glyphs) = justified_glyphs(
+                &face,
+                line_texts[index],
+                scale,
+                plan.letter_spacing,
+                logical_width,
+            ) {
+                lines[index] = LineLayout {
+                    glyphs,
+                    width: logical_width,
+                };
+            }
+        }
+    }
     let logical_height = glyph_line_height + line_advance * (lines.len().saturating_sub(1) as f32);
     if !logical_width.is_finite() || !logical_height.is_finite() {
         return Err(TextRasterError::InvalidDimensions);
@@ -455,6 +475,68 @@ fn shape_line(face: &Face<'_>, text: &str, scale: f32, letter_spacing: f32) -> L
         glyphs: placements,
         width: (maximum - minimum).max(0.0),
     }
+}
+
+/// Repositions the glyphs of one line so its words spread across
+/// `target_width`, leaving the outlines untouched. Returns `None` when there is
+/// nothing to justify: a single word, or a line that already fills the width.
+fn justified_glyphs(
+    face: &Face<'_>,
+    text: &str,
+    scale: f32,
+    letter_spacing: f32,
+    target_width: f32,
+) -> Option<Vec<GlyphPlacement>> {
+    let word_layouts = text
+        .split(' ')
+        .map(|word| shape_line(face, word, scale, letter_spacing))
+        .collect::<Vec<_>>();
+    let widths = word_layouts
+        .iter()
+        .map(|layout| layout.width)
+        .collect::<Vec<_>>();
+    let space_width = shape_line(face, " ", scale, 0.0).width;
+    let offsets = justified_word_offsets(&widths, space_width, target_width)?;
+    let mut glyphs = Vec::new();
+    for (layout, offset) in word_layouts.iter().zip(offsets) {
+        for glyph in &layout.glyphs {
+            glyphs.push(GlyphPlacement {
+                glyph_id: glyph.glyph_id,
+                x: offset + glyph.x,
+                y_offset: glyph.y_offset,
+            });
+        }
+    }
+    Some(glyphs)
+}
+
+/// Distributes the width a justified line has left over across its word gaps.
+/// The offsets are the x position of each word; `None` means the line cannot be
+/// justified and should stay left-aligned.
+fn justified_word_offsets(
+    word_widths: &[f32],
+    space_width: f32,
+    target_width: f32,
+) -> Option<Vec<f32>> {
+    let gaps = word_widths.len().checked_sub(1)?;
+    if gaps == 0 || !target_width.is_finite() {
+        return None;
+    }
+    let natural = word_widths.iter().sum::<f32>() + space_width * gaps as f32;
+    if !(target_width > natural) {
+        return None;
+    }
+    let extra_per_gap = (target_width - natural) / gaps as f32;
+    let mut offsets = Vec::with_capacity(word_widths.len());
+    let mut x = 0.0_f32;
+    for (index, width) in word_widths.iter().enumerate() {
+        offsets.push(x);
+        x += width;
+        if index + 1 < word_widths.len() {
+            x += space_width + extra_per_gap;
+        }
+    }
+    Some(offsets)
 }
 
 fn alignment_offset(alignment: TextAlignment, width: f32, line_width: f32) -> f32 {
@@ -674,6 +756,27 @@ mod tests {
         assert_eq!(
             test_rasterizer().rasterize(&huge, 0.0),
             Err(TextRasterError::InvalidDimensions)
+        );
+    }
+
+    #[test]
+    fn justification_spreads_a_line_across_the_block_width() {
+        assert_eq!(
+            justified_word_offsets(&[10.0, 10.0], 5.0, 40.0),
+            Some(vec![0.0, 30.0])
+        );
+        // Three words share two gaps.
+        assert_eq!(
+            justified_word_offsets(&[10.0, 10.0, 10.0], 4.0, 48.0),
+            Some(vec![0.0, 19.0, 38.0])
+        );
+        // A single word, a narrower or equal target, and a non-finite width stay left-aligned.
+        assert_eq!(justified_word_offsets(&[10.0], 5.0, 40.0), None);
+        assert_eq!(justified_word_offsets(&[10.0, 10.0], 5.0, 25.0), None);
+        assert_eq!(justified_word_offsets(&[10.0, 10.0], 5.0, 20.0), None);
+        assert_eq!(
+            justified_word_offsets(&[10.0, 10.0], 5.0, f32::INFINITY),
+            None
         );
     }
 
