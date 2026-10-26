@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "rust" / "aviqtl-core" / "data"
+OUTPUT = ROOT / "rust" / "freya-nle-core" / "data"
 
 NONE = 0xFFFF
 
