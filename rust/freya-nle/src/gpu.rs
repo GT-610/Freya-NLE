@@ -82,7 +82,7 @@ pub(super) fn missing_gpu_message(adapters: &[String]) -> String {
         adapters.join("\n")
     };
     format!(
-        "AviQtl requires a GPU-backed wgpu adapter and could not find one.\n\
+        "Freya NLE requires a GPU-backed wgpu adapter and could not find one.\n\
          \n\
          Adapters detected on this host:\n\
          {detected}\n\
@@ -120,7 +120,7 @@ pub(super) enum ParsedLaunch {
 
 pub(super) fn usage() -> String {
     format!(
-        "AviQtl Plus {}\n\
+        "Freya NLE {}\n\
          \n\
          Usage: freya-nle [project.aviqtl]\n\
          \n\
@@ -153,7 +153,7 @@ pub(super) fn parse_launch_args(
             "--help" | "-h" => return Ok(ParsedLaunch::Help(usage())),
             "--version" => {
                 return Ok(ParsedLaunch::Help(format!(
-                    "AviQtl Plus {}\n",
+                    "Freya NLE {}\n",
                     env!("CARGO_PKG_VERSION")
                 )));
             }
@@ -211,7 +211,7 @@ impl AppGpu {
             }
         }));
         let info = adapter.get_info();
-        eprintln!("AviQtl Slint GPU: {} ({:?})", info.name, info.backend);
+        eprintln!("Freya NLE GPU: {} ({:?})", info.name, info.backend);
         Ok(Self {
             instance,
             adapter,

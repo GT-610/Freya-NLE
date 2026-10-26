@@ -1,4 +1,5 @@
 use crate::effect_catalog::EffectCatalog;
+use crate::status::StatusMessage;
 use freya_nle_core::api::{
     AudioPluginDocument, ClipDocument, EffectDocument, EffectMetadata, ProjectDocument,
     evaluate_keyframe_track, inspect_keyframe_track,
@@ -109,13 +110,17 @@ impl ObjectControl {
             .position(|option| value_payload(&option.value) == current)
     }
 
-    pub fn parse_text(&self, input: &str) -> Result<Value, String> {
+    pub fn parse_text(&self, input: &str) -> Result<Value, StatusMessage> {
         match self.kind {
             ObjectControlKind::Integer => {
-                let value = input
-                    .trim()
-                    .parse::<i64>()
-                    .map_err(|_| format!("{}には整数を入力してください", self.label))?;
+                let value = input.trim().parse::<i64>().map_err(|_| {
+                    crate::status_message!(
+                        "{} must be a whole number",
+                        "{}必须为整数",
+                        "{}には整数を入力してください",
+                        self.label
+                    )
+                })?;
                 let minimum = self.minimum.unwrap_or(i64::MIN as f64).ceil() as i64;
                 let maximum = self.maximum.unwrap_or(i64::MAX as f64).floor() as i64;
                 Ok(Value::from(if minimum <= maximum {
@@ -130,7 +135,14 @@ impl ObjectControl {
                     .parse::<f64>()
                     .ok()
                     .filter(|value| value.is_finite())
-                    .ok_or_else(|| format!("{}には数値を入力してください", self.label))?;
+                    .ok_or_else(|| {
+                        crate::status_message!(
+                            "{} must be a number",
+                            "{}必须为数值",
+                            "{}には数値を入力してください",
+                            self.label
+                        )
+                    })?;
                 let minimum = self.minimum.unwrap_or(f64::MIN);
                 let maximum = self.maximum.unwrap_or(f64::MAX);
                 let value = if minimum <= maximum {
@@ -140,13 +152,25 @@ impl ObjectControl {
                 };
                 serde_json::Number::from_f64(value)
                     .map(Value::Number)
-                    .ok_or_else(|| format!("{}には数値を入力してください", self.label))
+                    .ok_or_else(|| {
+                        crate::status_message!(
+                            "{} must be a number",
+                            "{}必须为数值",
+                            "{}には数値を入力してください",
+                            self.label
+                        )
+                    })
             }
             ObjectControlKind::Text
             | ObjectControlKind::Path
             | ObjectControlKind::Color
             | ObjectControlKind::Font => Ok(Value::String(input.to_owned())),
-            _ => Err(format!("{}はテキストとして編集できません", self.label)),
+            _ => Err(crate::status_message!(
+                "{} cannot be edited as text",
+                "{}不能作为文本编辑",
+                "{}はテキストとして編集できません",
+                self.label
+            )),
         }
     }
 

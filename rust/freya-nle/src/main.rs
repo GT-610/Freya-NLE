@@ -582,7 +582,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if let Some(version) = outcome.self_update_version {
                             window.set_update_message(SharedString::from(format!(
-                                "AviQtl Plus {version} is available. Restart to apply the update."
+                                "Freya NLE {version} is available. Restart to apply the update."
                             )));
                         }
                         sync_package_manager(&window, &animation_package_model.borrow());

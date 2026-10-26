@@ -584,7 +584,7 @@ where
 pub(super) fn show_error_dialog(message: &str) {
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title("AviQtl Plus")
+        .set_title("Freya NLE")
         .set_description(message)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();

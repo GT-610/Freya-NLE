@@ -4,7 +4,9 @@ use crate::dialogs::{show_and_redraw, show_error_dialog, slint_color};
 use crate::easing::{
     parameter_button_label, sync_easing_catalog, sync_easing_preview, sync_easing_window,
 };
-use crate::localization::{localized, localized_effect_categories, localized_effect_metadata};
+use crate::localization::{
+    localized, localized_effect_categories, localized_effect_metadata, status_line,
+};
 use crate::projection::{sync_project_tabs, sync_transport, sync_weak_windows, update_vec_model};
 use crate::{
     EasingConfigWindow, EffectCatalogItemData, KeyframeMarkerData, MainWindow,
@@ -247,7 +249,7 @@ impl ObjectSettingsUi {
         };
         match control.parse_text(text) {
             Ok(value) => self.set_value(audio_plugin, effect_index, param_name, frame, value),
-            Err(message) => show_error_dialog(&message),
+            Err(message) => show_error_dialog(status_line("", Some(&message)).as_str()),
         }
     }
 
