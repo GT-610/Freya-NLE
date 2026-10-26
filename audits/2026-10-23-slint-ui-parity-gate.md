@@ -1,5 +1,10 @@
 # Qt UI behavior parity gate for Slint
 
+> Historical record. The Qt frontend this gate measured against was retired on
+> 2026-10-26; see [the retirement audit](2026-10-26-qt-retirement.md) for what moved,
+> what deliberately changed, and what is still open. The statuses below are the
+> acceptance record as of 2026-10-23 and are not maintained further.
+
 Qt remains the baseline for project ownership, command meaning, save/close sequencing, and
 existing editing behavior. The user-authorized September 2026 workflow changes deliberately
 extend that baseline: Ctrl/Command-click selects layer contents, continuous parameter edits use

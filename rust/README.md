@@ -1,10 +1,10 @@
 # Freya NLE Rust workspace
 
-Rust + Slint is the default application built by `BUILD.py`. The workspace contains nine crates:
+The workspace contains nine crates and builds the only application frontend:
 
 | Crate | Responsibility |
 | --- | --- |
-| `freya-nle-core` | Domain rules, authoritative timeline state, documents, script runtime, and Qt C ABI |
+| `freya-nle-core` | Domain rules, authoritative timeline state, documents, script runtime, and the retained C ABI |
 | `freya-nle-app` | Application/workspace commands, history, persistence, recovery, catalogs, MOD hosting, and packages |
 | `freya-nle` | Desktop windows, callbacks, and presentation models; builds the application binary |
 | `freya-nle-preview` | GUI-neutral frame planning and asynchronous preview decoding |
@@ -14,20 +14,12 @@ Rust + Slint is the default application built by `BUILD.py`. The workspace conta
 | `freya-nle-audio` | Mixing, output, and plugin processing |
 | `freya-nle-carla` | External Carla library and plugin ABI integration |
 
-The Qt/C++ frontend is retained through `BUILD.py --frontend qt` as a behavior reference while
-desktop acceptance is pending. It is not compiled into the default executable. Native FFmpeg,
-Carla, graphics, and audio dependencies are separate from migration of the application's own code.
-See [Qt retirement criteria](../CONTRIBUTING.md#removing-qt) and the
-[dependency inventory](../audits/2026-09-rust-dependency-boundary.md).
-
-The Rust core is the portable domain foundation of Freya NLE. New validation, normalization,
-planning, interpolation, serialization, catalog, and DSP rules belong here unless they require a
-native framework object to perform their work. C++ must not keep a second implementation of a
-Rust-owned rule.
+`python3 BUILD.py` builds and packages `freya-nle`. Native FFmpeg, Carla, graphics, and audio
+dependencies are separate from the application's own code.
 
 ## Ownership boundary
 
-Rust owns the behavior that can be expressed with platform-neutral data:
+The workspace owns the behavior of the application:
 
 - project, settings, preset, package, effect, script, plugin, and keyframe documents;
 - project migrations, defaults, schema normalization, and deterministic serialization;
@@ -37,51 +29,32 @@ Rust owns the behavior that can be expressed with platform-neutral data:
   batch evaluation;
 - audio resampling, mixing, metering, and batch-mix policy;
 - media time/duration calculations, permission lookup, recovery identifier validation, package
-  safety decisions, and catalog ordering/filtering.
+  safety decisions, and catalog ordering/filtering;
+- hardware-independent media probing, decoding, and encoding plans, including the software fallback
+  every export uses;
+- wgpu composition, the built-in effect catalog, text rasterization, and generated objects;
+- the Slint windows, their menus, shortcuts, accessibility roles, and persistence.
 
-Within the retained Qt frontend, C++ is an adapter layer. It converts `QString`, `QVariant`,
-`QJson*`, and QObject state to the fixed-layout or JSON inputs accepted by Rust, then publishes
-the result to QML and native
-subsystems. It also retains operations that inherently require native framework handles:
+When adding behavior, prefer one of the existing document or batch APIs. A change that needs a
+native handle belongs behind a small platform module rather than in a window callback, and a
+conversion loop at an API edge is an adapter, not an alternative domain implementation.
 
-- QML, QObject ownership, signals, `QUndoStack`, translations, dialogs, and window lifecycle;
-- filesystem path canonicalization, atomic Qt file writes, networking, ZIP deployment, and
-  platform directories;
-- FFmpeg decoder/encoder contexts and frame ownership;
-- QRhi, QImage, QVideoFrame, shaders, and render-thread resources;
-- Carla process discovery, plugin instances, and host callbacks;
-- Lua VM execution and other third-party C/C++ object lifecycles.
+Scene, clip, effect, and audio-plugin edits are expressed as targeted timeline-state requests so
+the core validates the authoritative state and produces reversible patches without rebuilding the
+whole project document.
 
-`DocumentModel` is a Qt render projection of the current timeline. It exists to publish QObject
-change notifications and provide Qt-shaped input to the baking adapter; it is not an independent
-project source of truth. Project-document rules and persisted ownership live in Rust.
+## C ABI
 
-The C++ ECS is likewise a native render/audio projection cache. Its POD components are produced by
-Rust timeline baking and consumed directly by the QRhi/QML and Carla/Qt audio boundaries. It must
-not acquire project editing, validation, or serialization rules.
+`freya-nle-core/include/rust_core_abi.hpp` declares the raw C ABI that `freya-nle-core` still
+exports. Its only consumer was the retired Qt frontend; the exports and the header remain until a
+follow-up change retires them (see [the retirement audit](../audits/2026-10-26-qt-retirement.md)).
+`tests/check_rust_abi.py` keeps the declaration and the exports in sync meanwhile.
 
-When adding behavior, prefer one of the existing Rust document or fixed-layout batch APIs. A C++
-implementation is appropriate only when the operation needs a native handle or is presentation
-logic. Conversion loops at the ABI edge are adapters, not alternative domain implementations.
-
-Scene, clip, effect, and audio-plugin edits should be expressed as targeted timeline-state requests
-so Rust can validate the authoritative state and produce reversible patches without rebuilding the
-whole project document. `TimelineService` reconciles its existing Qt projection from the committed
-Rust snapshot after each successful targeted edit transaction; interactive edits must not fall back
-to a whole-document commit. The `replace_document` request remains a compatibility path for project
-load/reset and projection changes that have not yet moved to targeted Rust state mutations.
-
-## C ABI contract
-
-`core/include/rust_core_abi.hpp` is the single raw C ABI surface shared by the C++ application and `freya-nle-core`.
-
-The ABI keeps the pre-rename spelling (`aviqtl_*` functions, `AviQtl*` types, `AVIQTL_*` macros)
-because its only consumer is the Qt frontend that is being removed; see
-[Qt retirement criteria](../CONTRIBUTING.md#removing-qt). The crates, the binary, and the file
-formats use the current name.
+The ABI keeps the pre-rename spelling (`aviqtl_*` functions, `AviQtl*` types, `AVIQTL_*` macros).
+The crates, the binary, and the file formats use the current name.
 
 - Callers must compare `aviqtl_core_abi_version()` with `AVIQTL_RUST_CORE_ABI_VERSION` before relying on the ABI and may inspect `aviqtl_core_capabilities()` for optional operations.
-- The boundary contains only fixed-layout scalar fields, pointers, and lengths. Qt types never cross it.
+- The boundary contains only fixed-layout scalar fields, pointers, and lengths.
 - Every byte and fixed-layout buffer is owned by the caller. The timeline-state API is the sole
   documented exception: Rust returns an opaque handle from `aviqtl_timeline_state_create`, and the
   caller must release it exactly once with `aviqtl_timeline_state_destroy`. The handle never exposes
@@ -92,16 +65,15 @@ formats use the current name.
 
 ## Toolchain and validation
 
-The workspace uses Rust edition 2024. The repository `rust-toolchain.toml` pins rustup to Rust
-1.97.1, and the crate's minimum supported Rust version matches that toolchain. Changes to the core
-must pass:
+The workspace uses Rust edition 2024. `rust-toolchain.toml` pins Rust 1.97.1, and the crates'
+minimum supported Rust version matches that toolchain. Changes must pass:
 
 ```sh
-rustup run 1.97.1 cargo fmt --all --check
-rustup run 1.97.1 cargo test --workspace
-rustup run 1.97.1 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --locked --workspace --all-features
 ```
 
-Changes to the C++ adapters, shared core contracts, or their consumers must also pass the normal
-CMake build and complete CTest suite. Slint-only presentation changes use the Cargo checks and
-the frontend's [behavior acceptance record](../audits/2026-10-23-slint-ui-parity-gate.md).
+The checks that need FFmpeg, a graphics adapter, or installed Carla libraries are listed in
+[CONTRIBUTING](../CONTRIBUTING.md#adding-tests) and are run separately. `tests/test_build_version.py`
+and the C ABI checker run alongside them in CI.

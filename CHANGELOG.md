@@ -33,6 +33,29 @@ All notable changes to Freya NLE are documented in this file.
   fragment format marker is now `freya.fragment`. A fragment saved before the
   rename is rewritten in the current format the next time it is saved
 
+### Removed
+- The Qt Quick frontend is gone. `ui/`, `core/`, `engine/`, `scripting/`, the
+  Qt test suite, `CMakeLists.txt`, `check.py`, and the Qt CI job left in one
+  change, so `python3 BUILD.py` no longer takes `--frontend` or `--qt-dir` and
+  there is no CMake build to configure. Everything the Slint frontend read from
+  those directories now lives in workspace-owned paths: the 61 built-in effect
+  and object definitions are in `catalog/`, the icon font is in `assets/`, and
+  the effect-name translations are in `i18n/effect-metadata.json`. QML
+  effect and object packages were already rejected at installation; the QML
+  example packages and the Qt Linguist `.ts` sources went with the frontend
+- The legacy C ABI is no longer consumed by anything in the tree. Its exports
+  and `rust/freya-nle-core/include/rust_core_abi.hpp` remain checked for now;
+  retiring them is a follow-up change
+
+### Added
+- Lua plugins keep the conveniences they had under the Qt frontend: LuaJIT's
+  signed `bit` library (`tobit`, `bswap`, and `tohex` included), the flat
+  `aviqtl_*` function spellings next to the `aviqtl.*` tables, and `print`
+- Saving a project stores media that lives inside the project directory as a
+  project-relative path, so a project and its footage move together. Loading a
+  project or recovery snapshot refuses documents over 256 MiB before reading
+  them, matching the bound the Qt frontend applied
+
 ### Fixed
 - An object whose `transform` effect omits a parameter - `scale`, `opacity`, a
   rotation - keeps AviUtl's value for it instead of falling to zero. A transform

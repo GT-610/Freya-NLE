@@ -59,17 +59,18 @@ English is the source language for Slint `@tr` strings and the fallback for unsu
 The System language preference uses the operating system's preferred locale, maps Chinese locales
 to Simplified Chinese and Japanese locales to Japanese, and otherwise selects English. The bundled
 `zh_CN` and `ja_JP` gettext catalogs update live after Apply or OK. Built-in effect and object
-metadata remains owned by the shared Qt JSON definitions; the Slint build extracts the matching
-English and Simplified Chinese translations from the existing Qt TS catalogs and translates that
-metadata only when projecting it into UI models.
+metadata is owned by the `catalog/` definitions; the build extracts the matching English and
+Simplified Chinese translations from `i18n/effect-metadata.json` and translates that metadata only
+when projecting it into UI models.
 
-`bakeStrategy` and `onDemandPrefetchFrames` remain persisted for Qt settings compatibility, but they
-do not pretend to control a copied Qt `BakeController`: the Rust `SceneRenderPlan` caches typed clip
+`bakeStrategy` and `onDemandPrefetchFrames` remain persisted for compatibility with settings files
+written by older versions, but they do not pretend to control a copied `BakeController`: the Rust
+`SceneRenderPlan` caches typed clip
 and effect metadata when the document revision changes and evaluates the requested frame directly.
 There is currently no separate per-frame bake cache for those two controls to tune.
 
-Catalog inventory tests read the shipped Qt metadata and require all 44 built-in effects and all 17
-built-in objects to reach an explicit production preview route. Transform, clipping, and blend-layer
+Catalog inventory tests read `catalog/effects` and `catalog/objects` and require all 44 built-in
+effects and all 17 built-in objects to reach an explicit production preview route. Transform, clipping, and blend-layer
 handling are asserted separately because they belong to geometry/crop/compositor planning rather
 than the visual-effect pass.
 
@@ -87,9 +88,8 @@ value state, and supported actions explicitly. Standard Slint widgets keep their
 and form controls receive labels instead of relying on adjacent visual text. Native VoiceOver
 traversal remains part of the deferred unlocked-desktop suite.
 
-Domain, application, production preview, and export code live in GUI-neutral crates. This workspace
-has no egui frontend; the retained Qt implementation and the behavior tests provide the comparison
-baseline for Slint acceptance.
+Domain, application, production preview, and export code live in GUI-neutral crates. The parity
+gate's behavior tests are the comparison baseline for Slint acceptance.
 
 The export window keeps the Qt draft and close workflow: it refreshes available codecs when opened,
 uses project settings and the active scene range, pauses playback before rendering, rejects project
@@ -122,9 +122,11 @@ when moving presentation code so callbacks and translation contexts retain their
 
 ### Ownership and behavior
 
-- Qt/QML is the behavioral source of truth until a separate product change is approved.
+- The [Qt UI parity gate](../../audits/2026-10-23-slint-ui-parity-gate.md) is the behavioral
+  reference; the Qt frontend itself was retired on 2026-10-26
+  ([audit](../../audits/2026-10-26-qt-retirement.md)).
 - Keep preview, timeline, object settings, launcher, settings, recovery, package manager, and export
-  flows as separately owned native windows where Qt does.
+  flows as separately owned native windows, as the reference did.
 - Do not move business rules into `.slint` files. Slint forwards intent; `freya-nle-app` commits state.
 - Keep long-lived `VecModel` instances and update rows in place. Replacing a model during a pointer
   callback can destroy the delegate that owns an active drag or native context menu.
@@ -135,8 +137,8 @@ when moving presentation code so callbacks and translation contexts retain their
   custom pointer surfaces for editor interactions that standard widgets cannot express.
 - Assign explicit geometry to small overlay hit regions such as resize handles; implicit placement
   is not accepted for timeline input surfaces.
-- Treat [`../../audits/2026-10-23-slint-ui-parity-gate.md`](../../audits/2026-10-23-slint-ui-parity-gate.md) as the acceptance gate. Compile success and a visually plausible mockup do
-  not establish parity.
+- Treat the [parity gate](../../audits/2026-10-23-slint-ui-parity-gate.md) as the acceptance
+  record. Compile success and a visually plausible mockup do not establish parity.
 
 ## Running
 
@@ -171,9 +173,6 @@ Visual Studio 2022 and the configured dependencies:
 ```sh
 python BUILD.py --msvc
 ```
-
-`--frontend qt` selects the retained Qt/CMake development build. See
-[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md#removing-qt) for the criteria that retire it.
 
 Runtime effects, objects, plugins, effect packages, and repository metadata
 are resolved from the shared resource directories during development.

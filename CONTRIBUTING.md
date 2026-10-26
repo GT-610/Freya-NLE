@@ -4,52 +4,55 @@ Thank you for your interest in contributing!
 
 ## Getting Started
 
-1. Fork the repository
-2. Clone your fork and create a branch from `main`
-3. Build the project using `python3 BUILD.py` (see the [build documentation](https://aviqtl.gt610.dpdns.org/developer/building) for platform-specific instructions)
-4. Make your changes
-5. Run the checks below for the frontends affected by your changes.
-6. Submit a pull request
+1. Fork the repository, clone your fork, and create a branch from `main`
+2. Build the project using `python3 BUILD.py` (see the [build documentation](https://aviqtl.gt610.dpdns.org/developer/building) for platform-specific instructions)
+3. Make your changes
+4. Run the checks below
+5. Submit a pull request
 
 ## Development Environment
 
-- **C++ Standard**: C++23
 - **Rust**: the version pinned in `rust-toolchain.toml`
-- **Default frontend**: Rust, Slint, wgpu
-- **Qt**: 6.x (Qt Quick + QRhi)
-- **Build**: CMake 3.21+, Ninja
-- **Dependencies**: FFmpeg, LuaJIT, Carla, Vulkan
+- **Frontend**: Rust, Slint, wgpu
+- **Build**: `python3 BUILD.py` drives Cargo for every platform
+- **Dependencies**: FFmpeg, Carla, a GPU-backed graphics adapter, and a working audio output device
+
+Qt is not required: the Qt Quick frontend was retired in 0.8. See [Qt retirement](#qt-retirement).
 
 ## Code Style
 
-- **C++**: Follow `.clang-format` and `.clang-tidy` configurations in the repo root
-- **QML**: Match existing patterns in `ui/qml/`
-- **Commits**: Use concise, descriptive messages
+- **Rust**: `cargo fmt` and `cargo clippy` (both are CI gates)
+- **Slint**: match existing patterns in `rust/freya-nle/ui/`
+- **Commits**: use concise, descriptive messages
 
 ## Project Structure
 
 ```
-core/          - FFmpeg decoders, document model, effect registry, settings
-rust/          - Rust workspace for native, Qt-independent core logic
-engine/        - Audio mixer, audio plugins, ECS system, keyframe evaluation
-scripting/     - LuaJIT host, mod engine
-ui/            - Qt Quick controllers, QML views, undo/redo commands
-effect-packages/ - External effect packages
-tests/         - Unit tests (CTest)
+catalog/       - built-in effect and object metadata, staged beside the binary
+rust/          - the Rust workspace and the application binary
+plugins/       - example Lua plugins used by the plugin host
+effect-packages/ - native, installable effect and object packages
+assets/        - icons, screenshots, and other shipped resources
+i18n/          - effect-metadata translations and translated READMEs
+tests/         - build and C ABI checks (Python)
+tools/         - repository utilities
+no-gpu-probes/ - standalone probes used to measure GPU-support decisions
 ```
 
 ## Adding Effects or Objects
 
-Each effect or object consists of:
-- A `.json` metadata file (id, name, params, UI controls)
-- A `.qml` component file
-- Optionally a `.frag` or `.comp` shader file
+Effects and objects are native JSON + WGSL packages. Each package contains a
+`manifest.json`, one or more metadata JSON files, and the shaders they declare,
+and every entry must declare the `aviqtl-wgsl-v1` runtime. QML is not a package
+runtime: metadata that names a QML component is rejected at installation time.
 
-See the [effects and objects documentation](https://aviqtl.gt610.dpdns.org/developer/effects) for the extension model.
+See the [effects and objects documentation](https://aviqtl.gt610.dpdns.org/developer/effects)
+for the metadata schema, the shader contract, and the package layout. The
+[`effect-packages/`](effect-packages/) directory contains validated examples.
 
 ## Adding Tests
 
-Rust tests live next to their implementations and under `rust/aviqtl-core/tests`.
+Rust tests live next to their implementations and under `rust/freya-nle-core/tests`.
 Run them from the repository root with the platform's native dependency environment loaded:
 
 ```sh
@@ -58,7 +61,7 @@ cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets 
 cargo test --manifest-path rust/Cargo.toml --locked --workspace --all-features
 python -m unittest tests.test_build_version
 python tests/test_rust_abi_contract.py
-python tests/check_rust_abi.py --rust-src rust/aviqtl-core/src --header core/include/rust_core_abi.hpp
+python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header rust/freya-nle-core/include/rust_core_abi.hpp
 ```
 
 On Windows, use the MSVC developer environment and the same `FFMPEG_DIR`,
@@ -71,58 +74,27 @@ is reported explicitly:
 
 ```sh
 # FFmpeg CLI on PATH; linked FFmpeg must provide libx264 and aac.
-cargo test --manifest-path rust/Cargo.toml --locked -p aviqtl-media -p aviqtl-audio -- --ignored
+cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-media -p freya-nle-audio -- --ignored
 # A graphics adapter; the preview tests enable DX12, Vulkan, or Metal by platform.
-cargo test --manifest-path rust/Cargo.toml --locked -p aviqtl-preview scaled_msaa_preview -- --ignored
+cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-preview scaled_msaa_preview -- --ignored
 # Installed Carla libraries; the plugin-processing test also needs AVIQTL_CARLA_TEST_LADSPA.
-cargo test --manifest-path rust/Cargo.toml --locked -p aviqtl-carla -- --ignored
+cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-carla -- --ignored
 ```
 
-Qt tests remain in `tests/` and use Qt Test. Build the application **and the test
-targets**, then run CTest in the CMake build directory, not in the packaged `build/`
-directory. For example, after configuring the Qt dependencies on Linux:
-
-```sh
-cmake -S . -B .build_tmp/qt-check -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build .build_tmp/qt-check --parallel 2
-ctest --test-dir .build_tmp/qt-check --output-on-failure
-```
-
-When using `BUILD.py --frontend qt`, the CMake directory is
-`.build_tmp/<target>/<Config>/qt-build`. Run `cmake --build` there without
-`--target AviQtl` to build the tests as well. PR and release checks exercise both
-frontends; the Linux Rust job explicitly runs the FFmpeg integration tests.
 Carla/GPU tests without their dependencies remain unverified, not passed.
 
-Register new Qt tests in `tests/CMakeLists.txt`:
+## Qt retirement
 
-```cmake
-aviqtl_add_test(
-    NAME my_test
-    SOURCES test_my_test.cpp
-    LINKS AviQtl_Core  # or AviQtl_UI, AviQtl_Engine
-)
-```
+The Qt Quick + QRhi frontend and its C++ support library were removed in 0.8. The
+[Rust + Slint UI parity gate](audits/2026-10-23-slint-ui-parity-gate.md) records
+the behavior it was held to, and the
+[retirement audit](audits/2026-10-26-qt-retirement.md) records what was migrated,
+what deliberately changed, and what is still open.
 
-## Removing Qt
-
-The Qt frontend stays as an executable behavior reference and as a consumer of the Rust C ABI. It
-goes away when these hold:
-
-- The deferred desktop suite passes on each release platform: save and close ordering, window
-  focus, shortcuts and IME, dialogs, timeline and object editing, recovery, settings, package
-  operations, and export cancellation.
-- Preview and export output, hardware audio, and the supported plugin paths are validated, with
-  the unsupported scope written down instead of assumed.
-- Shared metadata, fonts, and translation inputs no longer live under Qt-owned paths.
-- Behavior regressions worth keeping are ported to Rust first. The Qt build switch, CMake targets,
-  QML-only assets, Qt CI, and the remaining C++ sources then leave in one change.
-- The C ABI is audited for consumers before its exports, header, staticlib target, and ABI checks
-  are retired.
-
-The C ABI is the one surface that still spells the old name: `aviqtl_*` functions, `AviQtl*` types,
-and `AVIQTL_*` macros stay as they are until those steps retire them. Renaming both sides of a
-contract that is scheduled for deletion would only mean doing the work twice.
+The C ABI (`aviqtl_*` exports in `freya-nle-core` plus
+`freya-nle-core/include/rust_core_abi.hpp`) is the one surface left over from the
+Qt consumer. It stays in place - and keeps its contract check - until a follow-up
+change retires it; new code must call the Rust API instead of the C ABI.
 
 ## Versions and Releases
 
@@ -141,10 +113,7 @@ first release candidate of 0.7.0 is version `0.7.0-rc.1` with tag
   `rc10` sorts before `rc9`, and every tool that expects the counter form has to
   special-case it.
 
-CMake cannot express a pre-release suffix, so `project(AviQtl VERSION ...)` in
-`CMakeLists.txt` carries the numeric core of the same version (`0.7.0` for
-`0.7.0-rc.1`), and `BUILD.py` writes that numeric core into the macOS bundle
-metadata. `tests/test_build_version.py` fails when the two disagree, when the
+`tests/test_build_version.py` fails when the version is not SemVer, when the
 suffix is not `rc.<n>`, or when `CHANGELOG.md` has no section for the workspace
 version, so bump them together.
 
@@ -154,10 +123,9 @@ To prepare a release:
    `rust/Cargo.lock` with `cargo update --workspace --offline`.
 2. Move the `Unreleased` entries of `CHANGELOG.md` into a
    `## [<version>] - <YYYY-MM-DD>` section and leave `Unreleased` empty.
-3. Match `project(AviQtl VERSION ...)` to the numeric core of the version.
-4. Run the checks listed in [Adding Tests](#adding-tests), then build and smoke
+3. Run the checks listed in [Adding Tests](#adding-tests), then build and smoke
    test a package with `python3 BUILD.py`.
-5. Tag the validated commit `v<version>`. A tag containing `-` is published as a
+4. Tag the validated commit `v<version>`. A tag containing `-` is published as a
    GitHub pre-release and does not replace the latest stable release.
 
 ## Reporting Issues
