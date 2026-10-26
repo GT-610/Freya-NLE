@@ -11,7 +11,7 @@ class RustAbiContractCheckerTest(unittest.TestCase):
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
         cls.sources = check_rust_abi.load_rust_sources(root / "rust/freya-nle-core/src")
-        cls.header = (root / "core/include/rust_core_abi.hpp").read_text(encoding="utf-8")
+        cls.header = (root / "rust/freya-nle-core/include/rust_core_abi.hpp").read_text(encoding="utf-8")
 
     def test_repository_contract_matches(self):
         self.assertEqual(check_rust_abi.compare_contract(self.sources, self.header), [])

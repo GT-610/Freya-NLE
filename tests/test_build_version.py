@@ -228,15 +228,14 @@ class TestBuildScript(unittest.TestCase):
             self.assertIn("<string>Freya NLE</string>", plist)
             self.assertIn("<string>freya-nle</string>", plist)
             self.assertIn("<string>io.github.gt610.freya-nle</string>", plist)
-            self.assertNotIn("Qt6", plist)
 
 
 class TestReleaseVersionBaseline(unittest.TestCase):
     """The checked-in version, tag form, and changelog must agree.
 
     These read the real tree instead of a fixture: a release tag is rejected by
-    the workflow only when it disagrees with ``rust/Cargo.toml``, so a stale
-    ``CMakeLists.txt`` or a missing changelog section would otherwise ship.
+    the workflow only when it disagrees with ``rust/Cargo.toml``, so a missing
+    changelog section would otherwise ship.
     """
 
     def setUp(self):
@@ -259,12 +258,6 @@ class TestReleaseVersionBaseline(unittest.TestCase):
             return
         prerelease = self.version.split("-", 1)[1].split("+", 1)[0]
         self.assertRegex(prerelease, r"^rc\.[1-9][0-9]*$")
-
-    def test_cmake_project_version_matches_the_numeric_core(self):
-        text = (SOURCE_DIR / "CMakeLists.txt").read_text(encoding="utf-8")
-        match = re.search(r"^project\(AviQtl VERSION ([0-9.]+)", text, flags=re.MULTILINE)
-        self.assertIsNotNone(match, "project(AviQtl VERSION ...) is missing")
-        self.assertEqual(match.group(1), numeric_version(self.version))
 
     def test_changelog_documents_the_workspace_version(self):
         changelog = (SOURCE_DIR / "CHANGELOG.md").read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AviQtl project source code line counter"""
+"""Freya NLE source code line counter"""
 
 import sys
 from pathlib import Path
@@ -7,29 +7,28 @@ from collections import defaultdict
 
 # Target file extensions and their display names
 TARGET_EXTENSIONS: dict[str, str] = {
-    ".cpp":  "C++  Source",
-    ".hpp":  "C++  Header",
-    ".qml":  "QML",
-    ".js":   "JavaScript",
-    ".py":   "Python",
-    ".glsl": "GLSL Shader",
-    ".frag": "GLSL Fragment",
-    ".vert": "GLSL Vertex",
+    ".rs":    "Rust",
+    ".slint": "Slint",
+    ".py":    "Python",
+    ".lua":   "Lua",
+    ".wgsl":  "WGSL Shader",
 }
 
-# Also include CMakeLists.txt as an individual target
-CMAKE_FILENAME = "CMakeLists.txt"
+# Also include Cargo.toml as an individual target
+MANIFEST_FILENAME = "Cargo.toml"
 
 # Directories excluded from scanning
 EXCLUDE_DIRS: frozenset[str] = frozenset({
-    ".git", ".build_tmp", "build", "dist",
-    ".cache", "__pycache__",
+    ".git", ".build_tmp", "build", "dist", "target",
+    ".cache", "__pycache__", "node_modules", "vendor", "docs",
 })
 
 
 def is_excluded(path: Path) -> bool:
     """Check if any part of the path is in the exclude directories"""
-    return any(part in EXCLUDE_DIRS for part in path.parts)
+    return any(
+        part in EXCLUDE_DIRS or part.startswith("build-") for part in path.parts
+    )
 
 
 def count_lines(path: Path) -> tuple[int, int, int]:
@@ -59,7 +58,7 @@ def collect_files(root: Path) -> list[Path]:
             continue
         if path.suffix in TARGET_EXTENSIONS:
             result.append(path)
-        elif path.name == CMAKE_FILENAME:
+        elif path.name == MANIFEST_FILENAME:
             result.append(path)
     return sorted(result)
 
@@ -72,7 +71,7 @@ def main() -> None:
     root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).parent.resolve()
 
     print(f"\n{'=' * 70}")
-    print(f"  AviQtl Project Source Code Line Count Report")
+    print(f"  Freya NLE Source Code Line Count Report")
     print(f"  Scan target: {root}")
     print(f"{'=' * 70}")
 
@@ -82,7 +81,7 @@ def main() -> None:
     stats: dict[str, dict] = defaultdict(lambda: {"files": 0, "total": 0, "code": 0, "blank": 0})
 
     for path in files:
-        key = path.name if path.name == CMAKE_FILENAME else path.suffix
+        key = path.name if path.name == MANIFEST_FILENAME else path.suffix
         total, code, blank = count_lines(path)
         stats[key]["files"] += 1
         stats[key]["total"] += total
@@ -90,7 +89,7 @@ def main() -> None:
         stats[key]["blank"] += blank
 
     # Display order
-    display_order = list(TARGET_EXTENSIONS.keys()) + [CMAKE_FILENAME]
+    display_order = list(TARGET_EXTENSIONS.keys()) + [MANIFEST_FILENAME]
 
     print(f"\n  {'Type':<22} {'Files':>10}  {'Total':>10}  {'Code':>10}  {'Blank':>10}")
     print(f"  {'-' * 66}")

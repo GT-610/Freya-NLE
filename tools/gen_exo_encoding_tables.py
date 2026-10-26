@@ -14,7 +14,7 @@ Run from the repository root:
 Each table stores one big-endian `u16` Unicode scalar per index. `0xFFFF` means
 "this byte pair is not mapped" (the decoder then emits U+FFFD). The index
 schemes are fixed by the standards and are documented next to the decoder in
-`rust/aviqtl-core/src/exo/encoding.rs`.
+`rust/freya-nle-core/src/exo/encoding.rs`.
 """
 
 from __future__ import annotations

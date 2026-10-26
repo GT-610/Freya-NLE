@@ -13,13 +13,9 @@ jobs:
     name: Test Rust + Slint
     uses: ./.github/workflows/rust-checks.yml
 
-  qt:
-    name: Test Qt compatibility
-    uses: ./.github/workflows/qt-checks.yml
-
   build:
     name: Build ${{ matrix.platform }}
-    needs: [test, qt]
+    needs: [test]
     strategy:
       fail-fast: false
       matrix:
@@ -231,14 +227,6 @@ jobs:
           # the cached .build_tmp/vcpkg-downloads directory stays empty.
           VCPKG_DOWNLOADS: ${{ github.workspace }}\.build_tmp\vcpkg-downloads
         run: python BUILD.py --msvc --version "${{ steps.version.outputs.version }}"
-
-      - name: Verify package has no Qt runtime
-        shell: bash
-        run: |
-          if find build -iname 'Qt6*' -print -quit | grep -q .; then
-            echo "Qt runtime files were packaged" >&2
-            exit 1
-          fi
 
       - uses: actions/upload-artifact@v4
         with:

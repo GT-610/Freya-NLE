@@ -14,6 +14,3 @@ jobs:
   test:
     name: Test Rust + Slint
     uses: ./.github/workflows/rust-checks.yml
-  qt:
-    name: Test Qt compatibility
-    uses: ./.github/workflows/qt-checks.yml

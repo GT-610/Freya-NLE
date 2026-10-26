@@ -123,7 +123,6 @@ export component SystemSettingsWindow inherits Window {
     in-out property <int> backup-interval: 5;
     in-out property <int> recent-project-max-count: 10;
     in-out property <int> undo-count: 32;
-    in-out property <int> splash-size: 512;
     in-out property <int> max-image-size: 8192;
     in-out property <int> cache-size: 512;
     in-out property <int> preview-render-scale-index: 0;
@@ -289,13 +288,6 @@ export component SystemSettingsWindow inherits Window {
                         spacing: 6px;
                         SystemSettingSpinRow { label: @tr("Undo count"); value <=> root.undo-count; minimum: 1; maximum: 1000; }
                         Text { text: @tr("Increasing this count increases memory usage"); color: AppTheme.muted-foreground; }
-                    }
-                }
-                GroupBox {
-                    title: @tr("Startup");
-                    VerticalLayout {
-                        padding: 10px;
-                        SystemSettingSpinRow { label: @tr("Splash image size"); value <=> root.splash-size; minimum: 128; maximum: 2048; step-size: 64; }
                     }
                 }
             }

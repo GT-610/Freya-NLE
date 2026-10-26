@@ -206,7 +206,6 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
     window
         .set_recent_project_max_count(settings.i32_value("recentProjectMaxCount", 10).clamp(1, 50));
     window.set_undo_count(settings.i32_value("undoCount", 32).clamp(1, 1_000));
-    window.set_splash_size(settings.i32_value("splashSize", 512).clamp(128, 2_048));
     window.set_max_image_size(
         settings
             .i32_value("maxImageSize", 8_192)
@@ -445,10 +444,6 @@ fn system_settings_replacement(
         (
             "undoCount",
             serde_json::json!(window.get_undo_count().clamp(1, 1_000)),
-        ),
-        (
-            "splashSize",
-            serde_json::json!(window.get_splash_size().clamp(128, 2_048)),
         ),
         (
             "maxImageSize",

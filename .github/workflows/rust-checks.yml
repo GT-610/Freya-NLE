@@ -29,7 +29,7 @@ jobs:
         run: |
           python -m unittest tests.test_build_version
           python tests/test_rust_abi_contract.py
-          python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header core/include/rust_core_abi.hpp
+          python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header rust/freya-nle-core/include/rust_core_abi.hpp
       - name: Format, lint, and test workspace
         run: |
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check

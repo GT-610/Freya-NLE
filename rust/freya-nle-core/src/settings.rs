@@ -8,7 +8,6 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Mutex;
 
-// Keep these defaults aligned with core/include/constants.hpp.
 const DEFAULT_WIDTH: i32 = 1920;
 const DEFAULT_HEIGHT: i32 = 1080;
 const DEFAULT_SAMPLE_RATE: i32 = 48_000;
@@ -109,6 +108,8 @@ fn default_settings(platform_defaults: &Map<String, Value>) -> Map<String, Value
         "timelineMaxLayers": 128,
         "timelineLayerHeaderWidth": 60,
         "timelineClipResizeHandleWidth": 10,
+        // Retained from the Qt frontend: its splash phase no longer exists, but a
+        // settings file written by an older version keeps the key.
         "splashSize": 512,
         "exportImageQuality": 95,
         "exportSequencePadding": 6,
@@ -890,21 +891,14 @@ mod tests {
     }
 
     #[test]
-    fn rust_defaults_match_cpp_constants() {
-        let constants = include_str!("../../../core/include/constants.hpp");
-        for (name, value) in [
-            ("kDefaultWidth", DEFAULT_WIDTH.to_string()),
-            ("kDefaultHeight", DEFAULT_HEIGHT.to_string()),
-            ("kDefaultSampleRate", DEFAULT_SAMPLE_RATE.to_string()),
-            ("kDefaultClipDuration", DEFAULT_CLIP_DURATION.to_string()),
-            ("kAudioMaxBlockSize", AUDIO_MAX_BLOCK_SIZE.to_string()),
-        ] {
-            assert!(
-                constants.contains(&format!("constexpr int {name} = {value};")),
-                "C++ constant {name} differs from the Rust default"
-            );
-        }
-        assert!(constants.contains(&format!("constexpr double kDefaultFps = {DEFAULT_FPS:.1};")));
+    fn defaults_match_the_documented_project_baseline() {
+        // AviUtl ExEdit's defaults, carried over from the Qt frontend's constants header.
+        assert_eq!(DEFAULT_WIDTH, 1_920);
+        assert_eq!(DEFAULT_HEIGHT, 1_080);
+        assert_eq!(DEFAULT_SAMPLE_RATE, 48_000);
+        assert_eq!(DEFAULT_CLIP_DURATION, 100);
+        assert_eq!(AUDIO_MAX_BLOCK_SIZE, 4_096);
+        assert_eq!(DEFAULT_FPS, 60.0);
     }
 
     #[test]

@@ -9,15 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MIN_PROJECT_VERSION: i32 = 1;
 const MAX_PROJECT_VERSION: i32 = 3;
-// Keep in sync with AviQtl::kDefaultWidth in core/include/constants.hpp.
 const DEFAULT_WIDTH: i32 = 1920;
-// Keep in sync with AviQtl::kDefaultHeight in core/include/constants.hpp.
 const DEFAULT_HEIGHT: i32 = 1080;
-// Keep in sync with AviQtl::kDefaultSampleRate in core/include/constants.hpp.
 const DEFAULT_SAMPLE_RATE: i32 = 48_000;
-// Keep in sync with AviQtl::kDefaultTotalFrames in core/include/constants.hpp.
 const DEFAULT_TOTAL_FRAMES: i32 = 300;
-// Keep in sync with AviQtl::kDefaultFps in core/include/constants.hpp.
 pub(crate) const DEFAULT_FPS: f64 = 60.0;
 const MAX_DIMENSION: i32 = 32_768;
 const MAX_FPS: f64 = 1_000.0;
