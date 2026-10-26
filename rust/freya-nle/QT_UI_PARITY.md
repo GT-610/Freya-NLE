@@ -144,7 +144,7 @@ suite exercises them on Windows and Linux as well as macOS.
   staging, backup, atomic `installed.json` replacement, and rollback. Removal uses the inverse
   transaction, Upgrade All continues after individual failures, and application updates retain Qt's
   restart notification. Effect and Object packages are validated against the native
-  `freya-nle-wgsl-v1` contract before deployment, loaded into the Slint catalog, rendered through the
+  `aviqtl-wgsl-v1` contract before deployment, loaded into the Slint catalog, rendered through the
   same wgpu path in preview and export, and removed through the existing inverse transaction. Legacy
   QML packages are rejected rather than presented as usable. MOD package lifecycle remains active.
   The MOD permission window preserves Qt's

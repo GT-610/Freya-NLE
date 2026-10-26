@@ -1733,7 +1733,7 @@ fn aviqtl_effect(
         "categories":["Native"],
         "params":{"amount":0.5},
         "ui":{"controls":[]},
-        "runtime":{"engine":"freya-nle-wgsl-v1","shader":"main.wgsl","uniforms":["amount"]}
+        "runtime":{"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","uniforms":["amount"]}
     }"#;
 
     fn temporary_root() -> PathBuf {
@@ -2174,7 +2174,7 @@ fn aviqtl_effect(
             "categories":["Native"],
             "params":{"amount":0.5},
             "ui":{"controls":[]},
-            "runtime":{"engine":"freya-nle-wgsl-v1","shader":"main.wgsl","uniforms":["amount"]}
+            "runtime":{"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","uniforms":["amount"]}
         }"#;
         let native = stored_zip(&[
             ("main.json", native_metadata, 0o100644_u32 << 16),
@@ -2204,7 +2204,7 @@ fn aviqtl_effect(
         ]);
         let error = deploy_package_archive(&root, "object.legacy", "object", &legacy, || Ok(()))
             .expect_err("legacy QML package is rejected");
-        assert!(error.contains("does not declare freya-nle-wgsl-v1"));
+        assert!(error.contains("does not declare aviqtl-wgsl-v1"));
         assert!(
             !root
                 .parent()
@@ -2240,7 +2240,7 @@ fn aviqtl_effect(
             "categories":["Native"],
             "params":{"amount":0.5},
             "ui":{"controls":[]},
-            "runtime":{"engine":"freya-nle-wgsl-v1","shader":"new.wgsl","uniforms":["amount"]}
+            "runtime":{"engine":"aviqtl-wgsl-v1","shader":"new.wgsl","uniforms":["amount"]}
         }"#;
         let replacement = stored_zip(&[
             ("new.json", rollback_metadata, 0o100644_u32 << 16),

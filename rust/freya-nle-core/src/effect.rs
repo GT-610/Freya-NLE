@@ -82,7 +82,7 @@ fn valid_uniform_name(name: &str) -> bool {
 
 fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
     let runtime = value.as_object()?;
-    if string(runtime.get("engine")) != Some("freya-nle-wgsl-v1") {
+    if string(runtime.get("engine")) != Some("aviqtl-wgsl-v1") {
         return None;
     }
     let shader = string(runtime.get("shader"))?;
@@ -110,7 +110,7 @@ fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
     Some(Map::from_iter([
         (
             "engine".to_owned(),
-            Value::String("freya-nle-wgsl-v1".to_owned()),
+            Value::String("aviqtl-wgsl-v1".to_owned()),
         ),
         ("shader".to_owned(), Value::String(shader.to_owned())),
         (
@@ -487,7 +487,7 @@ mod tests {
             "params": {"amount": 0.5},
             "ui": {"controls": []},
             "runtime": {
-                "engine": "freya-nle-wgsl-v1",
+                "engine": "aviqtl-wgsl-v1",
                 "shader": "shaders/main.wgsl",
                 "uniforms": ["amount"]
             }
@@ -495,7 +495,7 @@ mod tests {
         let normalized =
             normalize_metadata(&serde_json::to_vec(&input).expect("serialize metadata fixture"))
                 .expect("valid native metadata");
-        assert_eq!(normalized["runtime"]["engine"], "freya-nle-wgsl-v1");
+        assert_eq!(normalized["runtime"]["engine"], "aviqtl-wgsl-v1");
         assert_eq!(normalized["runtime"]["shader"], "shaders/main.wgsl");
         assert_eq!(normalized["runtime"]["uniforms"], json!(["amount"]));
     }
@@ -516,17 +516,15 @@ mod tests {
         };
         for invalid in [
             native(json!({"engine":"other","shader":"main.wgsl","uniforms":[]})),
-            native(json!({"engine":"freya-nle-wgsl-v1","shader":"../main.wgsl","uniforms":[]})),
-            native(json!({"engine":"freya-nle-wgsl-v1","shader":"C:/main.wgsl","uniforms":[]})),
-            native(json!({"engine":"freya-nle-wgsl-v1","shader":"main.txt","uniforms":[]})),
+            native(json!({"engine":"aviqtl-wgsl-v1","shader":"../main.wgsl","uniforms":[]})),
+            native(json!({"engine":"aviqtl-wgsl-v1","shader":"C:/main.wgsl","uniforms":[]})),
+            native(json!({"engine":"aviqtl-wgsl-v1","shader":"main.txt","uniforms":[]})),
+            native(json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","uniforms":["bad-name"]})),
             native(
-                json!({"engine":"freya-nle-wgsl-v1","shader":"main.wgsl","uniforms":["bad-name"]}),
-            ),
-            native(
-                json!({"engine":"freya-nle-wgsl-v1","shader":"main.wgsl","uniforms":["amount", "amount"]}),
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","uniforms":["amount", "amount"]}),
             ),
             native(json!({
-                "engine":"freya-nle-wgsl-v1",
+                "engine":"aviqtl-wgsl-v1",
                 "shader":"main.wgsl",
                 "uniforms":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q"]
             })),

@@ -328,7 +328,7 @@ pub(crate) fn validate_native_package_directory(
         };
         if entry.runtime.is_none() {
             return Err(format!(
-                "Native package entry {} does not declare freya-nle-wgsl-v1.",
+                "Native package entry {} does not declare aviqtl-wgsl-v1.",
                 entry.id
             ));
         }
@@ -360,7 +360,7 @@ pub(crate) fn validate_native_package_directory(
     }
     if definitions == 0 {
         return Err(format!(
-            "{package_type} packages must contain at least one freya-nle-wgsl-v1 entry."
+            "{package_type} packages must contain at least one aviqtl-wgsl-v1 entry."
         ));
     }
     Ok(())
@@ -536,7 +536,7 @@ fn aviqtl_effect(
                 "params": {"amount": 0.5},
                 "ui": {"controls": []},
                 "runtime": {
-                    "engine": "freya-nle-wgsl-v1",
+                    "engine": "aviqtl-wgsl-v1",
                     "shader": "shaders/main.wgsl",
                     "uniforms": ["amount"]
                 }
@@ -587,7 +587,7 @@ fn aviqtl_effect(
                 "params": {"amount": 0.5},
                 "ui": {"controls": []},
                 "runtime": {
-                    "engine": "freya-nle-wgsl-v1",
+                    "engine": "aviqtl-wgsl-v1",
                     "shader": "shaders/main.wgsl",
                     "uniforms": ["amount"]
                 }

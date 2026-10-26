@@ -87,7 +87,7 @@ fn native_shader_module_source(source: &str) -> String {
     combined
 }
 
-/// Validates a package shader against the host-owned `freya-nle-wgsl-v1` contract.
+/// Validates a package shader against the host-owned `aviqtl-wgsl-v1` contract.
 pub fn validate_native_shader(source: &str) -> Result<(), String> {
     for forbidden in ["@group", "@binding", "@vertex", "@fragment", "@compute"] {
         if source.contains(forbidden) {
