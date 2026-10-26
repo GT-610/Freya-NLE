@@ -2,23 +2,26 @@
   <img src="../../assets/splash.svg" width="256">
 </p>
 
-<p align="center"><b>继承并超越 AviUtl 的次世代视频编辑软件</b></p>
+<p align="center"><b>沿用 AviUtl 编辑方式、基于 Rust、Slint 与 wgpu 重建的视频编辑软件</b></p>
 
 <p align="center">
-  <a href="https://github.com/GT-610/AviQtl-Plus">GitHub</a>
-  / <a href="https://github.com/GT-610/AviQtl-Plus/releases">发行版</a>
+  <a href="https://github.com/GT-610/freya-nle">GitHub</a>
+  / <a href="https://github.com/GT-610/freya-nle/releases">发行版</a>
 </p>
 
 <p align="center">
   <a href="../../README.md">English</a> / <a href="./README.ja.md">日本語</a> / <b>简体中文</b>
 </p>
 
+> [!NOTE]
+> Freya NLE 在 0.8 之前叫 AviQtl-Plus。旧链接会重定向，`.aviqtl` 项目与 `.aviqtlfrag` 片段仍然可以打开，每一处标识符改动都记在 CHANGELOG 里。
+
 > [!IMPORTANT]
-> AviQtl-Plus 是 [taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl) 的 fork，在上游项目改用 **Rust + Slint + wgpu** 重建后，继续 **Qt Quick + QRhi + ECS** 开发路线。此后前端也已迁往同一方向：**Rust + Slint + wgpu 既是默认构建，也是发布构建**。旧 Qt 前端仍可通过 `python3 BUILD.py --frontend qt` 构建，仅作为行为参照保留。关于完整来龙去脉，请参见[关于项目](https://aviqtl.gt610.dpdns.org/zh-CN/guide/start-here/about)。
+> Freya NLE 是 [taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl) 的 fork，在上游项目改用 **Rust + Slint + wgpu** 重建后，继续 **Qt Quick + QRhi + ECS** 开发路线。此后前端也已迁往同一方向：**Rust + Slint + wgpu 既是默认构建，也是发布构建**。旧 Qt 前端仍可通过 `python3 BUILD.py --frontend qt` 构建，仅作为行为参照保留。关于完整来龙去脉，请参见[关于项目](https://aviqtl.gt610.dpdns.org/zh-CN/guide/start-here/about)。
 
-## 什么是 [AviQtl-Plus](https://github.com/GT-610/AviQtl-Plus)？
+## 什么是 [Freya NLE](https://github.com/GT-610/freya-nle)？
 
-<img src="../../assets/screenshot.webp" alt="AviQtl-Plus 界面截图">
+<img src="../../assets/screenshot.webp" alt="Freya NLE 界面截图">
 
 一个旨在继承 **AviUtl 1.10** 和 **ExEdit 0.92** 的操作体验，同时拥有**超越 AviUtl 性能**的视频编辑软件项目。
 
@@ -44,7 +47,7 @@
 
 ## 效果包
 
-AviQtl-Plus 拥有模块化效果系统。`effect-packages/` 目录包含即用型效果包，展示扩展系统：
+Freya NLE 拥有模块化效果系统。`effect-packages/` 目录包含即用型效果包，展示扩展系统：
 
 | 包 | 类型 | 内容 |
 |---|------|------|
@@ -54,14 +57,14 @@ AviQtl-Plus 拥有模块化效果系统。`effect-packages/` 目录包含即用�
 
 ## 相关链接
 
-AviQtl-Plus 站在众多优秀项目的肩膀上。
+Freya NLE 站在众多优秀项目的肩膀上。
 
 | 项目 | 许可证 | 角色 |
 | :--- | :--- | :--- |
 | AviUtl | 非自由 | 致敬的原型 |
 | AviQtl | AGPLv3 | 原 Qt Quick 版本；上游的 `aviqtl` 分支 |
 | NeoUtl | AGPLv3 | 原作者的新 Rust + Slint + wgpu 版本 |
-| AviQtl-Plus | AGPLv3 | 本项目 — 正在从 Qt Quick + QRhi + ECS 向 Rust + Slint + wgpu 迁移 |
+| Freya NLE | AGPLv3 | 本项目 — 正在从 Qt Quick + QRhi + ECS 向 Rust + Slint + wgpu 迁移 |
 | Carla | GPLv2+ | 音频特效宿主（VST3/LV2等） |
 | FFmpeg | GPLv2+ | 视频/音频编解码 |
 | LuaJIT | MIT | 旧 Qt 前端的脚本引擎 |
@@ -72,6 +75,6 @@ AviQtl-Plus 站在众多优秀项目的肩膀上。
 
 ## 许可证
 
-AviQtl-Plus 基于 [GNU Affero General Public License](https://www.gnu.org/licenses/agpl-3.0.txt) 发布。
+Freya NLE 基于 [GNU Affero General Public License](https://www.gnu.org/licenses/agpl-3.0.txt) 发布。
 
-AviQtl-Plus 中使用的 [Remix Icon](https://remixicon.com/) 遵循 [Remix Icon License](https://raw.githubusercontent.com/Remix-Design/RemixIcon/refs/heads/master/License)。
+Freya NLE 中使用的 [Remix Icon](https://remixicon.com/) 遵循 [Remix Icon License](https://raw.githubusercontent.com/Remix-Design/RemixIcon/refs/heads/master/License)。

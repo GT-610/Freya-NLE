@@ -200,7 +200,7 @@ class PlatformBuilder:
         command = [
             "cargo", "build",
             "--manifest-path", str(self.config.source_dir / "rust" / "Cargo.toml"),
-            "--package", "aviqtl-slint", "--locked",
+            "--package", "freya-nle", "--locked",
         ]
         if not self.config.is_debug:
             command.append("--release")
@@ -296,7 +296,7 @@ class PlatformBuilder:
 
     def cargo_binary(self, windows: bool = False) -> Path:
         suffix = ".exe" if windows else ""
-        return self.config.cargo_target_dir / self.config.cargo_profile / f"aviqtl-slint{suffix}"
+        return self.config.cargo_target_dir / self.config.cargo_profile / f"freya-nle{suffix}"
 
     def package(self):
         raise NotImplementedError
@@ -865,11 +865,11 @@ class XcodeBuilder(PlatformBuilder):
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleDevelopmentRegion</key><string>en</string>
-<key>CFBundleExecutable</key><string>aviqtl-slint</string>
-<key>CFBundleIdentifier</key><string>org.aviqtl.AviQtl</string>
+<key>CFBundleExecutable</key><string>freya-nle</string>
+<key>CFBundleIdentifier</key><string>io.github.gt610.freya-nle</string>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-<key>CFBundleName</key><string>AviQtl</string>
-<key>CFBundleDisplayName</key><string>AviQtl</string>
+<key>CFBundleName</key><string>Freya NLE</string>
+<key>CFBundleDisplayName</key><string>Freya NLE</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>{bundle_version}</string>
 <key>CFBundleVersion</key><string>{bundle_version}</string>
@@ -926,14 +926,14 @@ class XcodeBuilder(PlatformBuilder):
         source = self.cargo_binary()
         if not source.is_file():
             raise FileNotFoundError(f"Executable not found: {source}")
-        app = self.config.output_dir / "AviQtl.app"
+        app = self.config.output_dir / "Freya NLE.app"
         contents = app / "Contents"
         macos = contents / "MacOS"
         resources = contents / "Resources"
         frameworks = contents / "Frameworks"
         macos.mkdir(parents=True)
         resources.mkdir(parents=True)
-        executable = macos / "aviqtl-slint"
+        executable = macos / "freya-nle"
         shutil.copy2(source, executable)
         self.write_info_plist(contents)
         self.copy_resources(resources)

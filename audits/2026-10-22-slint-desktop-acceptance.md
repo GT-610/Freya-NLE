@@ -7,7 +7,7 @@ Frontend language: Chinese. Interface driven by real mouse and keyboard events
 unit tests.
 
 This is the first recorded desktop session for the Slint frontend. It does not
-complete the deferred suite in [QT_UI_PARITY.md](../rust/aviqtl-slint/QT_UI_PARITY.md);
+complete the deferred suite in [2026-10-23-slint-ui-parity-gate.md](../audits/2026-10-23-slint-ui-parity-gate.md);
 it records what was actually operated, what failed, and what could not be
 verified on this host.
 
@@ -118,7 +118,7 @@ any persistent write failure behaves the same way.
 
 ## Follow-up
 
-`QT_UI_PARITY.md` keeps its statuses except where this session provides evidence.
+`2026-10-23-slint-ui-parity-gate.md` keeps its statuses except where this session provides evidence.
 The shortcut rows stay `foundation` until the fixed build is exercised on Windows
 and Linux as well, where the accelerator is Control and the recorded `Ctrl`
 spelling has always been correct.

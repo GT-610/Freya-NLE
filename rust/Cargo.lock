@@ -599,119 +599,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aviqtl-app"
-version = "0.7.0-rc.1"
-dependencies = [
- "aviqtl-audio",
- "aviqtl-carla",
- "aviqtl-media",
- "aviqtl-render",
- "aviqtl-rust-core",
- "crc32fast",
- "flate2",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "unicode-casefold",
- "ureq",
- "url",
-]
-
-[[package]]
-name = "aviqtl-audio"
-version = "0.7.0-rc.1"
-dependencies = [
- "aviqtl-carla",
- "aviqtl-media",
- "aviqtl-rust-core",
- "cpal",
- "rtrb",
- "serde_json",
- "truce-rack",
-]
-
-[[package]]
-name = "aviqtl-carla"
-version = "0.7.0-rc.1"
-dependencies = [
- "libloading",
-]
-
-[[package]]
-name = "aviqtl-export"
-version = "0.7.0-rc.1"
-dependencies = [
- "aviqtl-audio",
- "aviqtl-media",
- "aviqtl-preview",
- "aviqtl-rust-core",
- "wgpu",
-]
-
-[[package]]
-name = "aviqtl-media"
-version = "0.7.0-rc.1"
-dependencies = [
- "ffmpeg-the-third",
- "image",
-]
-
-[[package]]
-name = "aviqtl-preview"
-version = "0.7.0-rc.1"
-dependencies = [
- "aviqtl-media",
- "aviqtl-render",
- "aviqtl-rust-core",
- "pollster",
- "serde_json",
- "wgpu",
-]
-
-[[package]]
-name = "aviqtl-render"
-version = "0.7.0-rc.1"
-dependencies = [
- "aviqtl-media",
- "aviqtl-rust-core",
- "fontdb",
- "naga",
- "rustybuzz",
- "tiny-skia 0.12.0",
- "wgpu",
-]
-
-[[package]]
-name = "aviqtl-rust-core"
-version = "0.7.0-rc.1"
-dependencies = [
- "luna-core",
- "semver",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aviqtl-slint"
-version = "0.7.0-rc.1"
-dependencies = [
- "aviqtl-app",
- "aviqtl-audio",
- "aviqtl-export",
- "aviqtl-preview",
- "fontdb",
- "pollster",
- "rfd",
- "roxmltree 0.21.1",
- "serde_json",
- "slint",
- "slint-build",
- "sys-locale",
- "webbrowser",
-]
-
-[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1862,6 +1749,119 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "freya-nle"
+version = "0.7.0-rc.1"
+dependencies = [
+ "fontdb",
+ "freya-nle-app",
+ "freya-nle-audio",
+ "freya-nle-export",
+ "freya-nle-preview",
+ "pollster",
+ "rfd",
+ "roxmltree 0.21.1",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "sys-locale",
+ "webbrowser",
+]
+
+[[package]]
+name = "freya-nle-app"
+version = "0.7.0-rc.1"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "freya-nle-audio",
+ "freya-nle-carla",
+ "freya-nle-core",
+ "freya-nle-media",
+ "freya-nle-render",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "unicode-casefold",
+ "ureq",
+ "url",
+]
+
+[[package]]
+name = "freya-nle-audio"
+version = "0.7.0-rc.1"
+dependencies = [
+ "cpal",
+ "freya-nle-carla",
+ "freya-nle-core",
+ "freya-nle-media",
+ "rtrb",
+ "serde_json",
+ "truce-rack",
+]
+
+[[package]]
+name = "freya-nle-carla"
+version = "0.7.0-rc.1"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
+name = "freya-nle-core"
+version = "0.7.0-rc.1"
+dependencies = [
+ "luna-core",
+ "semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "freya-nle-export"
+version = "0.7.0-rc.1"
+dependencies = [
+ "freya-nle-audio",
+ "freya-nle-core",
+ "freya-nle-media",
+ "freya-nle-preview",
+ "wgpu",
+]
+
+[[package]]
+name = "freya-nle-media"
+version = "0.7.0-rc.1"
+dependencies = [
+ "ffmpeg-the-third",
+ "image",
+]
+
+[[package]]
+name = "freya-nle-preview"
+version = "0.7.0-rc.1"
+dependencies = [
+ "freya-nle-core",
+ "freya-nle-media",
+ "freya-nle-render",
+ "pollster",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
+name = "freya-nle-render"
+version = "0.7.0-rc.1"
+dependencies = [
+ "fontdb",
+ "freya-nle-core",
+ "freya-nle-media",
+ "naga",
+ "rustybuzz",
+ "tiny-skia 0.12.0",
+ "wgpu",
 ]
 
 [[package]]

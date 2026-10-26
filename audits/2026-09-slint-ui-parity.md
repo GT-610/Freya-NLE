@@ -32,7 +32,7 @@ misleading UI; **Low** = cosmetic or wording only.
 - History: commit `1a68e3f1` ("Cascade timeline catalog context menus") replaced the accessible
   `PopupWindow` — which had `context-search := LineEdit` wired to
   `filter-context-catalog(value, …)` — with `ContextMenuArea` and dropped the search field.
-- Documentation drift: `rust/aviqtl-slint/QT_UI_PARITY.md:202-211` still states the menus "use an
+- Documentation drift: `audits/2026-10-23-slint-ui-parity-gate.md:202-211` still states the menus "use an
   accessible Slint `PopupWindow`" and that the popup "focuses the same search field immediately,
   swaps the command list for Rust-filtered object/effect/audio-plugin results while typing". That is
   no longer true of the code.
@@ -48,7 +48,7 @@ misleading UI; **Low** = cosmetic or wording only.
   `src/callbacks.rs:1875-1880` now calls only `workspace.select_layer(layer)`.
 - History: commit `cfc2b137` "fix(slint): keep layer activation to selection only" removed
   `workspace.toggle_layer_visibility(layer)` from that handler.
-- Documentation drift: `QT_UI_PARITY.md:48` still records
+- Documentation drift: `2026-10-23-slint-ui-parity-gate.md:48` still records
   "Layer left click | Toggle visibility and select that layer | **parity**".
 - Impact: hiding/showing a layer — the most common timeline gesture in Qt — now requires a
   right-click menu item or the `Ctrl+H` shortcut. Nothing in the Slint header (the `●`/`○`
@@ -123,7 +123,7 @@ misleading UI; **Low** = cosmetic or wording only.
   `action.shortcutText` (`ui/qml/common/IconMenuItem.qml:52-62`), which follows the user's
   rebindings. The timeline/layer/clip menus do the same.
 - Slint uses plain `MenuItem` (`main.slint:62-102`), so every command loses both its icon and its
-  shortcut hint. `QT_UI_PARITY.md:124` records that static accelerators were deliberately removed,
+  shortcut hint. `2026-10-23-slint-ui-parity-gate.md:124` records that static accelerators were deliberately removed,
   but the loss of the shortcut *label* is not recorded there and makes the 34 configurable bindings
   undiscoverable from the UI.
 
@@ -201,7 +201,7 @@ These four have no entry, so they render in English under Chinese and Japanese:
 | S1 context-menu search | **Fixed** | `e1825338` — search popup alongside the cascading native menu |
 | S2 layer left-click toggle | **Fixed** | `002d33e6` — split into select + visibility-toggled callbacks |
 | S3 flat effect/plugin menu | **Fixed** | `86640059` — one submenu per category, as Qt does |
-| S4 debug teardown crash | **Open (not this crate)** | `b0a85b1e` made the exit explicit; the crash is inside Slint's event-loop teardown. Recorded under Known issues in `QT_UI_PARITY.md`. |
+| S4 debug teardown crash | **Open (not this crate)** | `b0a85b1e` made the exit explicit; the crash is inside Slint's event-loop teardown. Recorded under Known issues in `2026-10-23-slint-ui-parity-gate.md`. |
 | M1 audio-clip browse entry | **Fixed** | `93ddc5dc` |
 | M2 clip menu separators | **Fixed** | `93ddc5dc` |
 | M3 frame counter clipping | **Fixed** | `68d59018` |
@@ -209,7 +209,7 @@ These four have no entry, so they render in English under Chinese and Japanese:
 | M5 menu icons / shortcut labels | **Superseded (2026-09-24)** | Slint 1.17.1 supports `MenuItem.icon` and MenuBar `shortcut`; see the correction below and the workflow implementation report. |
 | M6 tab strips cannot scroll | **Fixed** | Scroll-strip commit on this branch — both strips wrapped in a horizontal `ScrollView` with a pinned add button |
 | M7 four untranslated strings | **Fixed** | `23099b90` — both catalogs now cover all 372 UI strings |
-| Doc drift in `QT_UI_PARITY.md` | **Fixed** | `444f2a5a` |
+| Doc drift in `2026-10-23-slint-ui-parity-gate.md` | **Fixed** | `444f2a5a` |
 
 Verification after the fixes: `cargo fmt --all -- --check` clean,
 `cargo test --workspace` 397 passed / 7 ignored / 0 failed, and the release

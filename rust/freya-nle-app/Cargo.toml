@@ -1,0 +1,25 @@
+[package]
+name = "freya-nle-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+freya-nle-audio = { path = "../freya-nle-audio" }
+freya-nle-carla = { path = "../freya-nle-carla" }
+freya-nle-media = { path = "../freya-nle-media" }
+freya-nle-render = { path = "../freya-nle-render" }
+freya-nle-core = { path = "../freya-nle-core" }
+crc32fast = "1.5"
+flate2 = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+tempfile = "3.27"
+unicode-casefold = "0.2"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+url = "2.5"
+
+[lints.rust]
+unsafe_code = "forbid"

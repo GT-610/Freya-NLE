@@ -158,11 +158,11 @@ else()
     set(AVIQTL_RUST_BUILD_ARGS "--release")
 endif()
 set(AVIQTL_RUST_CORE_LIBRARY
-    "${AVIQTL_RUST_TARGET_DIR}/${AVIQTL_RUST_PROFILE}/${CMAKE_STATIC_LIBRARY_PREFIX}aviqtl_rust_core${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    "${AVIQTL_RUST_TARGET_DIR}/${AVIQTL_RUST_PROFILE}/${CMAKE_STATIC_LIBRARY_PREFIX}freya_nle_core${CMAKE_STATIC_LIBRARY_SUFFIX}"
 )
 
 file(GLOB_RECURSE AVIQTL_RUST_CORE_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/rust/aviqtl-core/src/*.rs"
+    "${CMAKE_SOURCE_DIR}/rust/freya-nle-core/src/*.rs"
 )
 add_custom_command(
     OUTPUT "${AVIQTL_RUST_CORE_LIBRARY}"
@@ -173,11 +173,11 @@ add_custom_command(
         --locked
         ${AVIQTL_RUST_NETWORK_ARGS}
         ${AVIQTL_RUST_BUILD_ARGS}
-        --package aviqtl-rust-core
+        --package freya-nle-core
     DEPENDS
         "${AVIQTL_RUST_MANIFEST}"
         "${CMAKE_SOURCE_DIR}/rust/Cargo.lock"
-        "${CMAKE_SOURCE_DIR}/rust/aviqtl-core/Cargo.toml"
+        "${CMAKE_SOURCE_DIR}/rust/freya-nle-core/Cargo.toml"
         ${AVIQTL_RUST_CORE_SOURCES}
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
     COMMENT "Building AviQtl Rust core"
