@@ -9,7 +9,7 @@ use freya_nle_render::{
     BlendMode, LayerCrop, LayerTransform, NativeRenderDefinition, VisualEffect,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,9 @@ pub struct PreviewPlanner {
     plans: BTreeMap<i32, SceneRenderPlan>,
     project_directory: Option<PathBuf>,
     native_definitions: BTreeMap<String, NativeRenderDefinition>,
+    /// Effect ids already reported as having no renderer, so a malformed
+    /// package does not print a warning on every frame.
+    warned_effects: BTreeSet<String>,
 }
 
 impl PreviewPlanner {
@@ -31,6 +34,7 @@ impl PreviewPlanner {
             plans: build_render_plans(document),
             project_directory: project_path.and_then(Path::parent).map(Path::to_path_buf),
             native_definitions: BTreeMap::new(),
+            warned_effects: BTreeSet::new(),
         }
     }
 
@@ -115,13 +119,27 @@ impl PreviewPlanner {
             let pivot_y = effect_number(&layer, "transform", "cy");
             let pivot_z = effect_number(&layer, "transform", "cz");
             let backface_visible = effect_bool_or(&layer, "transform", "backfaceVisible", true);
+            let mut unrouted = Vec::new();
             let effects = layer_visual_effects(
                 &layer.effects,
                 layer.relative_frame,
                 layer.duration_frames,
                 fps,
                 &self.native_definitions,
+                &mut unrouted,
             );
+            for id in unrouted {
+                // A clip's own object entry carries the clip type as its effect
+                // id and is drawn by the object plan, not by this pass.
+                if id == layer.clip_type {
+                    continue;
+                }
+                if self.warned_effects.insert(id.clone()) {
+                    warnings.push(format!(
+                        "effect {id} has no preview renderer and will not draw"
+                    ));
+                }
+            }
             let (content, content_opacity) = if layer.clip_type == "frame_buffer" {
                 let capture_key =
                     auxiliary_scene_instance_key(instance_key, layer.clip_id, "frame-buffer");
@@ -417,6 +435,7 @@ fn layer_visual_effects(
     duration_frames: i32,
     fps: f64,
     native_definitions: &BTreeMap<String, NativeRenderDefinition>,
+    unrouted: &mut Vec<String>,
 ) -> Vec<VisualEffect> {
     effects
         .iter()
@@ -787,10 +806,20 @@ fn layer_visual_effects(
             // texture, so ComputeRenderNode displays its unchanged input fallback. Actual layer
             // and frame-buffer blending is handled by the compositor instead.
             "blend_layer" => None,
-            _ => None,
+            id => {
+                if !DEFERRED_EFFECT_IDS.contains(&id) {
+                    unrouted.push(id.to_owned());
+                }
+                None
+            }
         })
         .collect()
 }
+
+/// Effects whose behavior belongs to the compositor (transform, crop, blending)
+/// instead of the per-layer visual-effect pass, so they never report as
+/// unrouted.
+const DEFERRED_EFFECT_IDS: [&str; 3] = ["blend_layer", "clipping", "transform"];
 
 fn native_parameter(effect: &EvaluatedEffect, name: &str) -> [f32; 4] {
     let Some(value) = evaluated_effect_value(effect, name).map(value_payload) else {
@@ -920,6 +949,45 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_without_a_renderer_is_reported_instead_of_dropped_silently() {
+        let mut unrouted = Vec::new();
+        let effects = layer_visual_effects(
+            &[EvaluatedEffect {
+                effect_index: 0,
+                id: "not.a.real.effect".to_owned(),
+                params: BTreeMap::new(),
+            }],
+            0,
+            60,
+            60.0,
+            &BTreeMap::new(),
+            &mut unrouted,
+        );
+        assert!(effects.is_empty());
+        assert_eq!(unrouted, vec!["not.a.real.effect".to_owned()]);
+
+        // Transform, crop, and blending belong to the compositor, not this pass.
+        let mut deferred = Vec::new();
+        layer_visual_effects(
+            &["transform", "clipping", "blend_layer"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, id)| EvaluatedEffect {
+                    effect_index: index,
+                    id: id.to_owned(),
+                    params: BTreeMap::new(),
+                })
+                .collect::<Vec<_>>(),
+            0,
+            60,
+            60.0,
+            &BTreeMap::new(),
+            &mut deferred,
+        );
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
     fn every_effect_catalog_entry_has_an_explicit_preview_route() {
         let entries = catalog_entries("catalog/effects");
         assert_eq!(
@@ -940,6 +1008,7 @@ mod tests {
                 120,
                 60.0,
                 &BTreeMap::new(),
+                &mut Vec::new(),
             );
             if special_routes.contains(id.as_str()) {
                 assert!(

@@ -137,13 +137,17 @@ documented the behavior is in git history.
    built-in effects have wgpu equivalents, but third-party compute packages cannot be
    authored.
 3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
-   render route is listed and then renders nothing. The built-in catalog is covered by
-   tests and third-party native packages take the native render path, so this is a
-   diagnostics gap rather than a rendering one.
-4. **SF2/SFZ soundfont discovery.** Qt's format table scanned them
-   (`engine/plugin/audio_plugin_manager.cpp:371-375`); the Carla mapping omits them
-   (`freya-nle-carla/src/lib.rs:550-559`). Qt could list but not host them, so the
-   impact is the browser listing only.
+   render route is listed and then renders nothing. The preview planner now reports an
+   effect id without a renderer once per document instead of dropping it silently; an
+   object clip type without a route (a removed package, an unknown object id) still
+   renders nothing without a diagnostic. The built-in catalog is covered by tests and
+   third-party native packages take the native render path, so this is a diagnostics gap
+   rather than a rendering one.
+4. **SF2/SFZ soundfont discovery, deliberately not carried over.** Qt's format table
+   scanned them (`engine/plugin/audio_plugin_manager.cpp:371-375`) while its host mapping
+   had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust
+   catalog omits the formats (`freya-nle-carla/src/lib.rs:550-559`) instead of repeating
+   that; a soundfont format needs a host path before it gets a scan path.
 5. **The C ABI and its contract check.** 141 exports across 21 modules and
    `freya-nle-core/include/rust_core_abi.hpp` have no consumer left in the tree. The
    wrappers and their opaque handle plumbing are about 3,800 lines, and roughly a hundred
