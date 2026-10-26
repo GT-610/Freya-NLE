@@ -161,6 +161,23 @@ class TestBuildScript(unittest.TestCase):
                 )
                 self.assertEqual(packaged.read_text(encoding="utf-8"), contents)
 
+    def test_macos_archive_publishes_the_bundle_packaging_creates(self):
+        # The rename left packaging writing "Freya NLE.app" while archiving still
+        # looked for "AviQtl.app", so a macOS release failed at the archive step.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = XcodeBuilder(
+                config_for(source, target="xcode"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            self.assertEqual(builder.macos_app_bundle().name, "Freya NLE.app")
+            commands = []
+            builder.run_cmd = lambda command, **_kwargs: commands.append(command)
+            builder.create_zip("AviQtl-macOS-Xcode-test")
+            self.assertEqual(len(commands), 1)
+            archived, _destination = commands[0][-2:]
+            self.assertEqual(Path(archived), builder.macos_app_bundle())
+
     def test_output_cleanup_preserves_the_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)

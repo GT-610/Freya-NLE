@@ -176,6 +176,14 @@ Run on macOS 26 (Apple M5, Metal) on the branch:
   61 catalog definitions and 4 script plugins, and prints
   `SLINT_WGPU_COMPATIBILITY` with `main_same_device: true`, `timeline_same_device: true`,
   and no wgpu errors.
+- `cargo test --locked -p freya-nle-media -p freya-nle-audio -- --ignored` and
+  `-p freya-nle-preview -- --ignored` pass, including a real decode/mix/encode round trip
+  and an H.264 plus HEVC VideoToolbox encode.
+- `python3 BUILD.py --xcode --offline` builds, signs, and archives a release:
+  `build/Freya NLE.app` contains `Resources/effects` (44), `Resources/objects` (17),
+  `plugins`, `effect-packages`, and `repos`, the archive lands in `dist/`, and running
+  `Contents/MacOS/freya-nle --frames 120` from the bundle loads all 61 definitions with a
+  shared Metal device and no wgpu errors.
 
 Not verified here: the deferred native desktop suite on Windows and Linux (save/close
 ordering, IME, VoiceOver, dialogs, export cancellation) recorded in

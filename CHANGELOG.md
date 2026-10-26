@@ -66,6 +66,9 @@ All notable changes to Freya NLE are documented in this file.
   them, matching the bound the Qt frontend applied
 
 ### Fixed
+- A macOS release no longer fails at the archive step: packaging writes
+  `Freya NLE.app` and archiving now publishes the same bundle instead of looking
+  for the pre-rename `AviQtl.app`
 - An effect that exists in the catalog but has no preview renderer, and a clip
   whose object type is not in the loaded catalog, are reported once in the
   preview log instead of being dropped without a word, so a broken or

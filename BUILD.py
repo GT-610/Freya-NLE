@@ -820,12 +820,16 @@ class XcodeBuilder(PlatformBuilder):
         for dylib in frameworks.iterdir():
             self.run_cmd(["install_name_tool", "-id", f"@rpath/{dylib.name}", str(dylib)])
 
+    def macos_app_bundle(self) -> Path:
+        """The one bundle path packaging creates and archiving publishes."""
+        return self.config.output_dir / "Freya NLE.app"
+
     def package(self):
         self.prepare_output_dir()
         source = self.cargo_binary()
         if not source.is_file():
             raise FileNotFoundError(f"Executable not found: {source}")
-        app = self.config.output_dir / "Freya NLE.app"
+        app = self.macos_app_bundle()
         contents = app / "Contents"
         macos = contents / "MacOS"
         resources = contents / "Resources"
@@ -854,7 +858,7 @@ class XcodeBuilder(PlatformBuilder):
         archive_path.unlink(missing_ok=True)
         self.run_cmd([
             "ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
-            str(self.config.output_dir / "AviQtl.app"), str(archive_path),
+            str(self.macos_app_bundle()), str(archive_path),
         ], force_host=True)
 
 
