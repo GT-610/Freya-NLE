@@ -140,8 +140,10 @@ documented the behavior is in git history.
    (`freya-nle-carla/src/lib.rs:550-559`). Qt could list but not host them, so the
    impact is the browser listing only.
 5. **The C ABI and its contract check.** 141 exports across 21 modules and
-   `freya-nle-core/include/rust_core_abi.hpp` have no consumer left in the tree. Retiring
-   them touches every module's state handles and status codes, so it is a separate
+   `freya-nle-core/include/rust_core_abi.hpp` have no consumer left in the tree. The
+   wrappers and their opaque handle plumbing are about 3,800 lines, and roughly a hundred
+   module tests exercise the internal rules through those raw-pointer entry points, so
+   retiring the surface means deleting or porting those tests as well. That is a separate
    change; `tests/check_rust_abi.py` keeps the header and the exports in sync meanwhile.
 6. **Documentation site.** `docs/` is a separate repository
    (`docs/docs/developer/building.md`, `docs/docs/zh-CN/developer/building.md`) and still
