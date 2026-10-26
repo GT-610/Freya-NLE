@@ -138,11 +138,10 @@ documented the behavior is in git history.
    authored.
 3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
    render route is listed and then renders nothing. The preview planner now reports an
-   effect id without a renderer once per document instead of dropping it silently; an
-   object clip type without a route (a removed package, an unknown object id) still
-   renders nothing without a diagnostic. The built-in catalog is covered by tests and
-   third-party native packages take the native render path, so this is a diagnostics gap
-   rather than a rendering one.
+   effect id without a renderer, and an object clip type that is not in the catalog the
+   app loaded, once per document instead of dropping them silently. It stays quiet when
+   no catalog was supplied, because then it cannot tell a missing object from an unloaded
+   one.
 4. **SF2/SFZ soundfont discovery, deliberately not carried over.** Qt's format table
    scanned them (`engine/plugin/audio_plugin_manager.cpp:371-375`) while its host mapping
    had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust

@@ -141,10 +141,22 @@ impl PreviewRuntime {
             if let Some(planner) = self.planner.as_mut() {
                 planner.rebuild(workspace.document(), workspace.project().path.as_deref());
                 planner.set_native_definitions(effect_catalog.native_definitions());
+                planner.set_known_objects(
+                    effect_catalog
+                        .entries("object")
+                        .map(|entry| entry.id.clone())
+                        .collect::<Vec<_>>(),
+                );
             } else {
                 let mut planner =
                     PreviewPlanner::new(workspace.document(), workspace.project().path.as_deref());
                 planner.set_native_definitions(effect_catalog.native_definitions());
+                planner.set_known_objects(
+                    effect_catalog
+                        .entries("object")
+                        .map(|entry| entry.id.clone())
+                        .collect::<Vec<_>>(),
+                );
                 self.planner = Some(planner);
             }
             self.source_key = Some(source_key.clone());

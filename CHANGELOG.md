@@ -66,9 +66,10 @@ All notable changes to Freya NLE are documented in this file.
   them, matching the bound the Qt frontend applied
 
 ### Fixed
-- An effect that exists in the catalog but has no preview renderer is reported
-  once in the preview log instead of being dropped without a word, so a broken
-  or half-installed package is visible
+- An effect that exists in the catalog but has no preview renderer, and a clip
+  whose object type is not in the loaded catalog, are reported once in the
+  preview log instead of being dropped without a word, so a broken or
+  half-installed package is visible
 - Justified text is justified: `Text.AlignJustify` distributes the leftover
   width over the word gaps of every line except the last one instead of drawing
   the paragraph left-aligned

@@ -23,9 +23,13 @@ pub struct PreviewPlanner {
     plans: BTreeMap<i32, SceneRenderPlan>,
     project_directory: Option<PathBuf>,
     native_definitions: BTreeMap<String, NativeRenderDefinition>,
+    /// Object ids the catalog knows about. Empty when the planner has no
+    /// catalog, in which case object diagnostics stay silent.
+    known_objects: BTreeSet<String>,
     /// Effect ids already reported as having no renderer, so a malformed
     /// package does not print a warning on every frame.
     warned_effects: BTreeSet<String>,
+    warned_objects: BTreeSet<String>,
 }
 
 impl PreviewPlanner {
@@ -34,8 +38,14 @@ impl PreviewPlanner {
             plans: build_render_plans(document),
             project_directory: project_path.and_then(Path::parent).map(Path::to_path_buf),
             native_definitions: BTreeMap::new(),
+            known_objects: BTreeSet::new(),
             warned_effects: BTreeSet::new(),
+            warned_objects: BTreeSet::new(),
         }
+    }
+
+    pub fn set_known_objects(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.known_objects = ids.into_iter().collect();
     }
 
     pub fn set_native_definitions(
@@ -119,6 +129,19 @@ impl PreviewPlanner {
             let pivot_y = effect_number(&layer, "transform", "cy");
             let pivot_z = effect_number(&layer, "transform", "cz");
             let backface_visible = effect_bool_or(&layer, "transform", "backfaceVisible", true);
+            if !self.known_objects.is_empty()
+                && !self.known_objects.contains(&layer.clip_type)
+                && !matches!(
+                    layer.clip_type.as_str(),
+                    "audio" | "camera" | "camera_control" | "GroupControl" | "frame_buffer"
+                )
+                && self.warned_objects.insert(layer.clip_type.clone())
+            {
+                warnings.push(format!(
+                    "object {} is not in the catalog and will not draw",
+                    layer.clip_type
+                ));
+            }
             let mut unrouted = Vec::new();
             let effects = layer_visual_effects(
                 &layer.effects,
@@ -946,6 +969,42 @@ mod tests {
                 (id, params)
             })
             .collect()
+    }
+
+    #[test]
+    fn an_object_type_missing_from_the_catalog_is_reported_once() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+            "clips": [{
+                "id": 10,
+                "sceneId": 1,
+                "type": "ghost_object",
+                "start": 0,
+                "duration": 60,
+                "layer": 1,
+                "effects": [{"id": "ghost_object", "params": {}}]
+            }]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        planner.set_known_objects(["rect".to_owned(), "text".to_owned()]);
+        let planned = planner.build(&document, 1, 0).expect("scene plans");
+        assert!(
+            planned
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("ghost_object")
+                    && warning.contains("not in the catalog")),
+            "{:?}",
+            planned.warnings
+        );
+
+        // Without a catalog the planner cannot tell a missing object from an
+        // unloaded one, so it stays quiet.
+        let mut bare = PreviewPlanner::new(&document, None);
+        let planned = bare.build(&document, 1, 0).expect("scene plans");
+        assert!(planned.warnings.is_empty(), "{:?}", planned.warnings);
     }
 
     #[test]
