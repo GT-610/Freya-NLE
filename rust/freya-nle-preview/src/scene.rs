@@ -920,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn every_qt_effect_catalog_entry_has_an_explicit_preview_route() {
+    fn every_effect_catalog_entry_has_an_explicit_preview_route() {
         let entries = catalog_entries("catalog/effects");
         assert_eq!(
             entries.len(),
@@ -1117,7 +1117,7 @@ mod tests {
     }
 
     #[test]
-    fn every_qt_object_catalog_entry_reaches_its_production_render_route() {
+    fn every_object_catalog_entry_reaches_its_production_render_route() {
         let entries = catalog_entries("catalog/objects");
         assert_eq!(
             entries.len(),

@@ -14,8 +14,8 @@ evidence for each decision.
 
 The user-visible surface of the Qt frontend is projected by the Slint frontend, and the
 two exceptions are recorded below. The catalog and renderer cover every shipped effect
-and object: `every_qt_effect_catalog_entry_has_an_explicit_preview_route` enumerates the
-44 effect definitions and `every_qt_object_catalog_entry_has_an_explicit_preview_route`
+and object: `every_effect_catalog_entry_has_an_explicit_preview_route` enumerates the
+44 effect definitions and `every_object_catalog_entry_reaches_its_production_render_route`
 the 17 objects, and the startup log reports `Effect catalog · 61 definitions`. Removing
 the Qt tree therefore removed a behavior reference, not a running feature - with the
 caveat that the remaining differences in the "Deliberate deviations" and "Still open"
