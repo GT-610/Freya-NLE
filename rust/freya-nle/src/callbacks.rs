@@ -31,6 +31,7 @@ use crate::shortcuts::sync_timeline_zoom_settings;
 use crate::{MainWindow, TimelineMediaDropResult, TimelineWindow};
 use freya_nle_app::easing::BezierCurve;
 use freya_nle_app::effect_catalog::EffectCatalog;
+use freya_nle_app::fragment::{FRAGMENT_EXTENSION, LEGACY_FRAGMENT_EXTENSION};
 use freya_nle_app::package_manager::{
     PackageManagerModel, PackageOperation, save_plugin_permission_grants,
 };
@@ -108,10 +109,10 @@ pub(super) fn install_timeline_file_drop(
                     );
                 }
                 // A fragment is the same idea without the translation step.
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("aviqtlfrag"))
-                {
+                if path.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case(FRAGMENT_EXTENSION)
+                        || extension.eq_ignore_ascii_case(LEGACY_FRAGMENT_EXTENSION)
+                }) {
                     let fragment = match freya_nle_app::fragment::load_fragment(&path) {
                         Ok(fragment) => fragment,
                         Err(error) => {
@@ -139,7 +140,10 @@ pub(super) fn install_timeline_file_drop(
         let extension = path
             .extension()
             .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
-        let brings_a_report = matches!(extension.as_deref(), Some("exo" | "aviqtlfrag"));
+        let is_fragment = extension.as_deref().is_some_and(|extension| {
+            extension == FRAGMENT_EXTENSION || extension == LEGACY_FRAGMENT_EXTENSION
+        });
+        let brings_a_report = is_fragment || extension.as_deref() == Some("exo");
         match &load_error {
             Some(message) => show_error_dialog(message),
             // The file read fine and the workspace refused it — too few layers for a fragment,
@@ -163,7 +167,7 @@ pub(super) fn install_timeline_file_drop(
             let mut application = dropped_model.borrow_mut();
             match extension.as_deref() {
                 Some("exo") => crate::lifecycle::show_import_report(&mut application),
-                Some("aviqtlfrag") => crate::lifecycle::show_fragment_report(&mut application),
+                _ if is_fragment => crate::lifecycle::show_fragment_report(&mut application),
                 _ => {}
             }
         }

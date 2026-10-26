@@ -74,7 +74,7 @@ class TestBuildScript(unittest.TestCase):
     def test_macos_plist_writes_a_numeric_version_for_a_candidate(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
-            contents = source / "AviQtl.app" / "Contents"
+            contents = source / "Freya NLE.app" / "Contents"
             contents.mkdir(parents=True)
             config = config_for(source, target="xcode")
             config.version_string = "0.7.0-rc.1"
@@ -113,7 +113,7 @@ class TestBuildScript(unittest.TestCase):
             command = builder.get_cargo_build_cmd()
             self.assertEqual(command[:2], ["cargo", "build"])
             self.assertIn(str(source / "rust" / "Cargo.toml"), command)
-            self.assertIn("freya-nle-slint", command)
+            self.assertIn("freya-nle", command)
             self.assertIn("--release", command)
             self.assertIn("--offline", command)
             self.assertNotIn("cmake", " ".join(command).lower())
@@ -128,7 +128,7 @@ class TestBuildScript(unittest.TestCase):
             self.assertNotIn("--release", builder.get_cargo_build_cmd())
             self.assertEqual(
                 builder.cargo_binary(),
-                source / ".build_tmp" / "test" / "Debug" / "cargo-target" / "debug" / "freya-nle-slint",
+                source / ".build_tmp" / "test" / "Debug" / "cargo-target" / "debug" / "freya-nle",
             )
 
     def test_resource_layout_matches_runtime_lookup(self):
@@ -208,19 +208,19 @@ class TestBuildScript(unittest.TestCase):
                 [str(builder.vcpkg_bin_directory())],
             )
 
-    def test_macos_plist_keeps_app_name_and_slint_process_name(self):
+    def test_macos_plist_keeps_app_name_and_binary_name(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
-            contents = source / "AviQtl.app" / "Contents"
+            contents = source / "Freya NLE.app" / "Contents"
             contents.mkdir(parents=True)
             builder = XcodeBuilder(
                 config_for(source, target="xcode"), Logger(lambda _message: None, lambda *_args: None)
             )
             builder.write_info_plist(contents)
             plist = (contents / "Info.plist").read_text(encoding="utf-8")
-            self.assertIn("<string>AviQtl</string>", plist)
-            self.assertIn("<string>freya-nle-slint</string>", plist)
-            self.assertIn("<string>org.aviqtl.AviQtl</string>", plist)
+            self.assertIn("<string>Freya NLE</string>", plist)
+            self.assertIn("<string>freya-nle</string>", plist)
+            self.assertIn("<string>io.github.gt610.freya-nle</string>", plist)
             self.assertNotIn("Qt6", plist)
 
 

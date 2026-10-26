@@ -22,14 +22,21 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 /// Marker that tells a fragment apart from a project document, which is also JSON.
-pub const FRAGMENT_FORMAT: &str = "aviqtl.fragment";
+pub const FRAGMENT_FORMAT: &str = "freya.fragment";
+
+/// The marker fragments carried before the rename. Still read, and rewritten in the
+/// current format the next time the fragment is saved.
+pub const LEGACY_FRAGMENT_FORMAT: &str = "aviqtl.fragment";
 
 /// Fragment layout version. A reader rejects anything it does not know how to interpret
 /// rather than guessing, because the clips it would produce would be silently wrong.
 pub const FRAGMENT_VERSION: i32 = 1;
 
 /// File extension a fragment is saved with.
-pub const FRAGMENT_EXTENSION: &str = "aviqtlfrag";
+pub const FRAGMENT_EXTENSION: &str = "freyafrag";
+
+/// The extension fragments were saved with before the rename. Still opened.
+pub const LEGACY_FRAGMENT_EXTENSION: &str = "aviqtlfrag";
 
 /// Largest fragment this build will read. A fragment carries clips, not media, so this is
 /// generous; the cap keeps a malformed or hostile file from allocating without bound.
@@ -107,7 +114,7 @@ impl FragmentDocument {
             serde_json::from_slice(bytes).map_err(|_| FragmentError::InvalidDocument)?;
         let object = value.as_object().ok_or(FragmentError::InvalidDocument)?;
         match object.get("format").and_then(serde_json::Value::as_str) {
-            Some(FRAGMENT_FORMAT) => {}
+            Some(FRAGMENT_FORMAT | LEGACY_FRAGMENT_FORMAT) => {}
             Some(_) | None => return Err(FragmentError::NotAFragment),
         }
         let version = object
@@ -125,7 +132,10 @@ impl FragmentDocument {
         if clip_count > MAX_FRAGMENT_CLIPS {
             return Err(FragmentError::TooManyClips);
         }
-        serde_json::from_value(value).map_err(|_| FragmentError::InvalidDocument)
+        let mut document: Self =
+            serde_json::from_value(value).map_err(|_| FragmentError::InvalidDocument)?;
+        document.format = FRAGMENT_FORMAT.to_owned();
+        Ok(document)
     }
 
     /// Pretty JSON: a fragment is small, and a diffable one is easier to reason about than a
@@ -158,7 +168,7 @@ pub fn is_fragment_document(bytes: &[u8]) -> bool {
             value
                 .get("format")
                 .and_then(serde_json::Value::as_str)
-                .map(|format| format == FRAGMENT_FORMAT)
+                .map(|format| format == FRAGMENT_FORMAT || format == LEGACY_FRAGMENT_FORMAT)
         })
         .unwrap_or(false)
 }

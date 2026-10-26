@@ -22,6 +22,7 @@ use crate::{
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::effect_catalog::EffectCatalog;
+use freya_nle_app::fragment::FRAGMENT_EXTENSION;
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::{ApplicationModel, LifecycleStep, WorkspaceModel};
 use slint::winit_030::WinitWindowAccessor;
@@ -510,9 +511,9 @@ impl LifecycleUi {
             .and_then(|workspace| workspace.project().path.clone())
             .and_then(|path| {
                 path.file_stem()
-                    .map(|stem| PathBuf::from(stem).with_extension("aviqtlfrag"))
+                    .map(|stem| PathBuf::from(stem).with_extension(FRAGMENT_EXTENSION))
             })
-            .unwrap_or_else(|| PathBuf::from("fragment.aviqtlfrag"));
+            .unwrap_or_else(|| PathBuf::from(format!("fragment.{FRAGMENT_EXTENSION}")));
         let Some(path) = choose_fragment_save_path(&suggested) else {
             return;
         };

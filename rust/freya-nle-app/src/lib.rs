@@ -32,7 +32,7 @@ pub use freya_nle_core::api::{
     plan_clip_slide,
 };
 pub use lifecycle::{LifecycleStep, SaveDecision};
-pub use project_io::{ProjectDefaults, ProjectSession};
+pub use project_io::{PROJECT_EXTENSION, ProjectDefaults, ProjectSession};
 pub use recovery::RecoveryEntry;
 pub use workspace::{ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
 
@@ -654,12 +654,9 @@ impl ApplicationModel {
 
     fn suggested_save_path(&self, index: usize) -> PathBuf {
         let project = &self.projects[index];
-        project
-            .workspace
-            .project()
-            .path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(format!("{}.aviqtl", project.untitled_name)))
+        project.workspace.project().path.clone().unwrap_or_else(|| {
+            PathBuf::from(format!("{}.{PROJECT_EXTENSION}", project.untitled_name))
+        })
     }
 
     fn clear_project_recovery(&mut self, index: usize) {
@@ -824,7 +821,7 @@ mod tests {
             app.request_save_current_project(),
             LifecycleStep::ChooseSavePath {
                 project_index: 0,
-                suggested_path: PathBuf::from("Untitled 1.aviqtl"),
+                suggested_path: PathBuf::from("Untitled 1.freya"),
             }
         );
         assert_eq!(

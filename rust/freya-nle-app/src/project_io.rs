@@ -3,6 +3,12 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+/// File extension a project is saved with.
+pub const PROJECT_EXTENSION: &str = "freya";
+
+/// The extension projects were saved with before the rename. Still opened.
+pub const LEGACY_PROJECT_EXTENSION: &str = "aviqtl";
+
 pub struct ProjectSession {
     pub state: TimelineState,
     pub document: ProjectDocument,

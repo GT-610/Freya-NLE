@@ -3,6 +3,8 @@
 use crate::ObjectSettingsWindow;
 use crate::localization::localized;
 use crate::projection::update_vec_model;
+use freya_nle_app::fragment::{FRAGMENT_EXTENSION, LEGACY_FRAGMENT_EXTENSION};
+use freya_nle_app::project_io::{LEGACY_PROJECT_EXTENSION, PROJECT_EXTENSION};
 use freya_nle_app::settings::SettingsStore;
 use slint::winit_030::{WinitWindowAccessor, winit};
 use slint::{CloseRequestResponse, Color, ComponentHandle, SharedString, Timer};
@@ -277,7 +279,10 @@ pub(super) fn choose_fragment_to_import() -> Option<PathBuf> {
             "插入片段",
             "フラグメントを挿入",
         ))
-        .add_filter("AviQtl Plus fragments", &["aviqtlfrag"])
+        .add_filter(
+            "Freya NLE fragments",
+            &[FRAGMENT_EXTENSION, LEGACY_FRAGMENT_EXTENSION],
+        )
         .add_filter("All Files", &["*"])
         .pick_file()
 }
@@ -290,7 +295,10 @@ pub(super) fn choose_fragment_save_path(suggested_path: &Path) -> Option<PathBuf
             "导出片段",
             "フラグメントを書き出す",
         ))
-        .add_filter("AviQtl Plus fragments", &["aviqtlfrag"]);
+        .add_filter(
+            "Freya NLE fragments",
+            &[FRAGMENT_EXTENSION, LEGACY_FRAGMENT_EXTENSION],
+        );
     if let Some(file_name) = suggested_path.file_name() {
         dialog = dialog.set_file_name(file_name.to_string_lossy().into_owned());
     }
@@ -302,7 +310,7 @@ pub(super) fn choose_fragment_save_path(suggested_path: &Path) -> Option<PathBuf
     }
     let mut path = dialog.save_file()?;
     if path.extension().is_none() {
-        path.set_extension("aviqtlfrag");
+        path.set_extension(FRAGMENT_EXTENSION);
     }
     Some(path)
 }
@@ -320,14 +328,17 @@ pub(super) fn choose_project_save_path(suggested_path: &Path) -> Option<PathBuf>
     }
     let mut path = dialog.save_file()?;
     if path.extension().is_none() {
-        path.set_extension("aviqtl");
+        path.set_extension(PROJECT_EXTENSION);
     }
     Some(path)
 }
 
 fn project_file_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
-        .add_filter("AviQtl Plus Project files", &["aviqtl"])
+        .add_filter(
+            "Freya NLE project files",
+            &[PROJECT_EXTENSION, LEGACY_PROJECT_EXTENSION],
+        )
         .add_filter("JSON files", &["json"])
 }
 
