@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["aviqtl-app", "aviqtl-audio", "aviqtl-carla", "aviqtl-core", "aviqtl-export", "aviqtl-media", "aviqtl-preview", "aviqtl-render", "aviqtl-slint"]
+members = ["freya-nle-app", "freya-nle-audio", "freya-nle-carla", "freya-nle-core", "freya-nle-export", "freya-nle-media", "freya-nle-preview", "freya-nle-render", "freya-nle"]
 
 [workspace.package]
 version = "0.7.0-rc.1"

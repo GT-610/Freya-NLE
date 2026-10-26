@@ -1,0 +1,443 @@
+# Qt UI behavior parity gate for Slint
+
+Qt remains the baseline for project ownership, command meaning, save/close sequencing, and
+existing editing behavior. The user-authorized September 2026 workflow changes deliberately
+extend that baseline: Ctrl/Command-click selects layer contents, continuous parameter edits use
+one undo step, text can preview live, and menus, effect selection, and workspace layouts gain
+new controls. See [the implementation status](../../audits/2026-09-24-slint-workflow-implementation.md).
+
+This is a behavior gate, not a pixel-parity specification. Slint uses the active platform palette,
+standard widgets, and responsive layouts. The historical checklist below does not automatically
+promote an entry when a new feature compiles or its application-model tests pass. Native desktop
+acceptance must be recorded separately.
+
+Status meanings: `missing` has no Slint path, `partial` has a path with different or incomplete
+behavior, `foundation` has a tested framework-neutral model or an incomplete presentation, and
+`parity` matches Qt in automated tests plus the available Slint MCP interaction checks. Native
+macOS menu-item operation, focus ownership, IME, accessibility, file choosers, and close handling
+still require the separately scheduled Computer Use suite.
+
+As of 2026-09-18, this table contains 6 `parity`, 37 `foundation`, and 1 `partial` entries.
+These are acceptance statuses, not percentages of implemented functionality. Module refactoring
+and successful compilation do not promote an entry. Desktop operation is deferred to a separate
+session; see [migration status](../MIGRATION_STATUS.md) for the Qt retirement gates.
+
+## Desktop acceptance, 2026-10-22
+
+One session on macOS 26 with an Apple M5 (Metal) drove the application with real mouse and
+keyboard events and read back the accessibility tree. The record is in
+[the audit](../../audits/2026-10-22-slint-desktop-acceptance.md).
+
+Operated successfully: launcher and recovery window, project creation, the native
+文件/编辑/设置/显示/工具 menus in Qt order with their Qt item set, the searchable timeline
+context catalog, object insertion at the clicked layer and frame, clip selection and drag
+(1 px = 1 frame at 100 % zoom), the clip trim handles, layer left click (visibility toggle plus
+selection), seek by clicking the progress bar, playback to the scene end, text rendering, and the
+save-confirmation overlay with 保存/放弃/取消 including Escape to dismiss it.
+
+Two defects were found and fixed in the same session:
+
+- **Editor shortcuts never matched.** `Ctrl` was compared against the control bit only, and macOS
+  reports the Command key through the meta bit, so ⌘Z, ⌘S, and the rest were unreachable from the
+  in-window path. `Ctrl` now names the accelerator modifier of the platform, and recording on macOS
+  keeps the `Ctrl` spelling.
+- **The window lost the focus after a popup.** Closing the catalog search, a layer dialog, or the
+  object picker left no focused item, so `key-pressed` stopped firing and every editor shortcut
+  went silent. The timeline now takes the focus back on the next event-loop turn.
+
+After the fix, inserting an object from the catalog search and then pressing ⌘Z, ⌘⇧Z, and ⌃Z in the
+timeline window undoes, redoes, and undoes again, and ⌘S opens the save panel. The shortcut rows
+stay `foundation` until Windows and Linux exercise them too.
+
+Not cleared by this session:
+
+- Status messages (`Ready`, `Edit applied`, and the split refusal) are English inside a Chinese
+  interface.
+- The inserted text object's default content renders `テキスト` regardless of interface language.
+- The native menu bar belongs to the preview window, so the menus are still absent while the
+  timeline window holds the focus.
+- Saving and reopening, media import, export, the object settings and package windows, IME, and
+  VoiceOver traversal were not exercised.
+
+### Follow-up, 2026-10-23
+
+The three defects this session recorded and could not fix are fixed, and the third of them answers
+the menu bar note above:
+
+- The timeline window now declares the same File/Edit/Settings/View/Tools bar as the preview
+  window, because macOS shows the menus of the focused window and Slint allows one `MenuBar` per
+  window. Each item forwards to the command the preview window already runs; the accelerators step
+  aside while the timeline's catalog search or object picker holds a text field. The two bars are
+  pinned by `both_windows_declare_the_same_menu_bar`, which compares their item titles,
+  separators, and accelerator slots.
+- A status is one sentence in English, Simplified Chinese, and Japanese
+  (`freya-nle-app/src/status.rs`), so the status bar no longer mixes languages. The English rendering
+  is unchanged, which the existing tests read.
+- A new text object starts with contents in the interface language; the object metadata keeps
+  AviUtl's `テキスト` for the paths that have no interface language, such as a script insert.
+
+These change no acceptance status: the menu and status rows stay `foundation` until the desktop
+suite exercises them on Windows and Linux as well as macOS.
+
+| Area | Qt behavior contract | Slint status |
+| --- | --- | --- |
+| Application shell | Launcher without a project; preview as main window; timeline and object settings as distinct F3/F4 windows | foundation |
+| Main menu | Preserve File, Edit, Settings, View, and Tools ordering and command ownership | foundation |
+| Project workspace | Active project tab owns timeline, selection, history, paths, recovery, and dirty state | foundation |
+| New project | Ctrl+N raises the independent non-modal launcher before creating a tab | foundation |
+| Open project | Owned chooser and Qt replace-or-new-tab lifecycle | foundation |
+| Save / Save As | In-place fallback, suffix, overwrite, cancellation, and deferred close behavior | foundation |
+| Export | Settings, planning, progress, cancellation, cleanup, and close interception | foundation |
+| Missing media | Conditional command, type-safe replacements, and project updates | foundation |
+| Quit | Visit dirty projects in tab order and complete Save/Discard/Cancel before exit | foundation |
+| Scene tabs | Left switches, right opens settings, root cannot close, plus creates | foundation |
+| Timeline focus | Window-scoped editor shortcuts; text inputs suppress editor shortcuts | foundation |
+| Timeline skimmer | Snapped hover target, Shift bypass, command and import advancement | foundation |
+| Primary selection | Left click replaces selection and makes the clip primary | parity |
+| Additive selection | Ctrl+left toggles; newly added clip becomes primary | parity |
+| Empty click | Select target layer and clear clip selection | foundation |
+| Box selection | Right drag previews intersections; Ctrl adds; release commits | parity |
+| Clip context menu | Right click selects an unselected clip and exposes the Qt command order | foundation |
+| Timeline context menu | Searchable object catalog plus Undo/Redo/Paste/settings | foundation |
+| Clip drag | 3 px threshold; unselected anchor selects first; selected groups move together | parity |
+| Collision and snap | Rust planner resolves collisions; Shift bypasses grid/magnetic snapping | foundation |
+| Clip resize | Both handles resize all selected clips by one delta and preserve opposite edges | parity |
+| Trim tools | Ripple, roll, slide, and slip are opt-in one-shot tools in the scene strip; preview and commit share one planner | foundation |
+| Object midpoints | Draggable handles on a clip, shifted by geometry changes and divided by a split | foundation |
+| Media bin | Docked library with source ranges, flat groups, search, insert, and overwrite; the bin never owns the timeline | foundation |
+| Multi-object settings | Uniform/mixed/absent per property, effects matched by id, locked objects skipped | foundation |
+| Clip double click | Raise object settings without changing command meaning | foundation |
+| Clipboard | Qt selection order; Cut one undo step; Paste preserves layout and advances target | foundation |
+| Duplicate / Split | Current edit-target behavior and one grouped transaction | foundation |
+| Layer left click | Toggle visibility and select that layer | parity |
+| Layer context menu | Insert/shift ranges, lock, visibility, show/hide all, owned dialogs | foundation |
+| Layer shortcuts | Ctrl+L/Ctrl+H and Alt+arrows | foundation |
+| File drop | Insert media at indicated frame/layer with Qt import rules | foundation |
+| Timeline navigation | Qt wheel axes, anchored zoom, and both draggable scrollbars | foundation |
+| Playback controls | Seek, frame counter, previous/play/next, speed, and end-frame behavior | foundation |
+| Audio playback feedback | Default-device monitoring, speed/seek synchronization, clip waveforms and playhead, and peak/RMS meters | foundation |
+| Object settings | Metadata order, pickers, keyframes, easing, and sidebar placement | foundation |
+| Effect selection | Ctrl/Shift selection, single/multi reorder, enable, and scoped Delete | foundation |
+| Effect menus and presets | Search/category insertion and preset save/apply/delete | foundation |
+| Audio plugins | Search, order, enable, parameters, keyframes, restore, and Carla formats | foundation |
+| Settings windows | Separate project, scene, and system apply/cancel ownership | foundation |
+| Recovery | Launcher-owned non-modal recovery, recover/discard rules, empty close | foundation |
+| Package Manager | Repository sync, search, lifecycle, permissions, rollback, and update notices | foundation |
+| Preview and export rendering | Every Qt built-in object/effect produces the same functional output | partial |
+| Accessibility | Equivalent names, roles, descriptions, focus, and VoiceOver reachability | foundation |
+
+## Current verified Slint foundation
+
+- Main and timeline windows share one wgpu 29 device and imported texture on Metal.
+- The Tools menu About action now raises a fixed-size independent window centered on the preview,
+  projects the Cargo package version and Qt fallback codename, preserves the AGPL notice, and opens
+  the same public project page through the platform browser. The link has an explicit accessibility
+  action in addition to pointer activation; native focus, browser launch, and first-paint checks
+  remain in the deferred suite.
+- The Package Manager now projects the same Effect, Object, MOD, Installed, Application, and
+  Repository tabs from a Rust-owned model. Repository synchronization runs off the Slint event loop,
+  requires credential-free HTTPS across every redirect, limits metadata responses to 16 MiB, keeps
+  successful repositories when another fails, resolves relative catalog references, and persists
+  provenance-preserving SHA-256 cache files. Installation verifies catalog-supplied metadata and
+  archive hashes, limits downloads to 256 MiB, rejects encrypted, ZIP64, traversal, duplicate, and
+  symbolic-link archive entries, caps extraction at 10,000 entries and 1 GiB, and uses same-volume
+  staging, backup, atomic `installed.json` replacement, and rollback. Removal uses the inverse
+  transaction, Upgrade All continues after individual failures, and application updates retain Qt's
+  restart notification. Effect and Object packages are validated against the native
+  `freya-nle-wgsl-v1` contract before deployment, loaded into the Slint catalog, rendered through the
+  same wgpu path in preview and export, and removed through the existing inverse transaction. Legacy
+  QML packages are rejected rather than presented as usable. MOD package lifecycle remains active.
+  The MOD permission window preserves Qt's
+  13 permission rows, All Allow/All Deny,
+  Cancel/OK behavior, and shared-settings persistence. Automated tests cover partial repository
+  synchronization, install/remove, unsafe archives, rollback, and preservation of other plugins'
+  grants. Native macOS CUA covers the responsive six-tab layout, search editing and clearing,
+  live repository synchronization, the non-destructive repository controls, all 13 permission rows,
+  All Allow/All Deny, and Cancel without persistence.
+- The preview no longer uses the animated validation placeholder. A GUI-neutral `freya-nle-preview`
+  crate now plans the active project frame, resolves project-relative media, decodes media and
+  generated objects off the UI thread, preserves nested scenes, frame buffers, upper-object masks,
+  cameras, blend/crop/transform data, and all renderer-backed visual effects, then composites into
+  the Slint-imported wgpu texture.
+- Qt catalog inventory tests require every one of the 44 shipped effects and 17 shipped objects to
+  reach an explicit production preview route. Transform, clipping, and blend-layer routing are
+  asserted independently because they are consumed by geometry, crop, and compositor planning.
+- Preview render scale keeps logical scene coordinates and camera projection while reducing the
+  physical wgpu target. Preview MSAA uses real 2x/4x/8x multisample attachments and resolves both
+  fixed-function and complex blend paths, including nested scenes. Export remains full-resolution
+  and single-sampled, as Qt's preview-quality settings do not alter export output.
+- Preview invalidation follows a stable project-instance ID plus document revision, selected scene,
+  and playhead. Timeline edits, project settings, Undo, and Redo advance the revision; Slint redraws
+  only after a decoded frame batch is ready. Automated planning, decoding, and state invalidation
+  tests pass, while rendered-output parity remains part of the deferred native GUI suite.
+- The Qt-shaped export window refreshes runtime codec availability, maps video, image-sequence,
+  quality, audio, and range settings into a GUI-neutral `freya-nle-export` request, pauses transport,
+  rejects project-tab changes, renders through the production preview/wgpu path, and reports
+  progress and ETA. Worker tests cover request units, completion events, video and image-sequence
+  cancellation, and removal of partial outputs. Native modality, chooser behavior, close interception,
+  and a user-observed output comparison remain in the deferred GUI suite.
+- Real project, scene, configured 1-512-layer, clip, selection, and transport models reach Slint.
+- The project and scene tab strips scroll horizontally once their tabs overflow, with the add button
+  pinned outside the scrolling area, matching Qt's `ScrollView` plus trailing button
+  (`MainWindow.qml:827-929`, `TimelineWindow.qml:129-251`).
+- The transport shows the playback speed as Qt's multiplier (`1.0x`) beside the native percent
+  box. Slint's `SpinBox` edits an integer and exposes no text formatter, so the percent value stays
+  the input and `speed_multiplier_text` projects the matching label.
+- The launcher reads and writes Qt's `recentProjects` setting, displays name, path, resolution, and
+  frame rate, opens entries directly, deduplicates successful opens/saves, and enforces the persisted
+  `recentProjectMaxCount`. New-project width, height, frame rate, and sample rate are validated before
+  creation instead of silently accepting values outside the Qt ranges.
+- Main and timeline `FocusScope`s resolve all 34 configurable Qt shortcut actions from the live
+  settings store. Editor shortcuts remain window-scoped and use the active timeline skimmer only
+  when the timeline window receives the key. Static Slint menu accelerators were removed so they
+  cannot continue firing after the user changes a binding; native shortcut labels remain part of
+  the deferred interaction review.
+- The timeline skimmer uses the same scene snapping service as Qt, supports Shift bypass, and
+  advances after Paste or Duplicate without discarding the clip selection. A one-shot leave timer
+  prevents transitions between a clip body, resize handles, and the timeline background from
+  briefly hiding the shared skimmer target.
+- Timeline wheel routing follows Qt: the dominant axis scrolls horizontally, Shift scrolls
+  vertically, Alt/Ctrl applies configured stepped zoom around the pointer, the ruler uses 1.1/0.9
+  anchored zoom, and the layer header scrolls the shared vertical viewport. Pure Rust tests cover
+  modifier routing, clamping, scale conversion, and pointer-anchor preservation; native touchpad
+  direction and scrollbar interaction remain in the deferred GUI suite.
+- Timeline file drop uses Slint's public winit 0.30 event hook rather than platform-specific window
+  code. Hover coordinates are converted through the live Slint scroll viewport, Shift bypasses the
+  scene snap service, and a drop advances subsequent files from the previous import result. The
+  framework-neutral workspace reuses the egui migration's proven Qt rules for extension and duration
+  probing, collision-free placement, image/audio object construction, linked video/audio pairs, and
+  per-file undo groups. Automated tests cover mixed sequential imports and complete undo; native
+  Finder/Explorer/file-manager hover, cancellation, multi-file ordering, and drop feedback remain in
+  the deferred GUI suite.
+- The timeline background menu now preserves Qt's built-in object grouping and command order. Paste
+  and object insertion use the right-clicked frame and layer rather than the playhead, with frame
+  snapping performed by the Rust workspace. The timeline-owned object catalog supports live
+  multi-field search, category filtering, selection, double-click insertion, and explicit
+  Add/Cancel actions. Its compact-window render, automatic search focus, Escape dismissal, category
+  navigation, selection, double-click insertion, and explicit Add/Cancel paths have Slint interaction
+  checks. Object construction reuses catalog defaults, collision avoidance, locked-layer rejection,
+  scene-object targeting, primary selection, and one-step Undo. Native background-menu navigation and
+  pointer feel still require the deferred interaction review because the available Computer Use
+  right-click action does not deliver the separate right-button release used to distinguish a click
+  from Qt-compatible right-drag box selection.
+- Primary/additive selection, right-button box selection, multi-clip move, and multi-clip resize have
+  framework-neutral tests and Slint MCP interaction checks. Locked-layer clips retain selection and
+  context access but reject move/resize initiation with the forbidden cursor. Built-in clip types use
+  stable Qt-shaped colors and readable foreground contrast, and camera/group control clips visualize
+  the complete layer range they affect.
+- Open replaces only a clean pathless placeholder; Save, Save As, tab close, and application quit
+  share a tested framework-neutral lifecycle state machine. Dirty projects are visited in tab order,
+  and save failure or chooser cancellation stops the deferred close action.
+- Missing project media is resolved against the project directory and exposed through the same
+  conditional File-menu action and non-modal manager as Qt. Replacement choosers are filtered by
+  media type, and the framework-neutral relink command validates the new file before committing a
+  dirty, revisioned, one-step Undo/Redo transaction.
+- Recovery snapshots use the same Rust metadata contract as Qt and are written by a GUI-neutral
+  background worker. Every project owns an independent recovery ID; newer generations replace old
+  snapshots, claimed entries disappear from the launcher-owned recovery window, and successful
+  Save, tab close, or application quit removes the corresponding snapshots.
+- A recovered snapshot opens as a dirty, pathless project. Its original project URL is displayed
+  for context but is never installed as the save target, so the first Save always follows the Qt
+  Save As path and cannot silently overwrite the original file.
+- Project settings now load the active project's width, height, frame rate, and sample rate, apply
+  them directly as a dirty non-undoable project-property change like Qt, and leave the model
+  untouched on Cancel. Scene creation and editing preserve every Qt field, including duration,
+  grid mode, BPM, offset, interval, subdivision, and magnetic snapping. A newly created scene keeps
+  Qt's two-step Add Scene then Update Scene Settings undo order.
+- System settings preserve Qt's nine pages and draft workflow: opening or Reload copies the
+  persisted values, Apply saves without closing, OK saves and closes, and Close discards the draft.
+  General, performance, timeline, appearance, new-project, export, decode/audio, plugin, and all 34
+  shortcut values keep the Qt keys and ranges. Plugin and shortcut rows use stable host-owned
+  models. Applying settings immediately updates quit confirmation, automatic recovery enablement
+  and interval, undo limits for existing and future projects, launcher/new-scene defaults, timeline
+  skimming, track/header/ruler and hit-area dimensions, the configured 1-512 layer limit, object-settings
+  sidebar placement, Dark/Light/System theme selection across every independent window, preview
+  render scale/MSAA, zoom bounds, and the live shortcut resolver; restart-scoped decoder/audio values
+  stay persisted. `bakeStrategy` and `onDemandPrefetchFrames` are retained as compatible persisted
+  keys, while the Rust typed render planner caches complete clip/effect metadata per document revision
+  and evaluates requested frames directly instead of reproducing Qt's separate per-frame bake cache.
+- The layer menu preserves Qt's complete command order for one-row and multi-row insertion, current
+  and explicit-range shifts in either direction, locking, per-layer visibility, and show/hide all.
+  Multi-row and range edits remain single Rust-owned undoable transactions.
+- Main, timeline, project, object, scene, system, easing, Package Manager, and About windows restore
+  and persist Qt-compatible `windowGeometry_*` keys using logical coordinates, logical dimensions,
+  and maximized state. A hidden window that was never opened does not overwrite its saved geometry.
+- The Slint frontend uses native `rfd` open/save dialogs. Its default Linux backend is the Rust
+  XDG portal path rather than GTK, so the chooser does not restore a Qt or GTK build dependency.
+- Timeline and clip mouse context menus pair a native Slint `ContextMenuArea` with a focused search
+  popup, mirroring Qt, which offers both a category tree and a search field inside the same menu.
+  Because Slint 1.17's `ContextMenuArea` accepts only menu entries, the cascading menu carries the
+  command order and the category trees, and a `Search catalog...` entry opens a popup whose
+  `LineEdit` feeds the same `filter-context-catalog` callback. Results project Rust-filtered
+  object/effect/audio-plugin matches while typing, and each row is a full-width hit region carrying
+  the list-item accessibility role. Up and Down move an index-backed highlight that clamps at both
+  ends and enters the list from whichever end the movement heads towards, and the result list scrolls
+  the minimum amount needed to keep that highlight visible, so a long result set always acts on a row
+  the user can see. Enter activates the highlight (or a lone match when nothing is highlighted), and
+  Escape or an outside click dismisses it. Space stays with the focused field so multi-word queries
+  remain typeable. The search entry sits first in both menus, matching Qt's search field, which is
+  item 0 above every command. Layer and effect-stack context menus use `ContextMenuArea`.
+- The clip context menu keeps Qt's selection rule and command order for Delete, Split, Duplicate,
+  Cut, and Copy, followed by the visual-clip group Qt gates on `isAudioClip`: the checked
+  upper-object clipping action, the effect-catalog browser, and the registry's ordered category
+  paths, including nested paths such as `変形/クロップ`. Insertion uses one submenu per category, as
+  Qt's `buildEffectMenu` and `buildAudioPluginMenu` do; audio clips omit the clipping and catalog
+  actions and instead expose hostable plugins grouped by the same normalized category order,
+  including the `Other` fallback. Direct menu insertion reuses the object-settings commands,
+  selection projection, status updates, and one-step Undo. The three object-settings entry points
+  schedule a redraw after showing the previously hidden window to cover the macOS first-surface
+  paint gap. Native macOS CUA now covers audio and visual clip right-click, focused inline search,
+  live effect result projection, Escape dismissal, and the first object-settings paint.
+- The object-settings window now projects the selected clip's real effect stack and metadata-defined
+  controls in source order. Slint forwards Ctrl/Shift selection, right-click selection and deletion,
+  enable toggles, bounded numeric edits, booleans, strings, paths, colors, fonts, static choices, and
+  live scene choices to the GUI-neutral workspace. Existing keyframe tracks project the Qt current
+  interval with independent start/end values while retaining typed-value metadata. Numeric, integer,
+  and color controls expose the mini track: click seeks, double-click adds with scene-grid snapping,
+  non-zero real points drag between their neighbors, and right-click removes them; frame zero and a
+  virtual duration endpoint remain fixed. The clip context command and settings button open a
+  searchable live effect catalog, additions append the catalog-defined effect, and the sidebar drag
+  handle reorders either one effect or the current Ctrl/Shift selection while preserving a leading
+  transform. The same right-click surface now saves, lists, loads, and deletes effect presets through
+  the shared `PresetStore`, including parameters, keyframe tracks, and enabled state. Sidebar enable toggles
+  apply to the current multi-selection like Qt, right-click deletion removes the selected group,
+  and the object-settings-window Delete shortcut uses that same selection while retaining a leading
+  transform. The right-side delete button remains single-effect scoped. Easing configuration now
+  opens a dedicated window backed by the Rust-owned interpolation catalog and immediately
+  applies type changes, random/alternate step frames, elastic amplitude/period, and the first
+  custom Bezier control pair. Its Slint `Path` preview uses production keyframe evaluation and the
+  framework-neutral multi-segment curve model covers Qt's 25%-400% zoom, right-drag pan,
+  double-click insertion, handle/anchor dragging, fixed `(1,1)` endpoint, and right-click removal
+  rules. The Qt category catalog is also present with the same five groups, technical-name search,
+  current-item selection, and live mini previews generated by that same production evaluator.
+  Path controls now invoke the existing cross-platform native file dialog with the metadata filter
+  and current file preselected. Color controls expose the Qt start/end swatches and value fields plus
+  an RGBA picker that preserves `#RRGGBB`/`#AARRGGBB`; font controls open a searchable system-family
+  picker with rendered samples and the default-family choice. Native dialog, hit-area, focus, and
+  pointer-feel verification remains deferred and therefore keeps this area at `foundation`.
+- Slint list models remain stable during pointer callbacks so delegates are not destroyed while a
+  drag or context menu is active.
+- Custom project/scene tabs, layers, clips, keyframe tracks, effect rows, catalogs, the timeline
+  ruler, and system-settings tabs now expose explicit accessibility roles, names, selection/value
+  state, descriptions, and default/value actions. Standard widgets retain their native accessible
+  implementations, while form fields that previously relied on adjacent text now have explicit
+  labels. VoiceOver traversal and announcement order remain in the deferred native GUI suite.
+- Audio objects now switch the left sidebar to the Qt audio-plugin stack while keeping the built-in
+  audio-object controls on the right. The framework-neutral catalog reuses the Rust CLAP/VST3 and
+  Carla LADSPA/DSSI/LV2/VST2 discovery and inspection paths, preserves Qt category order and
+  multi-field search, and restores missing host metadata in older projects without changing their
+  dirty state. Restoration is deferred instead of invalidating an existing undo/redo history.
+  Plugin insertion, single-item drag reorder, Ctrl/Shift selection, grouped enable/delete,
+  right-click presets, current-playhead parameter values, the Qt two-endpoint `K` action,
+  double-click insertion, and protected non-draggable endpoints are wired through the existing Rust
+  timeline commands. A bypassed plugin remains parameter-editable like Qt.
+- Slint playback now mixes the active scene through the production Rust audio and plugin path and
+  streams it to the default CPAL output device. It follows the 10%-400% transport rate, resets queued
+  audio after pauses, seeks, document changes, project-tab changes, and scene changes, and reports an
+  unavailable device without aborting the UI. The main transport displays stereo peak/RMS feedback,
+  while the audio-object settings window displays the selected clip's levels. A background worker
+  builds audio-clip waveforms without blocking the Slint event loop; the timeline keeps the Qt click-
+  to-seek behavior and shows the playhead inside each audio clip. Unit tests cover output-channel
+  mapping, underrun silence, playback-rate frame sizing, and meter calculations. Native plugin
+  scanning, menu behavior, pointer feel, device latency, and hardware-output verification remain in
+  the deferred GUI suite.
+
+## 2026-10-21 final UI polish
+
+This pass was a visual and interaction audit of the Slint frontend at the 640x360 default main
+window. It changed presentation only; command meaning, window ownership, and the Qt-owned lifecycle
+are untouched. Every item below was reproduced against a running debug build before the fix.
+
+- The transport speed group no longer clips `1.0x`. The previous 130px cap (80px spin box plus a
+  multiplier label) was narrower than the standard `SpinBox` needs, so the theme drew the lower
+  spin button outside the box and on top of the multiplier. The box now uses its natural width,
+  the row uses 8px spacing, and the audio meter is 58px wide so the row still fits the 640px
+  default window with the right padding intact. Qt draws the multiplier inside an 80px spin box
+  (`MainWindow.qml:1122-1149`); Slint's `SpinBox` has no text formatter, so the percent value and
+  the multiplier stay separate controls as described above.
+- The main window now renders the workspace status line. `status-text` was written by every command
+  but had no presenter, so refused edits ("cannot add effect to a locked object") and completed
+  edits were silent. The bar uses `AppTheme.status-height`, ellipsizes long messages, and exposes
+  the full text through the text element. The redundant `timeline.action-status` property and its
+  host setter were removed.
+- The audio-plugin scan status is visible in the object-settings audio sidebar. Deferred,
+  unavailable, and failed plugin scans previously logged only to stderr, leaving an empty list.
+- Modal overlays are keyboard-reachable. The save confirmation, export cancel confirmation, export
+  result, effect-preset save, color picker, and font picker are now `FocusScope`s with initial
+  focus and Escape handling (save confirmation also accepts Return for Save), matching Qt's
+  `Dialog` behavior. The preset and font dialogs focus their text field so typing starts
+  immediately.
+- The timeline ruler chooses its tick interval from the zoom (10/30/60/300 frames) like
+  `Ruler.qml:160-175` instead of a fixed 60-frame interval, which overlapped labels when zoomed out
+  and spread them too far when zoomed in.
+- Wheel zoom no longer overwrites the zoom field while it is being edited, matching
+  `Ruler.qml:107-111`.
+- Trim handles forward right-click to the clip context menu (Qt's handle areas accept only the left
+  button, so the press reached the clip body) and expose names and clip descriptions to assistive
+  technology.
+- Parameter rows refresh the right control. Live preview used to match a refreshed row by kind
+  only, so dragging any numeric parameter after the first replaced the row's label, value, range,
+  and keyframe markers with the first numeric parameter in the stack. Matching now includes the
+  owning effect, parameter name, and audio-plugin flag; a regression test covers two effects with
+  one numeric control each.
+- Slider, check box, and combo box rows re-apply the projected value when the row is replaced.
+  Interaction assigns those widget properties, which drops the binding to `row-data`; the next
+  projection (undo, preset load, keyframes under the playhead) was ignored. Each widget now mirrors
+  its projection through a private property and re-applies it on change.
+- Package Manager shows Install only when the package is not installed or has an update, matching
+  the Qt `installedVer === "" || hasUpdate` predicate; an installed local-file plugin (which cannot
+  be removed) was previously offered for installation again.
+- Untranslated literals are translated: `FPS:`, `BPM:`, `Image format`, `CRF:`, and the two trim
+  handle names now have zh_CN/ja_JP entries. The settings frame-rate row uses the same 240px label
+  width as its neighbours.
+- Export, project-settings, scene-settings, package-manager, and object-settings fields that
+  relied on adjacent text now carry explicit accessible labels.
+- The export window opens at 620x700 instead of the 520x460 layout minimum. The form lives in a
+  `ScrollView`, so the smaller first-open size scrolled the range controls and the Start Export
+  buttons out of sight. Qt's `ExportDialog` is 620x580 for its tighter layout; the Slint form needs
+  about 700px of content height. The size is not persisted, matching Qt's transient dialog.
+
+Residual items deliberately not changed in this pass: playback viewport follow and drag
+auto-scroll (they change pointer feel and need the deferred native suite), multi-clip drag preview,
+sidebar scroll-to-effect, and Slint-side keyframe interpolation for audio-plugin easing. The Qt
+main window has no transport audio meter; the Slint row keeps it as a documented extension because
+the audio settings window already owns the Qt meter.
+
+## Known issues
+
+- The `--validate-gpu` gate passes on a release build, which is what `README.md` documents. A
+  **debug** build exits 2173 after `slint::quit_event_loop()` returns and before
+  `slint::run_event_loop()` returns. The run itself completes — the process renders normally and
+  reaches its teardown — and removing the window hides or lowering `--frames` to 1 does not change
+  the outcome, so the fault is inside Slint's winit/wgpu event-loop teardown rather than this crate.
+  Use a release build for validation until the dependency is updated.
+- The frontend requires a GPU-backed wgpu adapter and has no software or CPU renderer. On a host
+  whose only adapter is a CPU device such as the Microsoft Basic Render Driver (WARP), the
+  compositor's 41-case effect shader cannot be compiled by the FXC path WARP uses, and pipeline
+  creation terminates the process with `0xC0000005` instead of returning an error. The application
+  now detects this before wgpu initialization and exits with an explanatory message listing the
+  adapters it found, so the failure is reported rather than crashed. This is a deliberate scope
+  decision consistent with Premiere, which removed its software-rendering option because it
+  degraded image quality; see [`../../no-gpu-probes/README.md`](../../no-gpu-probes/README.md)
+  for the measured evidence behind it.
+
+## Deferred native GUI suite
+
+Run this only in the later user-requested task on an unlocked desktop, on a host with a GPU-backed
+wgpu adapter. Cover project/scene close ordering, F3/F4 focus and raise behavior, all native menu
+items, file chooser cancellation, export and its close interception, recovery-window interaction,
+settings persistence, drag-and-drop, zoom/wheel behavior, IME and shortcut scope, application close
+confirmation, object/effect/audio-plugin workflows, keyframes and easing, Package Manager, About
+links, audio-device latency/output, and VoiceOver output.
+
+Batch 4 adds four items to that list, because each needs a real window to accept and none could be
+verified on a GPU-less host:
+
+- **Midpoint interaction.** Dragging, adding, and removing markers on the timeline, and the
+  parameter track shear ExEdit performs at a midpoint, which is deliberately not implemented yet.
+- **Trim tool affordances.** The handles, cursors, and numeric readouts that choose between ripple,
+  roll, slide, and slip, plus confirming that a trim is never a persistent timeline mode.
+- **The media bin panel.** Group ordering, drag and drop, the missing-file indicator, and that
+  removing an entry never touches a clip.
+- **Multi-object settings.** The mixed-value placeholder, the skipped-object report, and that
+  selecting objects in a different order produces the same edit.

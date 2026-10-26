@@ -113,7 +113,7 @@ class TestBuildScript(unittest.TestCase):
             command = builder.get_cargo_build_cmd()
             self.assertEqual(command[:2], ["cargo", "build"])
             self.assertIn(str(source / "rust" / "Cargo.toml"), command)
-            self.assertIn("aviqtl-slint", command)
+            self.assertIn("freya-nle-slint", command)
             self.assertIn("--release", command)
             self.assertIn("--offline", command)
             self.assertNotIn("cmake", " ".join(command).lower())
@@ -128,7 +128,7 @@ class TestBuildScript(unittest.TestCase):
             self.assertNotIn("--release", builder.get_cargo_build_cmd())
             self.assertEqual(
                 builder.cargo_binary(),
-                source / ".build_tmp" / "test" / "Debug" / "cargo-target" / "debug" / "aviqtl-slint",
+                source / ".build_tmp" / "test" / "Debug" / "cargo-target" / "debug" / "freya-nle-slint",
             )
 
     def test_resource_layout_matches_runtime_lookup(self):
@@ -219,7 +219,7 @@ class TestBuildScript(unittest.TestCase):
             builder.write_info_plist(contents)
             plist = (contents / "Info.plist").read_text(encoding="utf-8")
             self.assertIn("<string>AviQtl</string>", plist)
-            self.assertIn("<string>aviqtl-slint</string>", plist)
+            self.assertIn("<string>freya-nle-slint</string>", plist)
             self.assertIn("<string>org.aviqtl.AviQtl</string>", plist)
             self.assertNotIn("Qt6", plist)
 

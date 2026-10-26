@@ -8,7 +8,7 @@ the optional Qt/C++ frontend remains available for behavior comparison.
 The nine workspace crates cover domain rules, authoritative project/timeline
 state, application commands and undo/redo, persistence, desktop presentation,
 preview, rendering, export, audio, plugin integration, scripting, and packages.
-`BUILD.py` builds and packages `aviqtl-slint` by default. The default executable
+`BUILD.py` builds and packages `freya-nle-slint` by default. The default executable
 does not compile the project's C/C++ implementation.
 
 The [dependency inventory](../audits/2026-09-rust-dependency-boundary.md)
@@ -22,7 +22,7 @@ the migration plan. Native WGSL packages are the Rust extension contract.
 
 ## Frontend refactoring checkpoint
 
-The host split reduces `aviqtl-slint/src/main.rs` from 9,446 to 710 lines.
+The host split reduces `freya-nle-slint/src/main.rs` from 9,446 to 710 lines.
 Runtime coordination, lifecycle, dialogs, settings, shortcuts, editor
 projection, and callback wiring have explicit module imports. The existing
 27 frontend regression tests remain in `src/tests.rs`.
@@ -48,7 +48,7 @@ refactoring. Qt compilation and interactive desktop validation were not run.
 ## Batch 4 editing model
 
 Four AviUtl editing capabilities are now implemented as framework-neutral model
-layers in `aviqtl-core` and `aviqtl-app`, with the design and compatibility rules
+layers in `freya-nle-core` and `freya-nle-app`, with the design and compatibility rules
 recorded in [the batch 4 design document](../docs/batch4-design.md). The Slint
 front end now projects those models into its windows: a docked media library,
 clip midpoint handles, a one-shot trim-tool picker, and mixed/uniform/absent
@@ -83,7 +83,7 @@ ownership, GPU preview hosting, focus, and shortcut scope.
 
 ## Acceptance still pending
 
-The [Slint behavior checklist](aviqtl-slint/QT_UI_PARITY.md) remains the detailed
+The [Slint behavior checklist](freya-nle-slint/QT_UI_PARITY.md) remains the detailed
 acceptance record. Implemented paths and unit tests do not establish native
 window behavior, hardware audio output, or equivalent rendered output.
 Actual desktop operation is intentionally deferred to a later session.

@@ -1,0 +1,1659 @@
+//! Frontend behavior regression tests.
+
+#[test]
+fn clearing_a_shortcut_disables_it_instead_of_restoring_the_default() {
+    let settings = serde_json::json!({"file.save": "", "file.open": "Alt+O"});
+    let resolve = |key| crate::shortcuts::configured_shortcut(Some(&settings), key, "Ctrl+S");
+    assert_eq!(resolve("file.save"), "");
+    assert_eq!(resolve("file.open"), "Alt+O");
+    assert_eq!(resolve("file.new"), "Ctrl+S");
+    assert_eq!(
+        crate::shortcuts::native_shortcut(resolve("file.save")),
+        slint::Keys::default()
+    );
+}
+
+#[test]
+fn workspace_presets_keep_window_origins_on_the_current_monitor() {
+    for screen in [
+        WindowGeometry::new(-1920, 0, 1920, 1000),
+        WindowGeometry::new(20, 40, 800, 600),
+    ] {
+        for mode in ["editing", "animation", "audio"] {
+            for window in crate::lifecycle::editor_layout(screen, mode) {
+                assert!(window.x >= screen.x && window.y >= screen.y);
+                assert!(window.x + window.width <= screen.x + screen.width);
+                assert!(window.y + window.height <= screen.y + screen.height);
+            }
+        }
+    }
+}
+
+/// A layout is computed in the logical pixels of the monitor the command came
+/// from, but Slint applies `LogicalSize` with the scale of the window being
+/// moved. Handing it physical pixels instead keeps one coordinate space, so a
+/// window landing on a 2x display is the same size in points as on the 1x one it
+/// was laid out for.
+#[test]
+fn a_layout_crosses_a_scale_change_in_one_coordinate_space() {
+    let geometry = WindowGeometry::new(-1712, 36, 1680, 900);
+
+    let (position, size) = crate::lifecycle::physical_geometry(geometry, 1.0);
+    assert_eq!(position.x, -1712);
+    assert_eq!(position.y, 36);
+    assert_eq!(size.width, 1680);
+    assert_eq!(size.height, 900);
+
+    // A Retina monitor doubles both, which is exactly what the window reports
+    // back as its physical size.
+    let (position, size) = crate::lifecycle::physical_geometry(geometry, 2.0);
+    assert_eq!(position.x, -3424);
+    assert_eq!(position.y, 72);
+    assert_eq!(size.width, 3360);
+    assert_eq!(size.height, 1800);
+    // Rounding never collapses a window to nothing.
+    let (_, size) = crate::lifecycle::physical_geometry(WindowGeometry::new(0, 0, 1, 1), 0.5);
+    assert!(size.width >= 1 && size.height >= 1);
+}
+
+/// A saved layout is captured in the same space a restored one is applied in, so
+/// the two have to undo each other exactly. `capture_at` reads a window's
+/// physical pixels back through the reference scale, and this pins that the
+/// conversion `physical_geometry` applies is inverted by it.
+#[test]
+fn a_saved_layout_round_trips_through_the_reference_scale() {
+    let geometry = WindowGeometry::new(-1712, 36, 1680, 900);
+    for scale in [1.0_f32, 2.0, 1.5] {
+        let (position, size) = crate::lifecycle::physical_geometry(geometry, scale);
+        let logical_position = position.to_logical(scale);
+        let logical_size = size.to_logical(scale);
+        assert_eq!(logical_position.x.round() as i32, geometry.x, "at {scale}");
+        assert_eq!(logical_position.y.round() as i32, geometry.y, "at {scale}");
+        assert_eq!(
+            logical_size.width.round() as i32,
+            geometry.width,
+            "at {scale}"
+        );
+        assert_eq!(
+            logical_size.height.round() as i32,
+            geometry.height,
+            "at {scale}"
+        );
+    }
+}
+
+#[test]
+fn screen_recovery_moves_only_fully_off_screen_windows() {
+    let screen = WindowGeometry::new(0, 0, 1000, 800);
+    let fallback = WindowGeometry::new(20, 30, 400, 300);
+    assert!(
+        crate::lifecycle::recover_window_geometry(
+            WindowGeometry::new(900, 100, 300, 300),
+            screen,
+            fallback,
+        )
+        .is_none()
+    );
+    let recovered = crate::lifecycle::recover_window_geometry(
+        WindowGeometry::new(1400, 100, 300, 300),
+        screen,
+        fallback,
+    )
+    .expect("off-screen window should be recovered");
+    assert_eq!(recovered.x, fallback.x);
+    assert_eq!(recovered.y, fallback.y);
+    assert_eq!((recovered.width, recovered.height), (300, 300));
+}
+
+#[test]
+fn shortcut_recording_and_conflicts_preserve_special_keys() {
+    use crate::shortcuts::{record_shortcut, validate_shortcuts};
+    let input = ShortcutInput {
+        text: "+".into(),
+        alt: false,
+        control: true,
+        shift: true,
+        meta: false,
+    };
+    assert_eq!(record_shortcut(input).as_deref(), Some("Ctrl++"));
+    assert!(validate_shortcuts(&["Ctrl++".into(), "Ctrl+Shift++".into()]).is_err());
+    assert!(validate_shortcuts(&["Ctrl+Q".into(), "Ctrl+q".into()]).is_err());
+    assert!(validate_shortcuts(&["UnknownModifier+A".into()]).is_err());
+    assert!(validate_shortcuts(&["".into(), "".into(), "Ctrl+A".into()]).is_ok());
+    assert!(
+        validate_shortcuts(
+            &SYSTEM_SHORTCUT_ROWS
+                .iter()
+                .map(|(_, value)| value.to_string())
+                .collect::<Vec<_>>()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn native_menu_shortcuts_match_the_configured_parser() {
+    assert_eq!(
+        crate::shortcuts::native_shortcut("Ctrl+S"),
+        slint::Keys::from_parts(["Control", "s"]).unwrap()
+    );
+    assert_eq!(
+        crate::shortcuts::native_shortcut("Ctrl++"),
+        slint::Keys::from_parts(["Control", "Shift?", "+"]).unwrap()
+    );
+    assert_eq!(
+        crate::shortcuts::native_shortcut("F3"),
+        slint::Keys::from_parts(["F3"]).unwrap()
+    );
+    assert_eq!(
+        crate::shortcuts::native_shortcut(""),
+        slint::Keys::default()
+    );
+    assert_eq!(
+        crate::shortcuts::native_shortcut("Ctrl+Unknown"),
+        slint::Keys::default()
+    );
+}
+
+use crate::dialogs::{
+    WindowGeometry, filtered_font_families, format_qt_color, parse_qt_color, qt_file_filters,
+};
+use crate::easing::{
+    easing_catalog_rows, easing_label, easing_name_at, easing_options, easing_preview_path,
+    easing_tangent_path, parameter_button_label,
+};
+use crate::export::{export_workspace_for_frame, selected_codec, selected_codec_index};
+use crate::lifecycle::{RecentProject, merge_recent_project, recent_projects_from_value};
+use crate::localization::{CURRENT_UI_LANGUAGE, UiLanguage};
+use crate::localization::{localized_effect_metadata, ui_language_from_locale};
+use crate::object_settings::{
+    is_same_parameter_row, object_settings_rows, parameter_row_updates,
+    timeline_context_catalog_categories, timeline_context_catalog_items,
+};
+use crate::playback::{
+    audio_queue_lead_frames, samples_for_timeline_frame, scene_fps, stereo_levels,
+};
+use crate::projection::{frame_counter_text, speed_multiplier_text};
+use crate::settings::{
+    SYSTEM_AUDIO_BLOCK_SIZES, SYSTEM_EXPORT_AUDIO_CODECS, SYSTEM_EXPORT_VIDEO_CODECS,
+    SYSTEM_PLUGIN_FORMATS, SYSTEM_PREVIEW_RENDER_SCALES, SYSTEM_SHORTCUT_ROWS, SYSTEM_THEME_VALUES,
+    SYSTEM_UI_LANGUAGE_VALUES, choice_f64, choice_i32, choice_str, plugin_paths_value,
+};
+use crate::shortcuts::{
+    ShortcutInput, TimelineScrollInput, parse_shortcut, plan_timeline_scroll_with,
+    scale_to_zoom_percent, shortcut_matches, zoom_percent_to_scale,
+};
+use freya_nle_app::audio_plugin::AudioPluginCatalog;
+use freya_nle_app::easing::BezierCurve;
+use freya_nle_app::effect_catalog::EffectCatalog;
+use freya_nle_app::object_settings::{ObjectControl, ObjectSettings, keyframe_interpolation_names};
+use freya_nle_app::{ApplicationModel, ProjectDefaults, ProjectSession};
+use serde_json::json;
+use slint::Model;
+use slint::platform::Key;
+
+use freya_nle_app::object_settings::{
+    AudioPluginSettings, KeyframePoint, ObjectControlKind, ObjectControlOption, ObjectEffect,
+};
+
+#[test]
+fn playback_audio_frame_sizes_follow_the_timeline_rate() {
+    assert_eq!(samples_for_timeline_frame(0, 60.0, 48_000, 1.0), Some(800));
+    assert_eq!(samples_for_timeline_frame(0, 60.0, 48_000, 2.0), Some(400));
+    assert_eq!(
+        samples_for_timeline_frame(0, 60.0, 48_000, 0.5),
+        Some(1_600)
+    );
+    assert_eq!(samples_for_timeline_frame(-1, 60.0, 48_000, 1.0), None);
+    assert_eq!(samples_for_timeline_frame(0, 0.0, 48_000, 1.0), None);
+    assert_eq!(samples_for_timeline_frame(0, 60.0, 0, 1.0), None);
+    assert_eq!(samples_for_timeline_frame(0, 60.0, 48_000, 0.0), None);
+}
+
+#[test]
+fn audio_queue_lead_matches_the_buffered_transport_duration() {
+    assert_eq!(audio_queue_lead_frames(60.0, 1.0, 6_000, 48_000), 8);
+    assert_eq!(audio_queue_lead_frames(60.0, 2.0, 6_000, 48_000), 15);
+    assert_eq!(audio_queue_lead_frames(240.0, 4.0, 6_000, 48_000), 120);
+    assert_eq!(audio_queue_lead_frames(60.0, 1.0, 6_000, 0), 1);
+}
+
+#[test]
+fn audio_timing_uses_scene_fps_with_a_project_fallback() {
+    let mut project = ProjectSession::blank_with(ProjectDefaults {
+        fps: 24.0,
+        ..ProjectDefaults::default()
+    });
+    project.document.scenes[0].fps = 120.0;
+
+    assert_eq!(scene_fps(&project.document, 1), 120.0);
+    assert_eq!(scene_fps(&project.document, 999), 24.0);
+
+    project.document.scenes[0].fps = 0.0;
+    assert_eq!(scene_fps(&project.document, 1), 1.0);
+}
+
+#[test]
+fn stereo_meter_reports_independent_peak_and_rms_levels() {
+    let levels = stereo_levels(&[0.5, -1.0, -0.5, 0.0, 0.75]);
+    assert_eq!(levels[0], 0.5);
+    assert_eq!(levels[1], 1.0);
+    assert!((levels[2] - 0.5).abs() < f32::EPSILON);
+    assert!((levels[3] - (0.5_f32).sqrt()).abs() < f32::EPSILON);
+    assert_eq!(stereo_levels(&[]), [0.0; 4]);
+}
+
+#[test]
+fn recent_projects_parse_qt_entries_and_respect_the_configured_limit() {
+    let value = json!([
+        {"name":"One","path":"C:/projects/one.aviqtl","width":1920,"height":1080,"fps":60.0},
+        {"name":"","path":"C:/projects/two.aviqtl","width":1280,"height":720,"fps":30.0},
+        {"name":"Invalid","path":""}
+    ]);
+
+    let recent = recent_projects_from_value(Some(&value), 2);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].name, "One");
+    assert_eq!(recent[1].name, "two.aviqtl");
+    assert_eq!(recent[1].fps, 30.0);
+}
+
+#[test]
+fn recent_project_paths_preserve_surrounding_whitespace() {
+    let value = json!([
+        {"path":"  C:/projects/with-space.aviqtl  "},
+        {"path":" \t "}
+    ]);
+
+    let recent = recent_projects_from_value(Some(&value), 10);
+
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].path, "  C:/projects/with-space.aviqtl  ");
+}
+
+#[test]
+fn recent_project_updates_move_duplicates_to_the_front_atomically() {
+    let one = RecentProject {
+        name: "One".to_owned(),
+        path: "one.aviqtl".to_owned(),
+        width: 1920,
+        height: 1080,
+        fps: 60.0,
+    };
+    let two = RecentProject {
+        name: "Two".to_owned(),
+        path: "two.aviqtl".to_owned(),
+        width: 1280,
+        height: 720,
+        fps: 30.0,
+    };
+    let updated = merge_recent_project(vec![one.clone(), two.clone()], two.clone(), 2);
+
+    assert_eq!(updated, [two, one]);
+}
+
+#[test]
+fn window_geometry_uses_qt_keys_and_clamps_invalid_sizes() {
+    let fallback = WindowGeometry::new(100, 200, 640, 480);
+    let value = json!({
+        "x": -120,
+        "y": 45,
+        "width": 1280,
+        "height": 720,
+        "maximized": true
+    });
+    assert_eq!(
+        WindowGeometry::from_value(Some(&value), fallback),
+        WindowGeometry {
+            x: -120,
+            y: 45,
+            width: 1280,
+            height: 720,
+            maximized: true,
+        }
+    );
+
+    let invalid = json!({"width": 0, "height": -5});
+    assert_eq!(
+        WindowGeometry::from_value(Some(&invalid), fallback),
+        WindowGeometry {
+            width: 1,
+            height: 1,
+            ..fallback
+        }
+    );
+    assert_eq!(WindowGeometry::from_value(None, fallback), fallback);
+}
+
+#[test]
+fn system_settings_choices_and_plugin_paths_match_the_qt_schema() {
+    assert_eq!(choice_str(&SYSTEM_THEME_VALUES, 2, 0), "System");
+    assert_eq!(
+        choice_str(&SYSTEM_UI_LANGUAGE_VALUES, 2, 0),
+        "SimplifiedChinese"
+    );
+    assert_eq!(choice_str(&SYSTEM_EXPORT_VIDEO_CODECS, 1, 2), "hevc_vaapi");
+    assert_eq!(choice_str(&SYSTEM_EXPORT_AUDIO_CODECS, 1, 0), "opus");
+    assert_eq!(choice_i32(&SYSTEM_AUDIO_BLOCK_SIZES, 5, 4), 8192);
+    assert_eq!(choice_f64(&SYSTEM_PREVIEW_RENDER_SCALES, 3, 0), 0.25);
+    assert_eq!(choice_str(&SYSTEM_THEME_VALUES, -1, 0), "Dark");
+    assert_eq!(choice_i32(&SYSTEM_AUDIO_BLOCK_SIZES, 99, 4), 4096);
+    assert_eq!(
+        plugin_paths_value(" /plugins/one \n\n/plugins/two "),
+        json!(["/plugins/one", "/plugins/two"])
+    );
+    assert_eq!(SYSTEM_PLUGIN_FORMATS.len(), 11);
+    assert_eq!(SYSTEM_SHORTCUT_ROWS.len(), 34);
+}
+
+#[test]
+fn ui_locale_selection_uses_english_as_the_fallback() {
+    assert_eq!(
+        ui_language_from_locale("zh-CN"),
+        UiLanguage::SimplifiedChinese
+    );
+    assert_eq!(
+        ui_language_from_locale("zh_Hans_CN.UTF-8"),
+        UiLanguage::SimplifiedChinese
+    );
+    assert_eq!(ui_language_from_locale("ja-JP"), UiLanguage::Japanese);
+    assert_eq!(ui_language_from_locale("en-US"), UiLanguage::English);
+    assert_eq!(ui_language_from_locale("fr-FR"), UiLanguage::English);
+    assert_eq!(ui_language_from_locale(""), UiLanguage::English);
+}
+
+#[test]
+fn effect_metadata_follows_the_selected_ui_language() {
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::English));
+    assert_eq!(localized_effect_metadata("テキスト"), "Text");
+    assert_eq!(localized_effect_metadata("変形/クロップ"), "Transform/Crop");
+    assert_eq!(localized_effect_metadata("標準描画"), "Standard Drawing");
+    assert_eq!(localized_effect_metadata("拡大率"), "Scale");
+    assert_eq!(localized_effect_metadata("X軸回転"), "X Rotation");
+    assert_eq!(localized_effect_metadata("中心X"), "Center X");
+    assert_eq!(localized_effect_metadata("不透明度"), "Opacity");
+    assert_eq!(localized_effect_metadata("合成モード"), "Blend Mode");
+    assert_eq!(localized_effect_metadata("通常"), "Normal");
+
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::SimplifiedChinese));
+    assert_eq!(localized_effect_metadata("テキスト"), "文本");
+    assert_eq!(localized_effect_metadata("変形/クロップ"), "变形/裁剪");
+    assert_eq!(localized_effect_metadata("標準描画"), "标准绘制");
+    assert_eq!(localized_effect_metadata("拡大率"), "缩放率");
+    assert_eq!(localized_effect_metadata("X軸回転"), "X 轴旋转");
+    assert_eq!(localized_effect_metadata("中心X"), "中心 X");
+    assert_eq!(localized_effect_metadata("不透明度"), "不透明度");
+    assert_eq!(localized_effect_metadata("合成モード"), "混合模式");
+    assert_eq!(localized_effect_metadata("通常"), "正常");
+
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::Japanese));
+    assert_eq!(localized_effect_metadata("テキスト"), "テキスト");
+    assert_eq!(localized_effect_metadata("変形/クロップ"), "変形/クロップ");
+    assert_eq!(localized_effect_metadata("標準描画"), "標準描画");
+}
+
+#[test]
+fn dual_slider_button_uses_the_localized_property_and_easing_names() {
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::English));
+    assert_eq!(
+        parameter_button_label(&localized_effect_metadata("拡大率"), true, "linear"),
+        "Scale (Linear)"
+    );
+
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::SimplifiedChinese));
+    assert_eq!(
+        parameter_button_label(&localized_effect_metadata("拡大率"), true, "linear"),
+        "缩放率 (线性)"
+    );
+
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::Japanese));
+    assert_eq!(
+        parameter_button_label(&localized_effect_metadata("拡大率"), true, "linear"),
+        "拡大率 (直線)"
+    );
+}
+
+#[test]
+fn searchable_context_catalog_preserves_qt_category_paths() {
+    let (catalog, _) = EffectCatalog::load();
+    let items =
+        timeline_context_catalog_items(&catalog, &AudioPluginCatalog::default(), "clipping", 1);
+    let clipping = items
+        .iter()
+        .find(|item| item.id.as_str() == "clipping")
+        .expect("clipping effect remains searchable by technical id");
+    assert!(clipping.categories.as_str().contains("Transform/Crop"));
+}
+
+#[test]
+fn context_effect_menu_groups_into_qt_category_submenus() {
+    // Qt's buildEffectMenu nests one submenu per category; the Slint port used to
+    // flatten the same items into a single list with slash-prefixed labels.
+    let (catalog, _) = EffectCatalog::load();
+    let categories =
+        timeline_context_catalog_categories(&catalog, &AudioPluginCatalog::default(), 1);
+    assert!(!categories.is_empty(), "effect categories exist");
+    let total: usize = categories.iter().map(|group| group.items.row_count()).sum();
+    let flat = timeline_context_catalog_items(&catalog, &AudioPluginCatalog::default(), "", 1);
+    assert_eq!(
+        total,
+        flat.len(),
+        "category groups partition the flat catalog"
+    );
+    assert!(
+        categories.iter().all(|group| group.items.row_count() > 0),
+        "no empty submenu is emitted"
+    );
+
+    // Audio plugins group by their host category the way buildAudioPluginMenu does.
+    let audio = timeline_context_catalog_categories(
+        &EffectCatalog::load().0,
+        &AudioPluginCatalog::default(),
+        2,
+    );
+    assert!(
+        audio.is_empty(),
+        "no plugins are discovered in a clean scan"
+    );
+
+    // The timeline-background menu keeps its own object categories untouched.
+    assert!(
+        timeline_context_catalog_categories(&catalog, &AudioPluginCatalog::default(), 0).is_empty(),
+        "object insertion stays on the nested object model"
+    );
+}
+
+#[test]
+fn codec_selection_matches_the_qt_fallback_contract() {
+    let codecs = vec!["libx264".to_owned(), "libx265".to_owned()];
+    assert_eq!(selected_codec_index(&codecs, "libx265"), 1);
+    assert_eq!(selected_codec_index(&codecs, "missing"), 0);
+    assert_eq!(selected_codec_index(&[], "libx264"), -1);
+    assert_eq!(selected_codec(&codecs, 1, "fallback"), "libx265");
+    assert_eq!(selected_codec(&codecs, -1, "fallback"), "fallback");
+    assert_eq!(selected_codec(&codecs, 9, "fallback"), "fallback");
+}
+
+#[test]
+fn export_frame_gate_rejects_a_project_tab_change() {
+    let mut model = ApplicationModel::default();
+    model.create_project(ProjectDefaults::default());
+    let export_project = model
+        .current_project_instance_id()
+        .expect("first project exists");
+    model.create_project(ProjectDefaults::default());
+
+    let error = match export_workspace_for_frame(&mut model, export_project) {
+        Ok(_) => panic!("another project must not render the active export frame"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        "Frame render error: project tab changed during export"
+    );
+    assert!(model.select_project(0));
+    assert!(export_workspace_for_frame(&mut model, export_project).is_ok());
+}
+
+#[test]
+fn shortcut_parser_preserves_qt_cross_platform_names_and_punctuation() {
+    let undo = parse_shortcut("Ctrl+Shift+Z").expect("undo shortcut parses");
+    assert!(undo.control);
+    assert!(undo.shift);
+    assert_eq!(undo.text, "z");
+
+    let settings = parse_shortcut("Alt+Enter").expect("settings shortcut parses");
+    assert!(settings.alt);
+    assert_eq!(settings.text, char::from(Key::Return).to_string());
+
+    let zoom = parse_shortcut("Ctrl++").expect("plus shortcut parses");
+    assert!(zoom.control);
+    assert!(zoom.ignore_shift);
+    assert_eq!(zoom.text, "+");
+    assert!(parse_shortcut("Ctrl+UnknownKey").is_none());
+}
+
+#[test]
+fn shortcut_matching_uses_the_platform_accelerator_modifier() {
+    // What the backend reports for Control on Windows and Linux, and for Command
+    // on macOS, where the Command key arrives in the meta bit.
+    let control_save = ShortcutInput {
+        text: "s".to_owned(),
+        alt: false,
+        control: true,
+        shift: false,
+        meta: false,
+    };
+    assert!(shortcut_matches("Ctrl+S", &control_save));
+    assert!(shortcut_matches("Control+S", &control_save));
+    assert!(shortcut_matches("Command+S", &control_save));
+    assert!(!shortcut_matches("Alt+S", &control_save));
+    assert!(!shortcut_matches("Ctrl+Shift+S", &control_save));
+
+    // Case is carried by the modifier bits, not by the character.
+    let shifted = ShortcutInput {
+        text: "S".to_owned(),
+        shift: true,
+        ..control_save.clone()
+    };
+    assert!(shortcut_matches("Ctrl+Shift+S", &shifted));
+}
+
+#[test]
+fn macos_command_matches_the_ctrl_bindings_and_keeps_ctrl_working() {
+    let command_save = ShortcutInput {
+        text: "s".to_owned(),
+        alt: false,
+        control: false,
+        shift: false,
+        meta: true,
+    };
+    if cfg!(target_os = "macos") {
+        // Every default ships as "Ctrl+...", the menu renders it as Command, and
+        // the backend reports the Command key through the meta bit.
+        assert!(shortcut_matches("Ctrl+S", &command_save));
+        assert!(shortcut_matches("Cmd+S", &command_save));
+        assert!(shortcut_matches("Meta+S", &command_save));
+        // The AviUtl habit keeps working: Control is the accelerator as well.
+        let physical_control = ShortcutInput {
+            control: true,
+            meta: false,
+            ..command_save.clone()
+        };
+        assert!(shortcut_matches("Ctrl+S", &physical_control));
+    } else {
+        // Elsewhere meta is the platform key and stays separate from Control.
+        assert!(!shortcut_matches("Ctrl+S", &command_save));
+        assert!(shortcut_matches("Meta+S", &command_save));
+    }
+}
+
+#[test]
+fn a_control_character_answers_the_letter_it_stands_for() {
+    // Backends that follow the terminal convention report `^Z` as `\u{1a}`
+    // while Control is held.
+    let control_z = ShortcutInput {
+        text: "\u{1a}".to_owned(),
+        alt: false,
+        control: true,
+        shift: false,
+        meta: false,
+    };
+    assert!(shortcut_matches("Ctrl+Z", &control_z));
+    assert!(!shortcut_matches("Ctrl+Y", &control_z));
+
+    // Without Control the same character is just a character, not a binding.
+    let bare = ShortcutInput {
+        control: false,
+        ..control_z.clone()
+    };
+    assert!(!shortcut_matches("Ctrl+Z", &bare));
+}
+
+#[test]
+fn recording_a_command_shortcut_on_macos_keeps_the_ctrl_spelling() {
+    use crate::shortcuts::record_shortcut;
+    let recorded = record_shortcut(ShortcutInput {
+        text: "s".to_owned(),
+        alt: false,
+        control: false,
+        shift: false,
+        meta: true,
+    });
+    if cfg!(target_os = "macos") {
+        assert_eq!(recorded.as_deref(), Some("Ctrl+S"));
+        // The recorded spelling immediately answers the Command key again.
+        assert!(shortcut_matches(
+            recorded.as_deref().expect("recorded"),
+            &ShortcutInput {
+                text: "s".to_owned(),
+                alt: false,
+                control: false,
+                shift: false,
+                meta: true,
+            }
+        ));
+    } else {
+        assert_eq!(recorded.as_deref(), Some("Meta+S"));
+    }
+}
+
+#[test]
+fn easing_options_match_the_qt_parameter_contracts() {
+    assert_eq!(easing_label("ease_in_out_elastic"), "Elastic Ease in/out");
+    assert_eq!(easing_label("ease_out_sine"), "Sine Ease out");
+    assert_eq!(easing_label("ease_in_quad"), "Quadratic Ease in");
+    assert_eq!(easing_label("ease_out_in_circ"), "Circular Ease out/in");
+    assert_eq!(easing_label("ease_in_bounce"), "Bounce Ease in");
+    assert_eq!(easing_name_at(0), "none");
+    assert_eq!(easing_name_at(-1), "none");
+
+    let random = easing_options("random", 0, 1.0, 0.3, &[0.33, 0.0, 0.66, 1.0, 1.0, 1.0]);
+    assert_eq!(random["interp"], "random");
+    assert_eq!(random["modeParams"]["stepFrames"], 1);
+
+    let elastic = easing_options(
+        "ease_out_elastic",
+        1,
+        f32::INFINITY,
+        0.0,
+        &[0.33, 0.0, 0.66, 1.0, 1.0, 1.0],
+    );
+    assert_eq!(elastic["modeParams"]["amplitude"], 1.0);
+    let period = elastic["modeParams"]["period"]
+        .as_f64()
+        .expect("elastic period is numeric");
+    assert!((period - 0.05).abs() < f64::from(f32::EPSILON));
+
+    let custom = easing_options(
+        "custom",
+        1,
+        1.0,
+        0.3,
+        &[-2.0, -1.0, 3.0, 2.0, 0.5, 0.5, 0.6, 0.6, 0.8, 0.8, 1.0, 1.0],
+    );
+    assert_eq!(
+        custom["points"],
+        json!([0.0, -1.0, 1.0, 2.0, 0.5, 0.5, 0.6, 0.6, 0.8, 0.8, 1.0, 1.0])
+    );
+    assert_eq!(
+        easing_options("unknown", 1, 1.0, 0.3, &[0.0; 6])["interp"],
+        "none"
+    );
+
+    let linear = easing_preview_path(&easing_options(
+        "linear",
+        1,
+        1.0,
+        0.3,
+        BezierCurve::default().points(),
+    ));
+    assert!(linear.starts_with("M 0 1"));
+    assert!(linear.contains(" L 0.5 0.5"));
+    assert!(linear.ends_with(" L 1 0"));
+
+    let mut curve = BezierCurve::default();
+    assert!(curve.insert_anchor(0.5, 0.25));
+    let tangents = easing_tangent_path(&curve);
+    assert!(tangents.contains("M 0 1 L 0.165 0.9175"));
+    assert!(tangents.contains("M 0.5 0.75 L 0.33 0.835"));
+}
+
+#[test]
+fn easing_catalog_matches_the_qt_categories_and_filtering() {
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::English));
+    let curve = BezierCurve::default();
+    let rows = easing_catalog_rows("", 1, 1.0, 0.3, curve.points());
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.header)
+            .map(|row| row.label.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Basic",
+            "Standard curves",
+            "Strong curves",
+            "Bounce and elasticity",
+            "Special"
+        ]
+    );
+
+    let mut actual_names = rows
+        .iter()
+        .filter(|row| !row.header)
+        .map(|row| row.name.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let mut expected_names = keyframe_interpolation_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    actual_names.sort();
+    expected_names.sort();
+    assert_eq!(actual_names, expected_names);
+    assert!(rows.iter().filter(|row| !row.header).all(|row| {
+        easing_name_at(row.easing_index) == row.name.as_str()
+            && row.preview_path.as_str().starts_with("M 0 1")
+    }));
+
+    let bounce = easing_catalog_rows("Bo_Un_Ce", 1, 1.0, 0.3, curve.points());
+    assert_eq!(bounce.len(), 5);
+    assert!(bounce[0].header);
+    assert_eq!(bounce[0].label.as_str(), "Bounce and elasticity");
+    assert!(
+        bounce[1..]
+            .iter()
+            .all(|row| row.name.as_str().contains("bounce"))
+    );
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::Japanese));
+    let localized_bounce = easing_catalog_rows("跳ね返り", 1, 1.0, 0.3, curve.points());
+    assert!(!localized_bounce.is_empty());
+    assert!(
+        localized_bounce
+            .iter()
+            .filter(|row| !row.header)
+            .all(|row| row.name.as_str().contains("bounce"))
+    );
+    assert!(
+        localized_bounce
+            .iter()
+            .any(|row| row.name.as_str() == "ease_in_bounce")
+    );
+    CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::English));
+}
+
+#[test]
+fn easing_catalog_previews_follow_live_mode_parameters() {
+    let curve = BezierCurve::default();
+    let random_preview = |step_frames| {
+        easing_catalog_rows("random", step_frames, 1.0, 0.3, curve.points())[1]
+            .preview_path
+            .to_string()
+    };
+    assert_ne!(random_preview(1), random_preview(4));
+
+    let custom_default = easing_catalog_rows("custom", 1, 1.0, 0.3, curve.points())[1]
+        .preview_path
+        .to_string();
+    let mut edited = curve.clone();
+    assert!(edited.set_first_controls([0.1, 0.8, 0.9, 0.2]));
+    let custom_edited = easing_catalog_rows("custom", 1, 1.0, 0.3, edited.points())[1]
+        .preview_path
+        .to_string();
+    assert_ne!(custom_default, custom_edited);
+}
+
+#[test]
+fn parameter_picker_helpers_preserve_qt_value_contracts() {
+    assert_eq!(
+        qt_file_filters("Video Files (*.mp4 *.mov);;Images (*.png *.jpg)"),
+        vec![
+            (
+                "Video Files".to_owned(),
+                vec!["mp4".to_owned(), "mov".to_owned()]
+            ),
+            (
+                "Images".to_owned(),
+                vec!["png".to_owned(), "jpg".to_owned()]
+            )
+        ]
+    );
+    assert!(qt_file_filters("").is_empty());
+    assert_eq!(parse_qt_color("#abc"), [255, 0xaa, 0xbb, 0xcc]);
+    assert_eq!(parse_qt_color("#80ff0000"), [0x80, 0xff, 0, 0]);
+    assert_eq!(parse_qt_color("invalid"), [255; 4]);
+    assert_eq!(format_qt_color(255, 0, 16, 255), "#ff0010");
+    assert_eq!(format_qt_color(300, -1, 16, 128), "#80ff0010");
+}
+
+#[test]
+fn font_picker_filter_is_case_insensitive_and_stable() {
+    let families = vec![
+        "Arial".to_owned(),
+        "Noto Sans CJK JP".to_owned(),
+        "Noto Serif".to_owned(),
+    ];
+    assert_eq!(
+        filtered_font_families(&families, "  NOTO ")
+            .into_iter()
+            .map(|family| family.to_string())
+            .collect::<Vec<_>>(),
+        vec!["Noto Sans CJK JP", "Noto Serif"]
+    );
+    assert_eq!(filtered_font_families(&families, "").len(), 3);
+}
+
+#[test]
+fn zoom_mapping_matches_the_qt_piecewise_scale() {
+    assert_eq!(zoom_percent_to_scale(10.0), 0.1);
+    assert_eq!(zoom_percent_to_scale(100.0), 1.0);
+    assert_eq!(zoom_percent_to_scale(200.0), 4.0);
+    assert_eq!(zoom_percent_to_scale(400.0), 10.0);
+    assert!((scale_to_zoom_percent(4.0) - 200.0).abs() < f32::EPSILON);
+}
+
+fn timeline_scroll_input() -> TimelineScrollInput {
+    TimelineScrollInput {
+        delta_x: 20.0,
+        delta_y: 120.0,
+        content_x: 500.0,
+        viewport_x: -300.0,
+        viewport_y: -90.0,
+        visible_width: 800.0,
+        viewport_width: 3_600.0,
+        visible_height: 300.0,
+        viewport_height: 3_840.0,
+        duration_frames: 3_600.0,
+        alt: false,
+        control: false,
+        shift: false,
+        ruler_zoom: false,
+        pixels_per_frame: 1.0,
+    }
+}
+
+#[test]
+fn timeline_wheel_matches_qt_axis_and_modifier_routing() {
+    let zoom = (10.0, 400.0, 10.0);
+    let horizontal = plan_timeline_scroll_with(timeline_scroll_input(), zoom);
+    assert_eq!(horizontal.viewport_x, -180.0);
+    assert_eq!(horizontal.viewport_y, -90.0);
+
+    let vertical = plan_timeline_scroll_with(
+        TimelineScrollInput {
+            shift: true,
+            ..timeline_scroll_input()
+        },
+        zoom,
+    );
+    assert_eq!(vertical.viewport_x, -300.0);
+    assert_eq!(vertical.viewport_y, 0.0);
+}
+
+#[test]
+fn timeline_wheel_zoom_preserves_the_pointer_anchor() {
+    let zoom = (10.0, 400.0, 10.0);
+    let stepped = plan_timeline_scroll_with(
+        TimelineScrollInput {
+            control: true,
+            ..timeline_scroll_input()
+        },
+        zoom,
+    );
+    assert!((stepped.pixels_per_frame - 1.3).abs() < f32::EPSILON);
+    assert!((stepped.viewport_x + 450.0).abs() < f32::EPSILON);
+
+    let ruler = plan_timeline_scroll_with(
+        TimelineScrollInput {
+            ruler_zoom: true,
+            ..timeline_scroll_input()
+        },
+        zoom,
+    );
+    assert!((ruler.pixels_per_frame - 1.1).abs() < f32::EPSILON);
+    assert!((ruler.viewport_x + 350.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn object_setting_rows_keep_effect_control_and_option_order() {
+    let settings = ObjectSettings {
+        clip_id: 7,
+        clip_label: "Rectangle".to_owned(),
+        audio_plugin_mode: false,
+        effects: vec![ObjectEffect {
+            index: 1,
+            id: "blur".to_owned(),
+            name: "Blur".to_owned(),
+            enabled: false,
+            selected: true,
+            removable: true,
+            controls: vec![
+                ObjectControl {
+                    kind: ObjectControlKind::Header,
+                    source_kind: "header".to_owned(),
+                    param: None,
+                    label: "Quality".to_owned(),
+                    minimum: None,
+                    maximum: None,
+                    step: None,
+                    decimals: None,
+                    unit: String::new(),
+                    filter: String::new(),
+                    disabled: false,
+                    keyframed: false,
+                    value: serde_json::Value::Null,
+                    relative_frame: 0,
+                    clip_duration: 100,
+                    interval_start: 0,
+                    interval_end: 100,
+                    start_value: serde_json::Value::Null,
+                    end_value: serde_json::Value::Null,
+                    start_interpolation: "constant".to_owned(),
+                    keyframes: Vec::new(),
+                    options: Vec::new(),
+                },
+                ObjectControl {
+                    kind: ObjectControlKind::Choice,
+                    source_kind: "enum".to_owned(),
+                    param: Some("mode".to_owned()),
+                    label: "Mode".to_owned(),
+                    minimum: None,
+                    maximum: None,
+                    step: None,
+                    decimals: None,
+                    unit: String::new(),
+                    filter: String::new(),
+                    disabled: false,
+                    keyframed: true,
+                    value: json!("high"),
+                    relative_frame: 10,
+                    clip_duration: 100,
+                    interval_start: 0,
+                    interval_end: 100,
+                    start_value: json!("high"),
+                    end_value: json!("high"),
+                    start_interpolation: "linear".to_owned(),
+                    keyframes: Vec::new(),
+                    options: vec![
+                        ObjectControlOption {
+                            value: json!("low"),
+                            label: "Low".to_owned(),
+                        },
+                        ObjectControlOption {
+                            value: json!("high"),
+                            label: "High".to_owned(),
+                        },
+                    ],
+                },
+                ObjectControl {
+                    kind: ObjectControlKind::Number,
+                    source_kind: "slider".to_owned(),
+                    param: Some("size".to_owned()),
+                    label: "Size".to_owned(),
+                    minimum: Some(0.0),
+                    maximum: Some(100.0),
+                    step: Some(1.0),
+                    decimals: Some(1),
+                    unit: "px".to_owned(),
+                    filter: String::new(),
+                    disabled: false,
+                    keyframed: true,
+                    value: json!(10.0),
+                    relative_frame: 10,
+                    clip_duration: 100,
+                    interval_start: 0,
+                    interval_end: 20,
+                    start_value: json!(0.0),
+                    end_value: json!(20.0),
+                    start_interpolation: "linear".to_owned(),
+                    keyframes: vec![
+                        KeyframePoint {
+                            frame: 0,
+                            value: json!(0.0),
+                            interpolation: "linear".to_owned(),
+                            options: json!({"interp":"linear"}),
+                        },
+                        KeyframePoint {
+                            frame: 20,
+                            value: json!(20.0),
+                            interpolation: "ease_in".to_owned(),
+                            options: json!({"interp":"ease_in"}),
+                        },
+                    ],
+                    options: Vec::new(),
+                },
+            ],
+        }],
+        audio_plugins: Vec::new(),
+    };
+
+    let rows = object_settings_rows(&settings);
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0].row_kind.as_str(), "effect");
+    assert_eq!(rows[1].row_kind.as_str(), "header");
+    assert_eq!(rows[2].row_kind.as_str(), "choice");
+    assert_eq!(rows[2].selected_option, 1);
+    assert!(rows[2].keyframed);
+    assert_eq!(rows[2].option_labels.row_count(), 2);
+    assert_eq!(rows[2].option_labels.row_data(0).as_deref(), Some("Low"));
+    assert_eq!(rows[2].option_labels.row_data(1).as_deref(), Some("High"));
+    assert_eq!(rows[3].row_kind.as_str(), "number");
+    assert!(rows[3].range_mode);
+    assert_eq!((rows[3].start_frame, rows[3].end_frame), (0, 20));
+    assert_eq!(rows[3].text_value.as_str(), "0.0");
+    assert_eq!(rows[3].end_text_value.as_str(), "20.0");
+    assert_eq!(rows[4].row_kind.as_str(), "keyframes");
+    assert_eq!(rows[4].keyframe_markers.row_count(), 3);
+    assert!(!rows[4].keyframe_markers.row_data(0).unwrap().draggable);
+    assert!(rows[4].keyframe_markers.row_data(1).unwrap().draggable);
+    let virtual_end = rows[4].keyframe_markers.row_data(2).unwrap();
+    assert_eq!(virtual_end.frame, 100);
+    assert!(virtual_end.virtual_end);
+}
+
+#[test]
+fn audio_plugin_rows_use_current_values_and_protect_qt_endpoints() {
+    let control = ObjectControl {
+        kind: ObjectControlKind::Number,
+        source_kind: "slider".to_owned(),
+        param: Some("0".to_owned()),
+        label: "Gain".to_owned(),
+        minimum: Some(0.0),
+        maximum: Some(1.0),
+        step: Some(0.01),
+        decimals: Some(3),
+        unit: "dB".to_owned(),
+        filter: String::new(),
+        disabled: false,
+        keyframed: true,
+        value: json!(0.5),
+        relative_frame: 50,
+        clip_duration: 100,
+        interval_start: 20,
+        interval_end: 80,
+        start_value: json!(0.2),
+        end_value: json!(0.8),
+        start_interpolation: "linear".to_owned(),
+        keyframes: vec![
+            KeyframePoint {
+                frame: 0,
+                value: json!(0.0),
+                interpolation: "linear".to_owned(),
+                options: json!({"interp":"linear"}),
+            },
+            KeyframePoint {
+                frame: 50,
+                value: json!(0.5),
+                interpolation: "linear".to_owned(),
+                options: json!({"interp":"linear"}),
+            },
+            KeyframePoint {
+                frame: 100,
+                value: json!(1.0),
+                interpolation: "linear".to_owned(),
+                options: json!({"interp":"linear"}),
+            },
+        ],
+        options: Vec::new(),
+    };
+    let rows = object_settings_rows(&ObjectSettings {
+        clip_id: 9,
+        clip_label: "Audio".to_owned(),
+        audio_plugin_mode: true,
+        effects: Vec::new(),
+        audio_plugins: vec![AudioPluginSettings {
+            index: 0,
+            id: "gain".to_owned(),
+            name: "Gain".to_owned(),
+            format: "CLAP".to_owned(),
+            enabled: true,
+            selected: true,
+            controls: vec![control],
+        }],
+    });
+
+    assert_eq!(rows.len(), 3);
+    assert!(rows[0].audio_plugin);
+    assert!(!rows[0].header_toggle_visible);
+    assert_eq!(rows[1].start_frame, 50);
+    assert_eq!(rows[1].text_value.as_str(), "0.500");
+    assert!(!rows[1].range_mode);
+    assert!(rows[1].interactive);
+    let markers = &rows[2].keyframe_markers;
+    assert_eq!(markers.row_count(), 3);
+    assert!(!markers.row_data(0).unwrap().removable);
+    assert!(markers.row_data(1).unwrap().removable);
+    assert!(!markers.row_data(1).unwrap().draggable);
+    assert!(!markers.row_data(2).unwrap().removable);
+}
+
+/// A keyframed numeric control, the shape a live drag refreshes.
+fn keyframed_number_control(param: &str, label: &str, value: f64, frames: &[i32]) -> ObjectControl {
+    ObjectControl {
+        kind: ObjectControlKind::Number,
+        source_kind: "slider".to_owned(),
+        param: Some(param.to_owned()),
+        label: label.to_owned(),
+        minimum: Some(0.0),
+        maximum: Some(100.0),
+        step: Some(1.0),
+        decimals: Some(1),
+        unit: String::new(),
+        filter: String::new(),
+        disabled: false,
+        keyframed: true,
+        value: json!(value),
+        relative_frame: 0,
+        clip_duration: 100,
+        interval_start: 0,
+        interval_end: 100,
+        start_value: json!(value),
+        end_value: json!(value),
+        start_interpolation: "linear".to_owned(),
+        keyframes: frames
+            .iter()
+            .map(|frame| KeyframePoint {
+                frame: *frame,
+                value: json!(value),
+                interpolation: "linear".to_owned(),
+                options: json!({"interp": "linear"}),
+            })
+            .collect(),
+        options: Vec::new(),
+    }
+}
+
+/// Two effects, the second of them keyframed, which is what the row-preview tests edit.
+fn keyframed_settings(amount: f64, amount_frames: &[i32]) -> ObjectSettings {
+    ObjectSettings {
+        clip_id: 3,
+        clip_label: "Clip".to_owned(),
+        audio_plugin_mode: false,
+        effects: vec![
+            ObjectEffect {
+                index: 0,
+                id: "blur".to_owned(),
+                name: "Blur".to_owned(),
+                enabled: true,
+                selected: false,
+                removable: true,
+                controls: vec![keyframed_number_control("size", "Size", 10.0, &[0])],
+            },
+            ObjectEffect {
+                index: 1,
+                id: "color".to_owned(),
+                name: "Color".to_owned(),
+                enabled: true,
+                selected: true,
+                removable: true,
+                controls: vec![keyframed_number_control(
+                    "amount",
+                    "Amount",
+                    amount,
+                    amount_frames,
+                )],
+            },
+        ],
+        audio_plugins: Vec::new(),
+    }
+}
+
+#[test]
+fn parameter_preview_rewrites_only_the_edited_parameter_rows() {
+    // A live drag refreshes the projected rows in place instead of rebuilding
+    // the list. Every numeric control projects a "number" row plus a
+    // "keyframes" row, so matching a row by kind alone would repaint the first
+    // numeric parameter of the stack with another effect's label, value,
+    // range, and markers.
+    // Drag the second effect's "amount" from 0.4 to 0.8 and move its second
+    // keyframe; the first effect's "size" keeps its single keyframe.
+    let current_rows = object_settings_rows(&keyframed_settings(0.4, &[0, 40]));
+    let updated_rows = object_settings_rows(&keyframed_settings(0.8, &[0, 60]));
+    let updates = parameter_row_updates(&current_rows, &updated_rows, false, 1, "amount");
+
+    assert_eq!(updates.len(), 2, "the number row and its keyframes row");
+    for (index, refreshed) in &updates {
+        let current = &current_rows[*index];
+        assert_eq!(current.param_name.as_str(), "amount");
+        assert_eq!(refreshed.row_kind, current.row_kind);
+        let expected = updated_rows
+            .iter()
+            .find(|row| is_same_parameter_row(current, row))
+            .expect("the refreshed projection keeps the parameter");
+        assert_eq!(refreshed.label, expected.label);
+        if refreshed.row_kind == "number" {
+            // The keyframes row carries no label of its own.
+            assert_eq!(refreshed.label.as_str(), "Amount");
+        }
+        assert_ne!(
+            refreshed.text_value, current.text_value,
+            "the edited value reaches the live row"
+        );
+        assert_eq!(refreshed.text_value, expected.text_value);
+        assert_eq!(refreshed.number_value, expected.number_value);
+        assert_eq!(refreshed.minimum, expected.minimum);
+        assert_eq!(refreshed.maximum, expected.maximum);
+        assert_eq!(
+            refreshed.keyframe_markers.row_count(),
+            expected.keyframe_markers.row_count()
+        );
+    }
+    // The keyframes row carries the dragged parameter's own markers: the
+    // second keyframe moved from frame 40 to 60, next to the clip end marker.
+    let (marker_index, refreshed_keyframes) = updates
+        .iter()
+        .find(|(index, _)| current_rows[*index].row_kind == "keyframes")
+        .expect("the dragged parameter has a keyframes row");
+    let marker_frames = |markers: &slint::ModelRc<crate::KeyframeMarkerData>| {
+        (0..markers.row_count())
+            .filter_map(|index| markers.row_data(index))
+            .map(|marker| marker.frame)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        marker_frames(&current_rows[*marker_index].keyframe_markers),
+        vec![0, 40, 100]
+    );
+    assert_eq!(
+        marker_frames(&refreshed_keyframes.keyframe_markers),
+        vec![0, 60, 100]
+    );
+
+    // The other effect's number row still carries its own label, and the
+    // kind-only rule this replaced would have rewritten exactly that row.
+    let (size_number_index, size_number) = current_rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.param_name == "size" && row.row_kind == "number")
+        .expect("the first effect's numeric parameter is projected");
+    assert_eq!(size_number.label.as_str(), "Size");
+    assert_eq!(marker_frames(&size_number.keyframe_markers), vec![0, 100]);
+    assert!(
+        updates.iter().all(|(index, _)| *index != size_number_index),
+        "the other effect's rows are never rewritten"
+    );
+}
+
+#[test]
+fn a_live_preview_keeps_the_start_field_read_only() {
+    // The projection makes the interval-start field read-only when several objects are selected,
+    // because the setter behind it edits the primary clip's keyframe track. A drag refreshes the row
+    // through `parameter_row_updates`; re-enabling the field there would hand the user a control that
+    // silently edits one object while the rest of the row edits the selection.
+    let mut current_rows = object_settings_rows(&keyframed_settings(0.4, &[0, 40]));
+    let number_index = current_rows
+        .iter()
+        .position(|row| row.param_name == "amount" && row.row_kind == "number")
+        .expect("the dragged parameter has a number row");
+    current_rows[number_index].start_interactive = false;
+
+    let updated_rows = object_settings_rows(&keyframed_settings(0.8, &[0, 60]));
+    let updates = parameter_row_updates(&current_rows, &updated_rows, false, 1, "amount");
+    let (_, refreshed) = updates
+        .iter()
+        .find(|(index, _)| *index == number_index)
+        .expect("the dragged row is refreshed");
+    assert!(
+        !refreshed.start_interactive,
+        "a preview must not re-enable a start field the projection disabled"
+    );
+}
+
+#[test]
+fn context_search_arrow_keys_clamp_and_enter_from_both_ends() {
+    use crate::object_settings::moved_context_search_selection as moved;
+    // Nothing highlighted: Down enters at the first result, Up at the last.
+    assert_eq!(moved(-1, 3, 1), 0);
+    assert_eq!(moved(-1, 3, -1), 2);
+    // Movement clamps at both ends instead of wrapping past the list.
+    assert_eq!(moved(2, 3, 1), 2);
+    assert_eq!(moved(0, 3, -1), 0);
+    // Ordinary steps move by one.
+    assert_eq!(moved(0, 3, 1), 1);
+    assert_eq!(moved(2, 3, -1), 1);
+    // A single result is reachable and stayable from either direction.
+    assert_eq!(moved(-1, 1, 1), 0);
+    assert_eq!(moved(-1, 1, -1), 0);
+    // An empty result set clears the highlight.
+    assert_eq!(moved(-1, 0, 1), -1);
+    assert_eq!(moved(4, 0, -1), -1);
+}
+
+#[test]
+fn speed_multiplier_matches_the_qt_spinbox_text() {
+    // Qt shows the transport speed as a multiplier with one decimal
+    // (MainWindow.qml:1143-1145). Slint's SpinBox edits the percent value, so the
+    // multiplier is projected beside it and must agree.
+    assert_eq!(speed_multiplier_text(100), "1.0x");
+    assert_eq!(speed_multiplier_text(10), "0.1x");
+    assert_eq!(speed_multiplier_text(400), "4.0x");
+    assert_eq!(speed_multiplier_text(150), "1.5x");
+}
+
+#[test]
+fn frame_counter_zero_pads_like_qt() {
+    // Qt pads the current frame to the total's digit count
+    // (MainWindow.qml:1041) so the transport label keeps a stable width.
+    assert_eq!(frame_counter_text(0, 3600), "0000 / 3600");
+    assert_eq!(frame_counter_text(42, 3600), "0042 / 3600");
+    assert_eq!(frame_counter_text(3600, 3600), "3600 / 3600");
+    assert_eq!(frame_counter_text(7, 90), "07 / 90");
+    assert_eq!(frame_counter_text(5, 0), "5 / 0");
+    // A playhead past the duration never renders a negative number.
+    assert_eq!(frame_counter_text(-3, 100), "000 / 100");
+}
+
+#[test]
+fn layer_header_click_toggles_visibility_and_selects_like_qt() {
+    // Qt's LayerHeader.qml:95 sets visibility and selectedLayer on one left click.
+    // The Slint port exposes these as two separate callbacks so an accessibility
+    // activation can select without mutating visibility.
+    let mut model = ApplicationModel::default();
+    model.add_project_session(
+        ProjectSession::from_json(
+            br#"{"version":3,"settings":{"width":640,"height":360,"fps":60,"sampleRate":48000},
+                "scenes":[{"id":1,"name":"Root","duration":100}],
+                "clips":[{"id":1,"sceneId":1,"type":"video","start":0,"duration":50,"layer":0}]}"#,
+        )
+        .expect("validation project parses"),
+    );
+    let Some(workspace) = model.current_workspace_mut() else {
+        panic!("project tab exists");
+    };
+    assert!(
+        !workspace
+            .selected_scene_document()
+            .expect("scene exists")
+            .hidden_layers
+            .contains(&0),
+        "layer zero starts visible"
+    );
+
+    // One header click hides the layer; a second restores it.
+    assert!(workspace.toggle_layer_visibility(0));
+    assert!(
+        workspace
+            .selected_scene_document()
+            .expect("scene exists")
+            .hidden_layers
+            .contains(&0),
+        "first click hides the layer"
+    );
+    assert!(workspace.toggle_layer_visibility(0));
+    assert!(
+        !workspace
+            .selected_scene_document()
+            .expect("scene exists")
+            .hidden_layers
+            .contains(&0),
+        "second click shows the layer again"
+    );
+
+    // Selection is independent so an accessibility activation can select only.
+    workspace.select_layer(3);
+    assert_eq!(workspace.selected_layer(), 3);
+    assert!(
+        workspace
+            .selected_scene_document()
+            .expect("scene exists")
+            .hidden_layers
+            .is_empty(),
+        "selecting never mutates visibility"
+    );
+}
+
+#[test]
+fn validation_fixture_matches_the_shape_of_a_saved_project() {
+    // `--validate-gpu` / `--frames` load this fixture instead of a real file. A
+    // clip without effects opens an empty object-settings panel, so keep the
+    // fixture carrying what the app itself writes: `transform` plus the object
+    // effect, for every clip.
+    let session = crate::gpu::VALIDATION_PROJECT;
+    let project = ProjectSession::from_json(session.as_bytes()).expect("fixture parses");
+    let document = &project.document;
+    let (catalog, _) = EffectCatalog::load();
+
+    for clip in &document.clips {
+        let effect_ids = clip
+            .effects
+            .iter()
+            .map(|effect| effect.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            effect_ids.contains(&clip.clip_type.as_str()),
+            "clip {} ({}) must carry its object effect, got {effect_ids:?}",
+            clip.id,
+            clip.clip_type
+        );
+        if clip.clip_type != "audio" {
+            assert!(
+                effect_ids.contains(&"transform"),
+                "clip {} ({}) must carry the standard drawing effect, got {effect_ids:?}",
+                clip.id,
+                clip.clip_type
+            );
+        }
+        let projection = freya_nle_app::object_settings::project_object_settings(
+            document,
+            clip,
+            clip.scene_id,
+            clip.start,
+            &catalog,
+            |index| index == clip.effects.len() - 1,
+        );
+        assert!(
+            projection
+                .effects
+                .iter()
+                .filter(|effect| effect.id == clip.clip_type)
+                .any(|effect| !effect.controls.is_empty()),
+            "clip {} ({}) must expose the object settings of its {} effect",
+            clip.id,
+            clip.clip_type,
+            clip.clip_type
+        );
+    }
+}
+
+/// Extracts the item titles and the accelerator slots of the `MenuBar` block, in
+/// document order.
+fn menu_bar_signature(source: &str, file: &str) -> Vec<String> {
+    let start = source
+        .find("    MenuBar {")
+        .unwrap_or_else(|| panic!("{file} has no MenuBar"));
+    let mut depth = 0_i32;
+    let mut end = start;
+    for (index, character) in source[start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + index + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let block = &source[start..end];
+    let mut signature = Vec::new();
+    for line in block.lines() {
+        if let Some(rest) = line.split_once("title: @tr(\"") {
+            let title = rest.1.split_once("\")").expect("closed title").0;
+            signature.push(format!("title:{title}"));
+        } else if let Some(rest) = line.split_once("menu-shortcuts[") {
+            let slot = rest.1.split_once(']').expect("closed slot").0;
+            signature.push(format!("shortcut:{slot}"));
+        } else if line.trim() == "MenuSeparator { }" {
+            signature.push("separator".to_owned());
+        }
+    }
+    signature
+}
+
+/// The preview window and the timeline window each declare their own `MenuBar`,
+/// because Slint allows one per window and macOS only shows the bar of the
+/// focused window. That duplication is only safe while both bars expose the same
+/// items in the same order with the same accelerators, which this pins.
+#[test]
+fn both_windows_declare_the_same_menu_bar() {
+    let preview = menu_bar_signature(include_str!("../ui/main.slint"), "ui/main.slint");
+    let timeline = menu_bar_signature(include_str!("../ui/timeline.slint"), "ui/timeline.slint");
+    assert!(
+        preview.len() > 20,
+        "the menu bar signature looks truncated: {preview:?}"
+    );
+    assert_eq!(preview, timeline);
+}
+
+#[test]
+fn a_mixed_property_row_is_distinct_from_a_uniform_one() {
+    use freya_nle_app::selection_edit::{SelectionProperty, SelectionValue};
+    // A control's rendered value must be the aggregate state, not the primary object's value.
+    // The projection pins all three states separately: the row carries `mixed`, and the token
+    // the UI prints for a mixed field is its own string, so it cannot be mistaken for a value.
+    let project = |properties: Vec<SelectionProperty>| {
+        properties
+            .iter()
+            .map(|property| {
+                let state = match property.value {
+                    SelectionValue::Uniform(_) => "",
+                    SelectionValue::Mixed(_) => "mixed",
+                    SelectionValue::Absent => "absent",
+                };
+                (property.effect_id.clone(), state)
+            })
+            .collect::<Vec<_>>()
+    };
+    let properties = vec![
+        SelectionProperty {
+            effect_id: "rect".into(),
+            param: Some("count".into()),
+            value: SelectionValue::Uniform(serde_json::json!(5)),
+            editable_objects: 3,
+        },
+        SelectionProperty {
+            effect_id: "blur".into(),
+            param: Some("size".into()),
+            value: SelectionValue::Mixed(serde_json::json!(3)),
+            editable_objects: 2,
+        },
+    ];
+    assert_eq!(
+        project(properties),
+        vec![("rect".to_owned(), ""), ("blur".to_owned(), "mixed")]
+    );
+    // Absent is not a value and never an editable row.
+    let absent = SelectionProperty {
+        effect_id: "mosaic".into(),
+        param: Some("size".into()),
+        value: SelectionValue::Absent,
+        editable_objects: 0,
+    };
+    assert_eq!(project(vec![absent]), vec![("mosaic".to_owned(), "absent")]);
+}
+
+#[test]
+fn a_recovery_failure_reaches_the_status_line_once_per_distinct_failure() {
+    // Nothing to report keeps the status line alone.
+    assert_eq!(crate::lifecycle::recovery_failure_status(&[]), "");
+
+    let one = vec!["Operation not permitted (os error 1)".to_owned()];
+    let text = crate::lifecycle::recovery_failure_status(&one);
+    assert!(
+        text.contains("Operation not permitted (os error 1)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("(+"),
+        "a single failure has no count: {text}"
+    );
+
+    let many = vec![
+        "Operation not permitted (os error 1)".to_owned(),
+        "No space left on device (os error 28)".to_owned(),
+    ];
+    let text = crate::lifecycle::recovery_failure_status(&many);
+    assert!(text.starts_with("Project recovery failed"), "{text}");
+    // The status line has room for the first failure; the rest are counted, and
+    // the recovery window still lists every one of them.
+    assert!(text.contains("Operation not permitted"), "{text}");
+    assert!(
+        text.ends_with("(+1)"),
+        "the extra failures are counted: {text}"
+    );
+
+    // The short status text cannot stand in for the failure list: a second
+    // failure that changes under the same count reads the same in the status
+    // line, which is why the loop compares the list and the recovery window is
+    // refreshed from it.
+    let changed_second = vec![
+        "Operation not permitted (os error 1)".to_owned(),
+        "Input/output error (os error 5)".to_owned(),
+    ];
+    assert_eq!(
+        crate::lifecycle::recovery_failure_status(&changed_second),
+        text
+    );
+    assert_ne!(changed_second, many);
+}
+
+/// The timeline menu bar supplies `MenuItem.shortcut`, so an accelerator that
+/// stays armed while a text field or a layer dialog owns the keyboard turns
+/// Ctrl/Cmd+Z into a project undo behind the user's cursor.
+#[test]
+fn timeline_accelerators_step_aside_for_every_keyboard_owner() {
+    let source = include_str!("../ui/timeline.slint");
+    let start = source
+        .find("private property <bool> menu-accelerators-enabled:")
+        .expect("the timeline declares the accelerator gate");
+    let expression = &source[start..start + source[start..].find(';').expect("closed expression")];
+    for owner in [
+        "context-search-visible",
+        "object-picker-visible",
+        "insert-layers-visible",
+        "shift-layers-visible",
+        "zoom-field.has-focus",
+    ] {
+        assert!(
+            expression.contains(owner),
+            "the accelerator gate ignores {owner}: {expression}"
+        );
+    }
+}
+
+#[test]
+fn the_status_bar_speaks_the_interface_language() {
+    use crate::localization::{CURRENT_UI_LANGUAGE, UiLanguage, status_line};
+
+    let message = freya_nle_app::status_message!(
+        "Layer {} is locked",
+        "图层 {} 已锁定",
+        "レイヤー {} はロックされています",
+        3
+    );
+    let rendered = |language: UiLanguage| {
+        CURRENT_UI_LANGUAGE.with(|current| current.set(language));
+        status_line("unused", Some(&message)).to_string()
+    };
+
+    assert_eq!(rendered(UiLanguage::English), "Layer 3 is locked");
+    assert_eq!(rendered(UiLanguage::SimplifiedChinese), "图层 3 已锁定");
+    assert_eq!(
+        rendered(UiLanguage::Japanese),
+        "レイヤー {} はロックされています".replace("{}", "3")
+    );
+    // Text the application layer could not compose - a core error, a path - is
+    // shown as it arrived rather than dropped.
+    assert_eq!(
+        status_line("Operation not permitted", None),
+        "Operation not permitted"
+    );
+
+    CURRENT_UI_LANGUAGE.with(|current| current.set(UiLanguage::English));
+}
+
+#[test]
+fn the_command_line_opens_a_project_and_explains_itself() {
+    use crate::gpu::{ParsedLaunch, parse_launch_args};
+
+    let parse =
+        |arguments: &[&str]| parse_launch_args(arguments.iter().map(|value| value.to_string()));
+
+    // A file manager launches the bundle with the project as the only argument.
+    let ParsedLaunch::Run(options) = parse(&["/tmp/demo.aviqtl"]).expect("a path parses") else {
+        panic!("a path should run the application");
+    };
+    assert_eq!(
+        options.project_path.as_deref(),
+        Some(std::path::Path::new("/tmp/demo.aviqtl"))
+    );
+    assert_eq!(options.validation_frames, None);
+
+    // --help and --version print instead of launching.
+    let ParsedLaunch::Help(help) = parse(&["--help"]).expect("--help parses") else {
+        panic!("--help should not launch");
+    };
+    assert!(help.contains("Usage:"), "{help}");
+    assert!(help.contains("--validate-gpu"), "{help}");
+    let ParsedLaunch::Help(version) = parse(&["--version"]).expect("--version parses") else {
+        panic!("--version should not launch");
+    };
+    assert!(version.contains(env!("CARGO_PKG_VERSION")), "{version}");
+
+    // The validation gate keeps working, and two projects are refused rather than
+    // one of them being silently dropped.
+    let ParsedLaunch::Run(options) = parse(&["--validate-gpu", "--frames", "30"]).expect("parses")
+    else {
+        panic!("the gate runs the application");
+    };
+    assert_eq!(options.validation_frames, Some(30));
+    let error = parse(&["/tmp/a.aviqtl", "/tmp/b.aviqtl"]).expect_err("two projects are refused");
+    assert!(error.contains("only one project"), "{error}");
+    let error = parse(&["--nope"]).expect_err("an unknown option is refused");
+    assert!(error.contains("unknown argument: --nope"), "{error}");
+    assert!(
+        error.contains("Usage:"),
+        "the refusal repeats the usage: {error}"
+    );
+}

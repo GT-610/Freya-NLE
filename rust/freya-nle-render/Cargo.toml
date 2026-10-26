@@ -1,0 +1,18 @@
+[package]
+name = "freya-nle-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+freya-nle-media = { path = "../freya-nle-media" }
+freya-nle-core = { path = "../freya-nle-core" }
+fontdb = { version = "0.23.0", default-features = false, features = ["fs"] }
+naga = { version = "29.0.4", features = ["wgsl-in"] }
+rustybuzz = "0.20.1"
+tiny-skia = { version = "0.12.0", default-features = false, features = ["simd", "std"] }
+wgpu = { version = "29.0.1", default-features = false, features = ["std", "wgsl"] }
+
+[lints.rust]
+unsafe_code = "forbid"
