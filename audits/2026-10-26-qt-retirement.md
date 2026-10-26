@@ -87,56 +87,66 @@ None of them needs the Qt source to be reimplemented.
   package contract and QML packages are rejected by name at installation. This was
   already true before the retirement and is documented in `docs/docs/developer/effects.md`.
 
+## Filled after the removal
+
+These were recorded as gaps by the audit and are implemented on the same branch:
+
+- **Lua expression parameters.** A parameter stored as a string beginning with `=`
+  is evaluated as Lua with `time` (seconds from the object start), `t`, `index`,
+  `value`, and `v` in scope (`freya-nle-core/src/expression.rs`). The evaluator is
+  a lazy, per-thread Lua state with compiled-expression caching and an instruction
+  budget, and the bake plan applies it over the keyframe value for every parameter
+  it hands to the renderer, the exporter, and the audio planner
+  (`freya-nle-core/src/bake_plan.rs`, `CachedEffect::expression_value`). A broken
+  expression keeps the literal fallback instead of zeroing the parameter.
+- **Text justification.** `Text.AlignJustify` now distributes the leftover width
+  over the word gaps of every line except the last one
+  (`freya-nle-render/src/text.rs`, `justified_glyphs`).
+- **Validation messages follow the interface language.** The object-settings
+  number, integer, and non-text errors are composed with `status_message!` and
+  rendered through the same localization path as the status bar.
+- **The application calls itself Freya NLE everywhere.** `--version`, the usage
+  text, the missing-GPU message, the error-dialog title, the update notice, and
+  the About window's project link no longer say "AviQtl Plus" or open the
+  upstream Qt project's page; the link now matches the URL the About window
+  displays.
+
 ## Still open
 
 Ordered roughly by user impact. Each is Rust-side work; the Qt implementation that
 documented the behavior is in git history.
 
-1. **Lua expression parameters.** Qt evaluated a parameter whose string value starts with
-   `=` as Lua with `time`, `index`, `value`, and `v` bound
-   (`core/include/effect_model.hpp:266-273,306-312`, `scripting/lua_host.cpp:97-125`).
-   No Rust path evaluates expressions; such a parameter is read as a literal string, so a
-   project that relies on one renders a frozen value. Implementing this needs a
-   thread-local, cached Lua VM in the bake plan plus expression-aware parameter reads.
-2. **Hardware video decode and encode.** Qt probed cuda/vaapi/d3d11va/dxva2/videotoolbox
+1. **Hardware video decode and encode.** Qt probed cuda/vaapi/d3d11va/dxva2/videotoolbox
    and created device contexts and hardware frame pools
    (`core/src/video_decoder.cpp:183-206`, `core/src/video_encoder.cpp:233-342`). The
-   Rust media path decodes in software (`freya-nle-media/src/lib.rs:447-471`) and lists
-   hardware encoder names but only builds software frames
-   (`freya-nle-media/src/encoder.rs:19-34,493-498`). Preview and export still work;
-   high-bitrate footage and hardware-accelerated export do not. Until this lands, the
-   hardware encoder names should either be implemented or hidden so an export option is
-   never offered that cannot run.
-3. **Compute-shader effects.** Qt's `ComputeEffect` exposed work-group sizes and extra
+   Rust media path decodes in software (`freya-nle-media/src/lib.rs:447-471`) and the
+   encoder opens a hardware encoder by name but only uploads software pixel formats
+   (`freya-nle-media/src/encoder.rs:19-34,493-498`). That works for encoders that accept
+   software frames and fails for the ones that need a hardware frames context (VAAPI);
+   `h264_videotoolbox`/`hevc_videotoolbox` are not in the catalog at all. Preview and
+   export still work in software.
+2. **Compute-shader effects.** Qt's `ComputeEffect` exposed work-group sizes and extra
    input textures (`core/src/compute_effect.cpp:54,94,189`) and 10 shipped `.comp`
    shaders used them. The native package contract allows one fragment pass, up to 16
    `vec4` uniforms, and no extra textures (`freya-nle-render/src/lib.rs:91-134`). The
    built-in effects have wgpu equivalents, but third-party compute packages cannot be
    authored.
-4. **Text justification.** Alignment value 8 maps to `TextAlignment::Justify`
-   (`freya-nle-core/src/bake_plan.rs:1417-1421`) and rasterizes left-aligned
-   (`freya-nle-render/src/text.rs:462`).
-5. **Unrouted catalog entries.** A definition that passes metadata validation but has no
+3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
    render route is listed and then renders nothing. The built-in catalog is covered by
-   tests; a third-party native package with a valid WGSL runtime is rendered by the
-   native path, so this is a diagnostics gap rather than a rendering one.
-6. **SF2/SFZ soundfont discovery.** Qt's format table scanned them
+   tests and third-party native packages take the native render path, so this is a
+   diagnostics gap rather than a rendering one.
+4. **SF2/SFZ soundfont discovery.** Qt's format table scanned them
    (`engine/plugin/audio_plugin_manager.cpp:371-375`); the Carla mapping omits them
-   (`freya-nle-carla/src/lib.rs:550-559`). Qt could list but not host them, so the impact
-   is the browser listing only.
-7. **Camera `layerCount` timeline affordance.** The parameter is read for GroupControl
-   but not for camera clips, so the timeline curtain Qt drew for a camera layer range is
-   absent.
-8. **Qt-era user-facing validation strings** in `freya-nle-app/src/object_settings.rs`
-   are still Japanese while the rest of the interface follows the selected language.
-9. **The C ABI and its contract check.** 141 exports across 21 modules and
+   (`freya-nle-carla/src/lib.rs:550-559`). Qt could list but not host them, so the
+   impact is the browser listing only.
+5. **The C ABI and its contract check.** 141 exports across 21 modules and
    `freya-nle-core/include/rust_core_abi.hpp` have no consumer left in the tree. Retiring
    them touches every module's state handles and status codes, so it is a separate
    change; `tests/check_rust_abi.py` keeps the header and the exports in sync meanwhile.
-10. **Documentation site.** `docs/` is a separate repository (`docs/docs/developer/
-    building.md`, `docs/docs/zh-CN/developer/building.md`) and still documents
-    `--frontend qt`, CMake, and the C ABI as a build requirement. That repository needs
-    its own update.
+6. **Documentation site.** `docs/` is a separate repository
+   (`docs/docs/developer/building.md`, `docs/docs/zh-CN/developer/building.md`) and still
+   documents `--frontend qt`, CMake, and the C ABI as a build requirement. That
+   repository needs its own update.
 
 ## Verification
 

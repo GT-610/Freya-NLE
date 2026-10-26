@@ -48,6 +48,11 @@ All notable changes to Freya NLE are documented in this file.
   retiring them is a follow-up change
 
 ### Added
+- AviUtl-style expression parameters work again. A parameter stored as a string
+  beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
+  the keyframe `value` in scope, in the preview, the export, and the audio plan
+  alike. A broken expression keeps the keyframe value instead of zeroing the
+  parameter
 - Lua plugins keep the conveniences they had under the Qt frontend: LuaJIT's
   signed `bit` library (`tobit`, `bswap`, and `tohex` included), the flat
   `aviqtl_*` function spellings next to the `aviqtl.*` tables, and `print`
@@ -57,6 +62,15 @@ All notable changes to Freya NLE are documented in this file.
   them, matching the bound the Qt frontend applied
 
 ### Fixed
+- Justified text is justified: `Text.AlignJustify` distributes the leftover
+  width over the word gaps of every line except the last one instead of drawing
+  the paragraph left-aligned
+- The object-settings validation errors for integers, numbers, and non-text
+  controls follow the interface language instead of always speaking Japanese
+- The application calls itself Freya NLE in the `--version` output, the usage
+  text, the missing-GPU message, the error-dialog title, the update notice, and
+  the About window, which now opens the project page it displays instead of the
+  upstream Qt project's page
 - An object whose `transform` effect omits a parameter - `scale`, `opacity`, a
   rotation - keeps AviUtl's value for it instead of falling to zero. A transform
   that carried only its offsets used to draw the object at scale 0, so a project
