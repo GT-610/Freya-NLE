@@ -307,16 +307,30 @@ pub(crate) fn validate_native_package_directory(
         let bytes = read_bounded(&path, MAX_EFFECT_DEFINITION_BYTES)
             .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
         let document = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
-        let declares_render_entry = document
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|document| {
-                document.contains_key("runtime")
-                    || document
-                        .get("kind")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|kind| matches!(kind, "effect" | "object"))
-            });
+        let document = document.as_ref().and_then(serde_json::Value::as_object);
+        // A definition that names a QML component is a legacy Qt entry. The
+        // Slint edition cannot run QML, so it is reported by name instead of
+        // landing in the catalog as an entry that never renders.
+        if document
+            .and_then(|document| document.get("qml"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|qml| !qml.is_empty())
+        {
+            let id = document
+                .and_then(|document| document.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("package entry");
+            return Err(format!(
+                "Native package entry {id} declares a QML component and does not declare aviqtl-wgsl-v1."
+            ));
+        }
+        let declares_render_entry = document.is_some_and(|document| {
+            document.contains_key("runtime")
+                || document
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| matches!(kind, "effect" | "object"))
+        });
         let Some(entry) = parse_effect_metadata(&bytes) else {
             if declares_render_entry {
                 return Err(format!(

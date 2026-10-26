@@ -633,7 +633,7 @@ mod tests {
 
     fn test_rasterizer() -> TextRasterizer {
         let mut database = Database::new();
-        database.load_font_data(include_bytes!("../../../ui/resources/remixicon.ttf").to_vec());
+        database.load_font_data(include_bytes!("../../../assets/remixicon.ttf").to_vec());
         TextRasterizer { database }
     }
 

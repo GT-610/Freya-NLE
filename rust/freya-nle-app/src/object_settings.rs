@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn controls_preserve_metadata_order_types_options_and_ranges() {
         let metadata =
-            parse_effect_metadata(include_bytes!("../../../ui/qml/effects/transform.json"))
+            parse_effect_metadata(include_bytes!("../../../catalog/effects/transform.json"))
                 .expect("transform metadata");
         let effect = EffectDocument {
             id: "transform".to_owned(),
@@ -847,7 +847,7 @@ mod tests {
     #[test]
     fn scene_combo_is_resolved_from_the_live_document() {
         let metadata =
-            parse_effect_metadata(include_bytes!("../../../ui/qml/objects/SceneObject.json"))
+            parse_effect_metadata(include_bytes!("../../../catalog/objects/SceneObject.json"))
                 .expect("scene metadata");
         let effect = EffectDocument {
             id: "scene".to_owned(),

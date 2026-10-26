@@ -600,7 +600,7 @@ mod tests {
         };
         let samples = [0.1, 0.25, 0.5, 0.75, 0.9];
         let custom_points = [0.1, 0.2, 0.4, 0.5, 0.6, 0.7, 0.7, 0.8, 0.9, 0.95, 1.0, 1.0];
-        let golden = include_str!("../../../tests/data/keyframe_easing_cpp_golden.txt");
+        let golden = include_str!("../tests/fixtures/keyframe_easing_golden.txt");
         let mut case_count = 0;
         for line in golden
             .lines()

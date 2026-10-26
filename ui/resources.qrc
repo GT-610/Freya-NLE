@@ -3,6 +3,6 @@
   <qresource prefix="/">
     <file alias="assets/icon.svg">../assets/icon.svg</file>
     <file alias="assets/splash.svg">../assets/splash.svg</file>
-    <file>resources/remixicon.ttf</file>
+    <file alias="resources/remixicon.ttf">../assets/remixicon.ttf</file>
   </qresource>
 </RCC>

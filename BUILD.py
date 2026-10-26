@@ -136,8 +136,8 @@ class Logger:
 
 class PlatformBuilder:
     RESOURCE_DIRECTORIES: ClassVar[tuple[tuple[str, ...], ...]] = (
-        ("ui", "qml", "effects"),
-        ("ui", "qml", "objects"),
+        ("catalog", "effects"),
+        ("catalog", "objects"),
         ("plugins",),
         ("effect-packages",),
         ("repos",),

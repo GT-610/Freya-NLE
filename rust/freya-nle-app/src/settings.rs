@@ -244,7 +244,7 @@ pub fn package_paths() -> PackagePaths {
         || std::env::var("AVIQTL_DEV_RESOURCES")
             .is_ok_and(|value| !value.is_empty() && value != "0");
     if dev_resources {
-        add_resource_root(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ui/qml"));
+        add_resource_root(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../catalog"));
         let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source_plugins = source_root.join("plugins");
         if !plugin_roots.contains(&source_plugins) {

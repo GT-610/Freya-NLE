@@ -20,5 +20,5 @@ sys-locale = "0.3.2"
 webbrowser = "1.2.4"
 
 [build-dependencies]
-roxmltree = "0.21.1"
+serde_json = "1.0"
 slint-build = "1.17.1"

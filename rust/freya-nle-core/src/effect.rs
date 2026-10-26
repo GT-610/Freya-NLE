@@ -132,9 +132,16 @@ pub(crate) fn normalize_metadata(input: &[u8]) -> Option<Map<String, Value>> {
         .cloned()?;
     let id = string(metadata.get("id"))?;
     let name = string(metadata.get("name"))?;
-    let has_qml = string(metadata.get("qml")).is_some_and(|qml| !qml.is_empty());
+    // A built-in definition is drawn by the compiled-in renderer and needs no
+    // shader of its own. Everything else must declare a native WGSL runtime;
+    // metadata that only names a QML component is a legacy Qt definition and is
+    // no longer a usable entry.
+    let builtin = metadata
+        .get("builtin")
+        .and_then(Value::as_bool)
+        .is_some_and(|builtin| builtin);
     let runtime = metadata.get("runtime").and_then(normalize_runtime);
-    if id.is_empty() || name.is_empty() || (!has_qml && runtime.is_none()) {
+    if id.is_empty() || name.is_empty() || (!builtin && runtime.is_none()) {
         return None;
     }
     let version = string(metadata.get("version"))?;
@@ -446,7 +453,7 @@ mod tests {
         let input = json!({
             "id": "effect.test",
             "name": "Test",
-            "qml": "Test.qml",
+            "builtin": true,
             "version": "1.2.3",
             "kind": "effect",
             "categories": ["Color", 5],
@@ -463,9 +470,11 @@ mod tests {
     #[test]
     fn metadata_schema_rejects_invalid_versions_kinds_and_controls() {
         for invalid in [
-            json!({"id":"x","name":"x","qml":"x.qml","version":"1.0","kind":"effect","categories":["x"],"ui":{"controls":[]}}),
-            json!({"id":"x","name":"x","qml":"x.qml","version":"1.0.0","kind":"filter","categories":["x"],"ui":{"controls":[]}}),
-            json!({"id":"x","name":"x","qml":"x.qml","version":"1.0.0","kind":"effect","categories":["x"],"ui":{}}),
+            json!({"id":"x","name":"x","builtin":true,"version":"1.0","kind":"effect","categories":["x"],"ui":{"controls":[]}}),
+            json!({"id":"x","name":"x","builtin":true,"version":"1.0.0","kind":"filter","categories":["x"],"ui":{"controls":[]}}),
+            json!({"id":"x","name":"x","builtin":true,"version":"1.0.0","kind":"effect","categories":["x"],"ui":{}}),
+            json!({"id":"x","name":"x","version":"1.0.0","kind":"effect","categories":["x"],"ui":{"controls":[]}}),
+            json!({"id":"x","name":"x","qml":"Legacy.qml","version":"1.0.0","kind":"effect","categories":["x"],"ui":{"controls":[]}}),
         ] {
             assert!(
                 normalize_metadata(
@@ -477,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_schema_accepts_native_wgsl_without_qml() {
+    fn metadata_schema_accepts_native_wgsl_without_a_builtin_marker() {
         let input = json!({
             "id": "effect.native",
             "name": "Native effect",

@@ -885,7 +885,7 @@ mod tests {
             .snapshot()
     }
 
-    fn qt_catalog_entries(directory: &str) -> Vec<(String, BTreeMap<String, Value>)> {
+    fn catalog_entries(directory: &str) -> Vec<(String, BTreeMap<String, Value>)> {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(directory);
@@ -921,7 +921,7 @@ mod tests {
 
     #[test]
     fn every_qt_effect_catalog_entry_has_an_explicit_preview_route() {
-        let entries = qt_catalog_entries("ui/qml/effects");
+        let entries = catalog_entries("catalog/effects");
         assert_eq!(
             entries.len(),
             44,
@@ -1118,7 +1118,7 @@ mod tests {
 
     #[test]
     fn every_qt_object_catalog_entry_reaches_its_production_render_route() {
-        let entries = qt_catalog_entries("ui/qml/objects");
+        let entries = catalog_entries("catalog/objects");
         assert_eq!(
             entries.len(),
             17,

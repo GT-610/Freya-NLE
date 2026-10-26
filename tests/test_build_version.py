@@ -135,8 +135,8 @@ class TestBuildScript(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
             fixtures = {
-                ("ui", "qml", "effects", "blur.json"): "effect",
-                ("ui", "qml", "objects", "scene.json"): "object",
+                ("catalog", "effects", "blur.json"): "effect",
+                ("catalog", "objects", "scene.json"): "object",
                 ("plugins", "example", "main.lua"): "plugin",
                 ("effect-packages", "weather", "manifest.json"): "package",
                 ("repos", "catalog.json"): "repo",
@@ -151,7 +151,14 @@ class TestBuildScript(unittest.TestCase):
             )
             builder.copy_resources(destination)
             for parts, contents in fixtures.items():
-                packaged = destination.joinpath(parts[-2], parts[-1]) if parts[0] == "ui" else destination.joinpath(*parts)
+                # `catalog/effects` and `catalog/objects` are staged as the
+                # bundle-level `effects/` and `objects/` directories the
+                # runtime scans, while the other roots keep their own name.
+                packaged = (
+                    destination.joinpath(parts[-2], parts[-1])
+                    if parts[0] == "catalog"
+                    else destination.joinpath(*parts)
+                )
                 self.assertEqual(packaged.read_text(encoding="utf-8"), contents)
 
     def test_output_cleanup_preserves_the_directory(self):
