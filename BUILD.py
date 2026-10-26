@@ -866,10 +866,10 @@ class XcodeBuilder(PlatformBuilder):
 <plist version="1.0"><dict>
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleExecutable</key><string>freya-nle</string>
-<key>CFBundleIdentifier</key><string>org.aviqtl.AviQtl</string>
+<key>CFBundleIdentifier</key><string>io.github.gt610.freya-nle</string>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-<key>CFBundleName</key><string>AviQtl</string>
-<key>CFBundleDisplayName</key><string>AviQtl</string>
+<key>CFBundleName</key><string>Freya NLE</string>
+<key>CFBundleDisplayName</key><string>Freya NLE</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>{bundle_version}</string>
 <key>CFBundleVersion</key><string>{bundle_version}</string>
@@ -926,7 +926,7 @@ class XcodeBuilder(PlatformBuilder):
         source = self.cargo_binary()
         if not source.is_file():
             raise FileNotFoundError(f"Executable not found: {source}")
-        app = self.config.output_dir / "AviQtl.app"
+        app = self.config.output_dir / "Freya NLE.app"
         contents = app / "Contents"
         macos = contents / "MacOS"
         resources = contents / "Resources"

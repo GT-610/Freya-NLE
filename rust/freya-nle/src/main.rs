@@ -59,7 +59,7 @@ use freya_nle_app::mod_host::ModHost;
 use freya_nle_app::object_settings::keyframe_interpolation_names;
 use freya_nle_app::package_manager::PackageManagerModel;
 use freya_nle_app::preset_store::PresetStore;
-use freya_nle_app::settings::SettingsStore;
+use freya_nle_app::settings::{SettingsStore, migrate_legacy_application_data};
 use freya_nle_app::{ApplicationModel, ProjectSession};
 use freya_nle_export::ExportManager;
 use freya_nle_preview::PreviewSurface;
@@ -71,7 +71,7 @@ use std::time::{Duration, Instant};
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("AviQtl Slint failed: {error}");
+        eprintln!("Freya NLE failed: {error}");
         std::process::exit(1);
     }
 }
@@ -110,6 +110,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .is_some_and(|texture| texture == *preview_surface.texture());
     let preview = Rc::new(RefCell::new(PreviewRuntime::new(preview_surface)));
 
+    migrate_legacy_application_data();
     let (settings_store, settings_status) = SettingsStore::load();
     eprintln!("{settings_status}");
     let settings = Rc::new(RefCell::new(settings_store));

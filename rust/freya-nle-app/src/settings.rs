@@ -106,11 +106,16 @@ impl SettingsStore {
     }
 }
 
+const APPLICATION_DIRECTORY: &str = "Freya NLE";
+const LEGACY_APPLICATION_DIRECTORY: &str = "AviQtl Plus";
+const PORTABLE_SETTINGS_FILE: &str = "freya_settings.json";
+const LEGACY_PORTABLE_SETTINGS_FILE: &str = "aviqtl_settings.json";
+
 fn default_settings_path() -> PathBuf {
     if let Ok(executable) = std::env::current_exe()
         && let Some(directory) = executable.parent()
     {
-        let portable = directory.join("aviqtl_settings.json");
+        let portable = directory.join(PORTABLE_SETTINGS_FILE);
         let portable_writable = fs::metadata(&portable)
             .map(|metadata| !metadata.permissions().readonly())
             .unwrap_or_else(|_| {
@@ -126,30 +131,84 @@ fn default_settings_path() -> PathBuf {
 }
 
 pub fn application_data_root() -> PathBuf {
+    platform_data_root(APPLICATION_DIRECTORY)
+}
+
+fn legacy_application_data_root() -> PathBuf {
+    platform_data_root(LEGACY_APPLICATION_DIRECTORY)
+}
+
+fn platform_data_root(directory: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("AviQtl Plus");
+            .join(directory);
     }
     #[cfg(target_os = "windows")]
     if let Some(local_data) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_data).join("AviQtl Plus");
+        return PathBuf::from(local_data).join(directory);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if let Some(data) = std::env::var_os("XDG_DATA_HOME") {
-            return PathBuf::from(data).join("AviQtl Plus");
+            return PathBuf::from(data).join(directory);
         }
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home)
                 .join(".local")
                 .join("share")
-                .join("AviQtl Plus");
+                .join(directory);
         }
     }
-    std::env::temp_dir().join("AviQtl Plus")
+    std::env::temp_dir().join(directory)
+}
+
+/// Carries settings and recovery snapshots over from the directory the
+/// application used before the rename. Runs once: when the new data directory
+/// already exists there is nothing left to migrate.
+pub fn migrate_legacy_application_data() {
+    migrate_portable_settings();
+    migrate_data_directory();
+}
+
+fn migrate_portable_settings() {
+    let Some(directory) = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+    let portable = directory.join(PORTABLE_SETTINGS_FILE);
+    let legacy = directory.join(LEGACY_PORTABLE_SETTINGS_FILE);
+    if portable.exists() || !legacy.exists() {
+        return;
+    }
+    let _ = fs::rename(&legacy, &portable);
+}
+
+fn migrate_data_directory() {
+    let current = application_data_root();
+    let legacy = legacy_application_data_root();
+    if current.exists() || !legacy.is_dir() {
+        return;
+    }
+    let _ = copy_directory(&legacy, &current);
+}
+
+fn copy_directory(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_directory(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn package_paths() -> PackagePaths {
