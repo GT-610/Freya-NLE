@@ -25,7 +25,7 @@ The Slint frontend is intentionally thin:
   image-sequence output, video/audio encoding, progress, cancellation, and partial-output cleanup.
 - `freya-nle-render`, `freya-nle-media`, `freya-nle-audio`, and `freya-nle-carla` own the lower-level
   renderer, media, audio, and plugin integration.
-- `freya-nle-slint` owns native windows, declarative layout, input hit regions, menus, accessibility,
+- `freya-nle` owns native windows, declarative layout, input hit regions, menus, accessibility,
   and translation between Slint models/callbacks and `freya-nle-app` commands.
 
 Open and Save As use `rfd` platform dialogs. On Linux its default backend is the XDG portal rather
@@ -135,7 +135,7 @@ when moving presentation code so callbacks and translation contexts retain their
   custom pointer surfaces for editor interactions that standard widgets cannot express.
 - Assign explicit geometry to small overlay hit regions such as resize handles; implicit placement
   is not accepted for timeline input surfaces.
-- Treat `QT_UI_PARITY.md` as the acceptance gate. Compile success and a visually plausible mockup do
+- Treat [`../../audits/2026-10-23-slint-ui-parity-gate.md`](../../audits/2026-10-23-slint-ui-parity-gate.md) as the acceptance gate. Compile success and a visually plausible mockup do
   not establish parity.
 
 ## Running
@@ -162,7 +162,7 @@ measured evidence.
 From the `rust` directory:
 
 ```sh
-cargo run -p freya-nle-slint
+cargo run -p freya-nle
 ```
 
 From the repository root, `BUILD.py` builds and packages Slint by default. On Windows with
@@ -173,7 +173,7 @@ python BUILD.py --msvc
 ```
 
 `--frontend qt` selects the retained Qt/CMake development build. See
-[`../MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) for acceptance and retirement criteria.
+[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md#removing-qt) for the criteria that retire it.
 
 Runtime effects, objects, plugins, effect packages, and repository metadata
 are resolved from the shared resource directories during development.
@@ -190,7 +190,7 @@ command line:
 
 ```sh
 SLINT_EMIT_DEBUG_INFO=1 SLINT_MCP_PORT=9315 \
-  cargo run -p freya-nle-slint --features slint/mcp -- \
+  cargo run -p freya-nle --features slint/mcp -- \
   --validate-gpu --frames 100000
 ```
 
@@ -210,7 +210,15 @@ Performance samples must record the active display and refresh rate. Samples tak
 display configurations are not directly comparable. Functional MCP checks may still be compared
 when logical window sizes and scale factors are recorded.
 
-The isolated wgpu 30 renderer and Metal probe is recorded in
-[`WGPU_30_COMPATIBILITY.md`](WGPU_30_COMPATIBILITY.md). The renderer already passes on wgpu 30;
-the production frontend remains on 29 until Slint exposes the same wgpu version for device and
-texture sharing.
+### wgpu 29 baseline
+
+Slint 1.17 exposes `unstable-wgpu-29` and has no wgpu 30 equivalent, so the production frontend
+shares devices and textures on 29 while the renderer, preview, and export crates also build on
+their own against 30.0.1. An isolated probe ran 297 workspace tests plus an offscreen Metal render
+(640x360 readback, checksum `61979074`) on wgpu 30, with strict Clippy clean outside the Slint
+binary. Moving the whole stack over needs `freya-nle-render`, `freya-nle-preview`, and
+`freya-nle-export` to change together with Slint's feature and bridge calls, because
+`BufferSlice::get_mapped_range()` now returns a `Result` and `RequestAdapterOptions` gains
+`apply_limit_buckets`. A hand-written cross-version bridge would add duplicate-device and
+texture-copy complexity for no gain, so 29 stays the production baseline until Slint ships
+matching public types.

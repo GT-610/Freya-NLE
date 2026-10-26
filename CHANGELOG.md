@@ -24,7 +24,7 @@ All notable changes to Freya NLE are documented in this file.
 ### Changed
 - The project is called Freya NLE. Crate names, the binary, the macOS bundle
   identifier, the user data directory, and the window titles follow the new
-  name; `NAMING.md` records the whole mapping. Everything a user already has
+  name. Everything a user already has
   keeps working: an existing data directory and portable settings file are
   carried over on first launch, `.aviqtl` projects and `.aviqtlfrag` fragments
   still open, and scripts written against the `aviqtl` Lua table still run

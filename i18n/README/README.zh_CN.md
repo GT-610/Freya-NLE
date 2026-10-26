@@ -14,7 +14,7 @@
 </p>
 
 > [!NOTE]
-> Freya NLE 在 0.8 之前叫 AviQtl-Plus。旧链接会重定向，`.aviqtl` 项目与 `.aviqtlfrag` 片段仍然可以打开，具体改动见 [NAMING.md](../../NAMING.md)。
+> Freya NLE 在 0.8 之前叫 AviQtl-Plus。旧链接会重定向，`.aviqtl` 项目与 `.aviqtlfrag` 片段仍然可以打开，每一处标识符改动都记在 CHANGELOG 里。
 
 > [!IMPORTANT]
 > Freya NLE 是 [taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl) 的 fork，在上游项目改用 **Rust + Slint + wgpu** 重建后，继续 **Qt Quick + QRhi + ECS** 开发路线。此后前端也已迁往同一方向：**Rust + Slint + wgpu 既是默认构建，也是发布构建**。旧 Qt 前端仍可通过 `python3 BUILD.py --frontend qt` 构建，仅作为行为参照保留。关于完整来龙去脉，请参见[关于项目](https://aviqtl.gt610.dpdns.org/zh-CN/guide/start-here/about)。

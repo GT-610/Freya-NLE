@@ -1,4 +1,4 @@
-# Contributing to AviQtl-Plus
+# Contributing to Freya NLE
 
 Thank you for your interest in contributing!
 
@@ -104,6 +104,26 @@ aviqtl_add_test(
 )
 ```
 
+## Removing Qt
+
+The Qt frontend stays as an executable behavior reference and as a consumer of the Rust C ABI. It
+goes away when these hold:
+
+- The deferred desktop suite passes on each release platform: save and close ordering, window
+  focus, shortcuts and IME, dialogs, timeline and object editing, recovery, settings, package
+  operations, and export cancellation.
+- Preview and export output, hardware audio, and the supported plugin paths are validated, with
+  the unsupported scope written down instead of assumed.
+- Shared metadata, fonts, and translation inputs no longer live under Qt-owned paths.
+- Behavior regressions worth keeping are ported to Rust first. The Qt build switch, CMake targets,
+  QML-only assets, Qt CI, and the remaining C++ sources then leave in one change.
+- The C ABI is audited for consumers before its exports, header, staticlib target, and ABI checks
+  are retired.
+
+The C ABI is the one surface that still spells the old name: `aviqtl_*` functions, `AviQtl*` types,
+and `AVIQTL_*` macros stay as they are until those steps retire them. Renaming both sides of a
+contract that is scheduled for deletion would only mean doing the work twice.
+
 ## Versions and Releases
 
 `rust/Cargo.toml` owns the project version (`[workspace.package] version`); no
@@ -142,7 +162,7 @@ To prepare a release:
 
 ## Reporting Issues
 
-Please report bugs via [GitHub Issues](https://github.com/GT-610/AviQtl-Plus/issues).
+Please report bugs via [GitHub Issues](https://github.com/GT-610/freya-nle/issues).
 
 ## License
 

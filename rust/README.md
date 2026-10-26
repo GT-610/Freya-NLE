@@ -4,9 +4,9 @@ Rust + Slint is the default application built by `BUILD.py`. The workspace conta
 
 | Crate | Responsibility |
 | --- | --- |
-| `freya-nle-core` (`freya-nle-core`) | Domain rules, authoritative timeline state, documents, script runtime, and Qt C ABI |
+| `freya-nle-core` | Domain rules, authoritative timeline state, documents, script runtime, and Qt C ABI |
 | `freya-nle-app` | Application/workspace commands, history, persistence, recovery, catalogs, MOD hosting, and packages |
-| `freya-nle-slint` | Desktop windows, callbacks, and presentation models |
+| `freya-nle` | Desktop windows, callbacks, and presentation models; builds the application binary |
 | `freya-nle-preview` | GUI-neutral frame planning and asynchronous preview decoding |
 | `freya-nle-export` | Export jobs, progress, cancellation, rendering handoff, and output cleanup |
 | `freya-nle-render` | wgpu composition, visual effects, text, and generated objects |
@@ -17,7 +17,7 @@ Rust + Slint is the default application built by `BUILD.py`. The workspace conta
 The Qt/C++ frontend is retained through `BUILD.py --frontend qt` as a behavior reference while
 desktop acceptance is pending. It is not compiled into the default executable. Native FFmpeg,
 Carla, graphics, and audio dependencies are separate from migration of the application's own code.
-See [migration status and Qt retirement criteria](MIGRATION_STATUS.md) and the
+See [Qt retirement criteria](../CONTRIBUTING.md#removing-qt) and the
 [dependency inventory](../audits/2026-09-rust-dependency-boundary.md).
 
 The Rust core is the portable domain foundation of Freya NLE. New validation, normalization,
@@ -75,6 +75,11 @@ load/reset and projection changes that have not yet moved to targeted Rust state
 
 `core/include/rust_core_abi.hpp` is the single raw C ABI surface shared by the C++ application and `freya-nle-core`.
 
+The ABI keeps the pre-rename spelling (`aviqtl_*` functions, `AviQtl*` types, `AVIQTL_*` macros)
+because its only consumer is the Qt frontend that is being removed; see
+[Qt retirement criteria](../CONTRIBUTING.md#removing-qt). The crates, the binary, and the file
+formats use the current name.
+
 - Callers must compare `aviqtl_core_abi_version()` with `AVIQTL_RUST_CORE_ABI_VERSION` before relying on the ABI and may inspect `aviqtl_core_capabilities()` for optional operations.
 - The boundary contains only fixed-layout scalar fields, pointers, and lengths. Qt types never cross it.
 - Every byte and fixed-layout buffer is owned by the caller. The timeline-state API is the sole
@@ -99,4 +104,4 @@ rustup run 1.97.1 cargo clippy --workspace --all-targets -- -D warnings
 
 Changes to the C++ adapters, shared core contracts, or their consumers must also pass the normal
 CMake build and complete CTest suite. Slint-only presentation changes use the Cargo checks and
-the frontend's [behavior acceptance gate](freya-nle-slint/QT_UI_PARITY.md).
+the frontend's [behavior acceptance record](../audits/2026-10-23-slint-ui-parity-gate.md).

@@ -8,7 +8,7 @@ Verification on this host: `cargo check -p aviqtl-slint --all-targets` (clean),
 `cargo fmt --all -- --check` (clean), `cargo test --workspace` (all pass, including a new
 regression test), and a debug `--validate-gpu --frames 100000` run inspected with screenshots and
 synthetic clicks. Native VoiceOver traversal and the deferred GUI suite list in
-[`QT_UI_PARITY.md`](../rust/aviqtl-slint/QT_UI_PARITY.md) still apply.
+[`2026-10-23-slint-ui-parity-gate.md`](../audits/2026-10-23-slint-ui-parity-gate.md) still apply.
 
 Severity: **High** = a Qt workflow is lost or behaves differently; **Medium** = extra steps,
 misleading or unreachable UI; **Low** = cosmetic or wording only.
@@ -111,7 +111,7 @@ misleading or unreachable UI; **Low** = cosmetic or wording only.
   `TimelineView.qml:596-605` only selects the layer and clears the clip selection, so clicking
   empty space jumped playback away from the edit point.
 - `on_empty_clicked` now only calls `select_layer`; the ruler and the skimming strip stay the seek
-  targets. `QT_UI_PARITY.md` already described the Qt behavior, so only this list was stale.
+  targets. `2026-10-23-slint-ui-parity-gate.md` already described the Qt behavior, so only this list was stale.
 
 ---
 

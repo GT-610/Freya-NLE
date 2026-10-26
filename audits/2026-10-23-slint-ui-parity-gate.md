@@ -4,7 +4,7 @@ Qt remains the baseline for project ownership, command meaning, save/close seque
 existing editing behavior. The user-authorized September 2026 workflow changes deliberately
 extend that baseline: Ctrl/Command-click selects layer contents, continuous parameter edits use
 one undo step, text can preview live, and menus, effect selection, and workspace layouts gain
-new controls. See [the implementation status](../../audits/2026-09-24-slint-workflow-implementation.md).
+new controls. See [the implementation status](2026-09-24-slint-workflow-implementation.md).
 
 This is a behavior gate, not a pixel-parity specification. Slint uses the active platform palette,
 standard widgets, and responsive layouts. The historical checklist below does not automatically
@@ -20,13 +20,13 @@ still require the separately scheduled Computer Use suite.
 As of 2026-09-18, this table contains 6 `parity`, 37 `foundation`, and 1 `partial` entries.
 These are acceptance statuses, not percentages of implemented functionality. Module refactoring
 and successful compilation do not promote an entry. Desktop operation is deferred to a separate
-session; see [migration status](../MIGRATION_STATUS.md) for the Qt retirement gates.
+session; see [the Qt retirement criteria](../CONTRIBUTING.md#removing-qt).
 
 ## Desktop acceptance, 2026-10-22
 
 One session on macOS 26 with an Apple M5 (Metal) drove the application with real mouse and
 keyboard events and read back the accessibility tree. The record is in
-[the audit](../../audits/2026-10-22-slint-desktop-acceptance.md).
+[the audit](2026-10-22-slint-desktop-acceptance.md).
 
 Operated successfully: launcher and recovery window, project creation, the native
 文件/编辑/设置/显示/工具 menus in Qt order with their Qt item set, the searchable timeline
@@ -418,7 +418,7 @@ the audio settings window already owns the Qt meter.
   now detects this before wgpu initialization and exits with an explanatory message listing the
   adapters it found, so the failure is reported rather than crashed. This is a deliberate scope
   decision consistent with Premiere, which removed its software-rendering option because it
-  degraded image quality; see [`../../no-gpu-probes/README.md`](../../no-gpu-probes/README.md)
+  degraded image quality; see [`../../no-gpu-probes/README.md`](../no-gpu-probes/README.md)
   for the measured evidence behind it.
 
 ## Deferred native GUI suite
