@@ -72,7 +72,7 @@ endfunction()
 add_test(
     NAME rust_abi_contract
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check_rust_abi.py
-            --rust-src ${CMAKE_SOURCE_DIR}/rust/aviqtl-core/src
+            --rust-src ${CMAKE_SOURCE_DIR}/rust/freya-nle-core/src
             --header ${CMAKE_SOURCE_DIR}/core/include/rust_core_abi.hpp
 )
 add_test(
