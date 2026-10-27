@@ -121,11 +121,18 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 Compute hosts provide `aviqtl_size()`, `aviqtl_pixel(coord)` (a bounds-checked
 read that returns transparent black outside the layer), `aviqtl_uv(coord)`,
-`aviqtl_parameter(index)`, and `aviqtl_write(coord, color)` (clamped, dropped
-outside the layer). There is no sampler in compute mode, so sample neighbors
-with explicit coordinates instead of `aviqtl_sample`. A shader whose
-`@workgroup_size` differs from the metadata `workgroup` is rejected, and the
-dispatch needs the `rgba8unorm` layer format the preview and export use.
+`aviqtl_parameter(index)`, `aviqtl_pass()`, and `aviqtl_write(coord, color)`
+(clamped, dropped outside the layer). There is no sampler in compute mode, so
+sample neighbors with explicit coordinates instead of `aviqtl_sample`.
+
+Adding `"dispatch": n` (1–8, default 1) runs the shader `n` times over its own
+previous output, which is how a separable blur or a glow spread is written;
+`aviqtl_pass()` returns the current index. Intermediate results stay in
+`rgba8unorm` ping-pong targets and only the last dispatch reaches the layer.
+
+A shader whose `@workgroup_size` differs from the metadata `workgroup` is
+rejected, and compute dispatch needs the `rgba8unorm` layer format the preview
+and export use.
 
 ## Testing a package
 

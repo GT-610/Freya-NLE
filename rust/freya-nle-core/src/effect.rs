@@ -45,6 +45,14 @@ fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
         Some("compute") => Some("compute"),
         Some(_) => return None,
     };
+    let dispatch = match runtime.get("dispatch").and_then(Value::as_u64) {
+        None => 1,
+        Some(value) if (1..=8).contains(&value) => u32::try_from(value).ok()?,
+        Some(_) => return None,
+    };
+    if runtime.get("dispatch").is_some() && mode.is_none() {
+        return None;
+    }
     let workgroup = runtime.get("workgroup").and_then(Value::as_array);
     if workgroup.is_some() && mode.is_none() {
         return None;
@@ -110,6 +118,7 @@ fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
             "workgroup".to_owned(),
             Value::Array(vec![Value::from(workgroup[0]), Value::from(workgroup[1])]),
         );
+        normalized.insert("dispatch".to_owned(), Value::from(dispatch));
     }
     Some(normalized)
 }
@@ -299,6 +308,21 @@ mod tests {
         .expect("valid compute metadata");
         assert_eq!(normalized["runtime"]["mode"], "compute");
         assert_eq!(normalized["runtime"]["workgroup"], json!([16, 4]));
+        assert_eq!(normalized["runtime"]["dispatch"], json!(1));
+
+        let multi_pass = normalize_metadata(
+            &serde_json::to_vec(&native(json!({
+                "engine": "aviqtl-wgsl-v1",
+                "shader": "shaders/blur.wgsl",
+                "mode": "compute",
+                "workgroup": [8, 8],
+                "dispatch": 2,
+                "uniforms": []
+            })))
+            .expect("serialize metadata fixture"),
+        )
+        .expect("valid multi-dispatch metadata");
+        assert_eq!(multi_pass["runtime"]["dispatch"], json!(2));
 
         // The dispatch shape defaults to one warp tile per axis.
         let defaulted = normalize_metadata(
@@ -343,6 +367,15 @@ mod tests {
             ),
             native(
                 json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","workgroup":[8,8,1],"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","dispatch":2,"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","dispatch":0,"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","dispatch":9,"uniforms":[]}),
             ),
         ] {
             assert!(

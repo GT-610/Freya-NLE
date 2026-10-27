@@ -1274,7 +1274,10 @@ mod tests {
             shader_source: std::sync::Arc::from(
                 "@compute @workgroup_size(16, 8, 1) fn aviqtl_main() {}",
             ),
-            mode: freya_nle_render::NativeEffectMode::Compute { workgroup: [16, 8] },
+            mode: freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [16, 8],
+                dispatch: 1,
+            },
         }]);
 
         let planned = planner
@@ -1293,7 +1296,10 @@ mod tests {
         };
         assert_eq!(
             *mode,
-            freya_nle_render::NativeEffectMode::Compute { workgroup: [16, 8] }
+            freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [16, 8],
+                dispatch: 1,
+            }
         );
         assert_eq!(parameters[0], [0.5, 0.0, 0.0, 0.0]);
     }

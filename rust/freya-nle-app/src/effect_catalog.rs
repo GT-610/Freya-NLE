@@ -259,7 +259,10 @@ fn load_native_definition(
     let shader_source =
         String::from_utf8(read_bounded(&shader_path, MAX_NATIVE_SHADER_BYTES).ok()?).ok()?;
     let mode = match runtime.workgroup {
-        Some(workgroup) => NativeEffectMode::Compute { workgroup },
+        Some(workgroup) => NativeEffectMode::Compute {
+            workgroup,
+            dispatch: runtime.dispatch.max(1),
+        },
         None => NativeEffectMode::Fragment,
     };
     validate_native_shader(&shader_source, mode).ok()?;
@@ -641,7 +644,10 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
             .expect("compute effect loads");
         assert_eq!(
             definition.mode,
-            freya_nle_render::NativeEffectMode::Compute { workgroup: [16, 8] }
+            freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [16, 8],
+                dispatch: 1,
+            }
         );
 
         // The metadata dispatch shape must match the shader declaration, both at

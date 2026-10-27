@@ -145,10 +145,12 @@ documented the behavior is in git history.
    `"mode": "compute"` with a `workgroup` tile: the host binds the layer texture, the
    parameter block and an `rgba8unorm` output storage texture, dispatches one compute pass
    per effect, and rejects metadata whose tile does not match the shader's
-   `@workgroup_size`. The source-level validator accepted either contract so installation
-   still works before metadata is paired. What is not carried over yet is the rest of Qt's
-   contract: extra input textures (`syncExtraTextures`) and multi-dispatch ping-pong, which
-   need preview-side routing of additional textures before they mean anything.
+   `@workgroup_size`. `"dispatch": n` (1–8) chains the shader over its own output with
+   `aviqtl_pass()`, matching Qt's `dispatchCount`/`passIndex` ping-pong. The source-level
+   validator accepted either contract so installation still works before metadata is
+   paired. What is not carried over is the rest of Qt's contract: extra input textures
+   (`syncExtraTextures`), which need preview-side routing of additional textures before
+   they mean anything.
 3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
    render route is listed and then renders nothing. The preview planner now reports an
    effect id without a renderer, and an object clip type that is not in the catalog the

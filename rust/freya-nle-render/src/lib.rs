@@ -89,6 +89,10 @@ fn aviqtl_size() -> vec2<u32> {
     return textureDimensions(aviqtl_output_texture);
 }
 
+fn aviqtl_pass() -> u32 {
+    return u32(aviqtl_parameters.header.y);
+}
+
 fn aviqtl_pixel(coord: vec2<i32>) -> vec4<f32> {
     let size = vec2<i32>(aviqtl_size());
     if coord.x < 0 || coord.y < 0 || coord.x >= size.x || coord.y >= size.y {
@@ -220,7 +224,7 @@ pub fn validate_native_shader(source: &str, mode: NativeEffectMode) -> Result<()
             }
             validate_module(&module)
         }
-        NativeEffectMode::Compute { workgroup } => {
+        NativeEffectMode::Compute { workgroup, .. } => {
             let combined = native_compute_module_source(source);
             let module = parse_native_module(&combined)?;
             validate_bindings(&module, mode)?;
@@ -244,7 +248,13 @@ pub fn validate_native_shader_source(source: &str) -> Result<(), String> {
             }
             let combined = native_compute_module_source(source);
             let module = parse_native_module(&combined)?;
-            validate_bindings(&module, NativeEffectMode::Compute { workgroup: [8, 8] })?;
+            validate_bindings(
+                &module,
+                NativeEffectMode::Compute {
+                    workgroup: [8, 8],
+                    dispatch: 1,
+                },
+            )?;
             let Some(entry) = module
                 .entry_points
                 .iter()
@@ -2601,10 +2611,35 @@ fn create_native_compute_pipeline(
     })
 }
 
+struct ComputeDispatch {
+    bind_group: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
+    values: Vec<f32>,
+}
+
 struct ComputeEffectPass {
     pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
     workgroup: [u32; 2],
+    dispatches: Vec<ComputeDispatch>,
+    // Ping-pong targets for all but the final dispatch.
+    _textures: Vec<wgpu::Texture>,
+}
+
+fn ping_pong_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("freya-nle-native-compute-ping-pong"),
+        size: wgpu::Extent3d {
+            width: size.0.max(1),
+            height: size.1.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
 }
 
 impl GpuEffectPasses {
@@ -2687,7 +2722,10 @@ impl GpuEffectPasses {
             let effect = &effects[pass_plan.effect_index];
             let compute_mode = effect.native_mode().and_then(|mode| match mode {
                 NativeEffectMode::Fragment => None,
-                NativeEffectMode::Compute { workgroup } => Some(workgroup),
+                NativeEffectMode::Compute {
+                    workgroup,
+                    dispatch,
+                } => Some((workgroup, dispatch.max(1))),
             });
             native_pipelines.push(match (compute_mode, effect.native_shader()) {
                 (None, Some(source)) => Some(create_native_effect_pipeline(
@@ -2698,41 +2736,83 @@ impl GpuEffectPasses {
                 )),
                 _ => None,
             });
-            let compute_pass = compute_mode
-                .filter(|_| compute_supported)
-                .and_then(|workgroup| {
-                    let source = effect.native_shader()?;
-                    let pipeline =
-                        create_native_compute_pipeline(gpu.device, gpu.compute_layout, source);
-                    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("freya-nle-native-compute-bind-group"),
-                        layout: gpu.compute_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(input_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 4,
-                                resource: uniforms
-                                    .last()
-                                    .expect("the effect uniform was inserted above")
-                                    .as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 5,
-                                resource: wgpu::BindingResource::TextureView(
-                                    &views[pass_plan.destination],
-                                ),
-                            },
-                        ],
+            let compute_pass =
+                compute_mode
+                    .filter(|_| compute_supported)
+                    .and_then(|(workgroup, dispatch)| {
+                        let source = effect.native_shader()?;
+                        let pipeline =
+                            create_native_compute_pipeline(gpu.device, gpu.compute_layout, source);
+                        let intermediates = dispatch.saturating_sub(1) as usize;
+                        let ping_pong = (0..intermediates.min(2))
+                            .map(|_| ping_pong_texture(gpu.device, size))
+                            .collect::<Vec<_>>();
+                        let ping_views = ping_pong
+                            .iter()
+                            .map(|texture| {
+                                texture.create_view(&wgpu::TextureViewDescriptor::default())
+                            })
+                            .collect::<Vec<_>>();
+                        let base = encode_effect_pass(effect, pass_plan.pass_index);
+                        let dispatches = (0..dispatch as usize)
+                            .map(|index| {
+                                let source_view = if index == 0 {
+                                    input_view
+                                } else {
+                                    &ping_views[(index - 1) % ping_views.len()]
+                                };
+                                let target_view = if index + 1 == dispatch as usize {
+                                    &views[pass_plan.destination]
+                                } else {
+                                    &ping_views[index % ping_views.len()]
+                                };
+                                let mut values = base.clone();
+                                values[1] = index as f32;
+                                let uniform = gpu.device.create_buffer_init(
+                                    &wgpu::util::BufferInitDescriptor {
+                                        label: Some("freya-nle-native-compute-uniform"),
+                                        contents: &f32_slice_bytes(&values),
+                                        usage: wgpu::BufferUsages::STORAGE
+                                            | wgpu::BufferUsages::COPY_DST,
+                                    },
+                                );
+                                let bind_group =
+                                    gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                        label: Some("freya-nle-native-compute-bind-group"),
+                                        layout: gpu.compute_layout,
+                                        entries: &[
+                                            wgpu::BindGroupEntry {
+                                                binding: 0,
+                                                resource: wgpu::BindingResource::TextureView(
+                                                    source_view,
+                                                ),
+                                            },
+                                            wgpu::BindGroupEntry {
+                                                binding: 4,
+                                                resource: uniform.as_entire_binding(),
+                                            },
+                                            wgpu::BindGroupEntry {
+                                                binding: 5,
+                                                resource: wgpu::BindingResource::TextureView(
+                                                    target_view,
+                                                ),
+                                            },
+                                        ],
+                                    });
+                                ComputeDispatch {
+                                    bind_group,
+                                    uniform,
+                                    values,
+                                }
+                            })
+                            .collect();
+                        Some(ComputeEffectPass {
+                            pipeline,
+                            workgroup,
+                            dispatches,
+                            _textures: ping_pong,
+                        })
                     });
-                    Some(ComputeEffectPass {
-                        pipeline,
-                        bind_group,
-                        workgroup,
-                    })
-                });
             compute_passes.push(compute_pass);
             destinations.push(pass_plan.destination);
         }
@@ -2764,6 +2844,19 @@ impl GpuEffectPasses {
             for pass_index in 0..effect.pass_count() {
                 let values = encode_effect_pass(effect, pass_index);
                 queue.write_buffer(&self.uniforms[uniform_index], 0, &f32_slice_bytes(&values));
+                if let Some(compute) = self
+                    .compute_passes
+                    .get(uniform_index)
+                    .and_then(Option::as_ref)
+                {
+                    for dispatch in &compute.dispatches {
+                        queue.write_buffer(
+                            &dispatch.uniform,
+                            0,
+                            &f32_slice_bytes(&dispatch.values),
+                        );
+                    }
+                }
                 uniform_index += 1;
             }
         }
@@ -2799,12 +2892,14 @@ impl GpuEffectPasses {
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&compute.pipeline);
-                pass.set_bind_group(0, &compute.bind_group, &[]);
-                pass.dispatch_workgroups(
-                    self.size.0.div_ceil(compute.workgroup[0]).max(1),
-                    self.size.1.div_ceil(compute.workgroup[1]).max(1),
-                    1,
-                );
+                for dispatch in &compute.dispatches {
+                    pass.set_bind_group(0, &dispatch.bind_group, &[]);
+                    pass.dispatch_workgroups(
+                        self.size.0.div_ceil(compute.workgroup[0]).max(1),
+                        self.size.1.div_ceil(compute.workgroup[1]).max(1),
+                        1,
+                    );
+                }
                 continue;
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3753,11 +3848,21 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
     aviqtl_write(coord, mix(color, vec4<f32>(1.0), amount));
 }
 "#;
-    let compute = NativeEffectMode::Compute { workgroup: [16, 8] };
+    let compute = NativeEffectMode::Compute {
+        workgroup: [16, 8],
+        dispatch: 1,
+    };
     assert!(validate_native_shader(shader, compute).is_ok());
     // The declared tile must match the metadata.
     assert!(
-        validate_native_shader(shader, NativeEffectMode::Compute { workgroup: [8, 8] }).is_err()
+        validate_native_shader(
+            shader,
+            NativeEffectMode::Compute {
+                workgroup: [8, 8],
+                dispatch: 1,
+            },
+        )
+        .is_err()
     );
     // A fragment effect is not a compute effect and vice versa.
     assert!(validate_native_shader("fn aviqtl_effect() {}", compute).is_err());

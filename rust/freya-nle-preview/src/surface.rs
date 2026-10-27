@@ -454,6 +454,99 @@ mod tests {
     /// The transform carries only its offsets on purpose: a transform that omits
     /// `scale` and `opacity` used to render at scale 0, which made an
     /// object-only project export a flat frame.
+    /// A multi-dispatch package runs over its own previous output: pass 0
+    /// writes green, pass 1 writes blue, so the composed pixel must be blue.
+    #[test]
+    #[ignore = "requires a real GPU adapter"]
+    fn native_compute_effects_chain_multiple_dispatches() {
+        use freya_nle_core::api::TimelineState;
+
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("real GPU adapter");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("GPU device");
+
+        let document = serde_json::json!({
+            "version": 3,
+            "settings": {"width": 64, "height": 64, "fps": 25, "sampleRate": 48000},
+            "scenes": [{
+                "id": 1,
+                "name": "Root",
+                "width": 64,
+                "height": 64,
+                "fps": 25,
+                "duration": 100
+            }],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "rect",
+                "start": 0,
+                "duration": 100,
+                "layer": 0,
+                "effects": [
+                    {"id": "rect", "enabled": true, "params": {"sizeW": 60, "sizeH": 60, "color": "#ff0000", "opacity": 1.0, "shapeType": "polygon", "sides": 4}},
+                    {"id": "effect.compute", "enabled": true, "params": {"amount": 1.0}}
+                ]
+            }]
+        });
+        let bytes = serde_json::to_vec(&document).expect("fixture serializes");
+        let document = TimelineState::from_json(&bytes)
+            .expect("fixture parses")
+            .snapshot();
+
+        let mut planner = crate::scene::PreviewPlanner::new(&document, None);
+        planner.set_native_definitions([freya_nle_render::NativeRenderDefinition {
+            id: "effect.compute".to_owned(),
+            kind: "effect".to_owned(),
+            uniforms: vec!["amount".to_owned()],
+            shader_source: Arc::from(
+                r#"
+@compute @workgroup_size(8, 8, 1)
+fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let coord = vec2<i32>(id.xy);
+    if aviqtl_pass() == 0u {
+        aviqtl_write(coord, vec4<f32>(0.0, 1.0, 0.0, 1.0));
+    } else {
+        aviqtl_write(coord, vec4<f32>(0.0, 0.0, 1.0, 1.0));
+    }
+}
+"#,
+            ),
+            mode: freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [8, 8],
+                dispatch: 2,
+            },
+        }]);
+        let planned = planner.build(&document, 1, 0).expect("compute scene plans");
+
+        let mut decoder = crate::decode::MediaPreview::new(Arc::new(|| {}));
+        decoder.request_fresh(planned.scene);
+        let batch = (0..500)
+            .find_map(|_| {
+                let batch = decoder.poll();
+                if batch.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                batch
+            })
+            .expect("the decode worker returns a batch");
+        assert!(batch.errors.is_empty(), "{:?}", batch.errors);
+
+        let mut surface = PreviewSurface::new(device, queue);
+        surface.compose(&batch.scene, batch.generation);
+        let pixels = surface.read_rgba().expect("preview readback");
+        let center = ((32 * 64 + 32) * 4) as usize;
+        assert!(pixels[center + 2] > 200, "the second dispatch wins");
+        assert!(pixels[center] < 60 && pixels[center + 1] < 60);
+    }
+
     /// A compute package writes into the layer's storage texture; a package
     /// that fills every pixel red must replace the rectangle's green.
     #[test]
@@ -514,7 +607,10 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#,
             ),
-            mode: freya_nle_render::NativeEffectMode::Compute { workgroup: [8, 8] },
+            mode: freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [8, 8],
+                dispatch: 1,
+            },
         }]);
         let planned = planner.build(&document, 1, 0).expect("compute scene plans");
         assert!(matches!(

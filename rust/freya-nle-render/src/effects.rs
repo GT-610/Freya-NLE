@@ -6,15 +6,23 @@ use std::sync::Arc;
 pub enum NativeEffectMode {
     /// One fragment pass per photo tile; the default for `aviqtl-wgsl-v1`.
     Fragment,
-    /// One compute dispatch over the layer texture, tiled by `workgroup`.
-    Compute { workgroup: [u32; 2] },
+    /// Compute dispatches over the layer texture, tiled by `workgroup`.
+    /// `dispatch > 1` chains the shader over its own previous output.
+    Compute { workgroup: [u32; 2], dispatch: u32 },
 }
 
 impl NativeEffectMode {
     pub(crate) fn workgroup(self) -> Option<[u32; 2]> {
         match self {
             Self::Fragment => None,
-            Self::Compute { workgroup } => Some(workgroup),
+            Self::Compute { workgroup, .. } => Some(workgroup),
+        }
+    }
+
+    pub(crate) fn dispatch(self) -> u32 {
+        match self {
+            Self::Fragment => 1,
+            Self::Compute { dispatch, .. } => dispatch.max(1),
         }
     }
 }
@@ -814,9 +822,10 @@ impl VisualEffect {
         let source = self.native_shader()?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
-        self.native_mode()
-            .and_then(NativeEffectMode::workgroup)
-            .hash(&mut hasher);
+        if let Some(mode) = self.native_mode() {
+            mode.workgroup().hash(&mut hasher);
+            mode.dispatch().hash(&mut hasher);
+        }
         Some(hasher.finish())
     }
 }
