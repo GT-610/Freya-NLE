@@ -13,14 +13,12 @@ enum AviQtlCoreCapability : std::uint64_t {
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_DOMAIN = 1ULL << 7,
     AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_DOCUMENT = 1ULL << 10,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_DOCUMENT = 1ULL << 12,
-    AVIQTL_RUST_CORE_CAPABILITY_PLUGIN_DOCUMENT = 1ULL << 15,
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_STATE = 1ULL << 16,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_PLANNING = 1ULL << 17,
     AVIQTL_RUST_CORE_CAPABILITY_PERMISSION_STATE = 1ULL << 18,
     AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_STATE = 1ULL << 19,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_CATALOG_STATE = 1ULL << 20,
     AVIQTL_RUST_CORE_CAPABILITY_EXPORT_PLANNING = 1ULL << 22,
-    AVIQTL_RUST_CORE_CAPABILITY_SCRIPT_PLUGIN_CATALOG_STATE = 1ULL << 24,
 };
 
 enum AviQtlCoreStatus : std::uint32_t {
@@ -40,7 +38,6 @@ struct AviQtlPermissionState;
 struct AviQtlSettingsState;
 struct AviQtlPackageCatalogState;
 struct AviQtlEffectCatalogState;
-struct AviQtlScriptPluginCatalogState;
 
 struct AviQtlEasingParameters {
     double amplitude;
@@ -534,13 +531,5 @@ std::uint32_t aviqtl_package_catalog_state_find_json(const AviQtlPackageCatalogS
 std::uint32_t aviqtl_package_catalog_state_filter_json(const AviQtlPackageCatalogState *handle, const std::uint8_t *filter, std::size_t filterLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_package_catalog_state_upgrade_ids_json(const AviQtlPackageCatalogState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_package_catalog_state_set_installed(AviQtlPackageCatalogState *handle, const std::uint8_t *packageId, std::size_t packageIdLength, const std::uint8_t *version, std::size_t versionLength, std::uint32_t installed, std::uint32_t *changed);
-
-std::uint32_t aviqtl_plugin_document_apply_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_script_plugin_catalog_state_create(AviQtlScriptPluginCatalogState **outputHandle);
-void aviqtl_script_plugin_catalog_state_destroy(AviQtlScriptPluginCatalogState *handle);
-std::uint32_t aviqtl_script_plugin_catalog_state_clear(AviQtlScriptPluginCatalogState *handle);
-std::uint32_t aviqtl_script_plugin_catalog_state_store_json(AviQtlScriptPluginCatalogState *handle, const std::uint8_t *input, std::size_t inputLength);
-std::uint32_t aviqtl_script_plugin_catalog_state_snapshot_json(const AviQtlScriptPluginCatalogState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_script_plugin_catalog_state_find_json(const AviQtlScriptPluginCatalogState *handle, const std::uint8_t *id, std::size_t idLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 
 }
