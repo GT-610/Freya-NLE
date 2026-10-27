@@ -382,83 +382,6 @@ pub struct AviQtlSceneSettings {
     pub magnetic_snap_range: i32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlExportVideoDefaults {
-    pub width: i32,
-    pub height: i32,
-    pub fps_num: i32,
-    pub fps_den: i32,
-    pub bitrate: i64,
-    pub crf: i32,
-    pub gop_size: i32,
-    pub audio_bitrate: i64,
-    pub start_frame: i32,
-    pub end_frame: i32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq)]
-pub struct AviQtlExportVideoRequest {
-    pub width: i32,
-    pub height: i32,
-    pub fps_num: i32,
-    pub fps_den: i32,
-    pub start_frame: i32,
-    pub end_frame: i32,
-    pub timeline_duration: i32,
-    pub output_path_present: u32,
-    pub project_fps: f64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlExportVideoPlan {
-    pub start_frame: i32,
-    pub end_frame: i32,
-    pub total_frames: i32,
-    pub error: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlExportImageSequenceRequest {
-    pub start_frame: i32,
-    pub end_frame: i32,
-    pub timeline_duration: i32,
-    pub configured_padding: i32,
-    pub output_path_present: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlExportImageSequencePlan {
-    pub start_frame: i32,
-    pub end_frame: i32,
-    pub total_frames: i32,
-    pub pad_digits: i32,
-    pub image_format: u32,
-    pub error: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlExportAudioFramePlan {
-    pub cumulative_samples: i64,
-    pub samples_for_frame: i32,
-    pub reserved: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlExportProgressPlan {
-    pub progress: i32,
-    pub current_frame: i32,
-    pub total_frames: i32,
-    pub eta_seconds: i32,
-    pub should_emit: u32,
-}
-
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct AviQtlIdAllocation {
     pub allocated_id: i32,
@@ -757,27 +680,6 @@ mod tests {
         assert_eq!(offset_of!(AviQtlSceneSettings, fps), 8);
         assert_eq!(offset_of!(AviQtlSceneSettings, grid_bpm), 24);
         assert_eq!(offset_of!(AviQtlSceneSettings, magnetic_snap_range), 52);
-
-        assert_eq!(size_of::<AviQtlExportVideoDefaults>(), 48);
-        assert_eq!(align_of::<AviQtlExportVideoDefaults>(), 8);
-        assert_eq!(offset_of!(AviQtlExportVideoDefaults, bitrate), 16);
-        assert_eq!(offset_of!(AviQtlExportVideoDefaults, audio_bitrate), 32);
-
-        assert_eq!(size_of::<AviQtlExportVideoRequest>(), 40);
-        assert_eq!(align_of::<AviQtlExportVideoRequest>(), 8);
-        assert_eq!(offset_of!(AviQtlExportVideoRequest, project_fps), 32);
-
-        assert_eq!(size_of::<AviQtlExportVideoPlan>(), 16);
-        assert_eq!(align_of::<AviQtlExportVideoPlan>(), 4);
-        assert_eq!(size_of::<AviQtlExportImageSequenceRequest>(), 20);
-        assert_eq!(align_of::<AviQtlExportImageSequenceRequest>(), 4);
-        assert_eq!(size_of::<AviQtlExportImageSequencePlan>(), 24);
-        assert_eq!(align_of::<AviQtlExportImageSequencePlan>(), 4);
-        assert_eq!(size_of::<AviQtlExportAudioFramePlan>(), 16);
-        assert_eq!(align_of::<AviQtlExportAudioFramePlan>(), 8);
-        assert_eq!(offset_of!(AviQtlExportAudioFramePlan, samples_for_frame), 8);
-        assert_eq!(size_of::<AviQtlExportProgressPlan>(), 20);
-        assert_eq!(align_of::<AviQtlExportProgressPlan>(), 4);
 
         #[cfg(target_pointer_width = "64")]
         {
