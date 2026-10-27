@@ -640,9 +640,6 @@ std::uint32_t aviqtl_permission_state_revoke_all(AviQtlPermissionState *handle, 
 std::uint64_t aviqtl_permission_state_mask(const AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
 std::uint32_t aviqtl_permission_state_is_authorized(const AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
 
-std::uint32_t aviqtl_recovery_metadata_inspect_json(const std::uint8_t *id, std::size_t idLength, const std::uint8_t *metadata, std::size_t metadataLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_recovery_metadata_build_json(const std::uint8_t *id, std::size_t idLength, const std::uint8_t *originalProjectUrl, std::size_t originalProjectUrlLength, const std::uint8_t *displayName, std::size_t displayNameLength, const std::uint8_t *savedAt, std::size_t savedAtLength, const std::uint8_t *snapshotFile, std::size_t snapshotFileLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_recovery_snapshot_id(const std::uint8_t *fileName, std::size_t fileNameLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 
 std::uint32_t aviqtl_export_video_defaults(AviQtlExportVideoDefaults *output);
 const std::uint8_t *aviqtl_export_default_video_codec(std::size_t *outputLength);
@@ -669,10 +666,7 @@ std::int32_t aviqtl_settings_state_get_i32(const AviQtlSettingsState *handle, co
 double aviqtl_settings_state_get_f64(const AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, double fallback);
 std::uint32_t aviqtl_settings_state_get_bool(const AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, std::uint32_t fallback);
 
-std::uint32_t aviqtl_preset_name_is_safe(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_preset_build_json(const std::uint8_t *effectId, std::size_t effectIdLength, const std::uint8_t *name, std::size_t nameLength, std::uint32_t enabled, const std::uint8_t *params, std::size_t paramsLength, const std::uint8_t *keyframes,
                                        std::size_t keyframesLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_preset_normalize_json(const std::uint8_t *effectId, std::size_t effectIdLength, const std::uint8_t *name, std::size_t nameLength, const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity,
                                            std::size_t *outputLength);
 
 std::uint32_t aviqtl_package_document_apply_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
@@ -695,7 +689,6 @@ std::uint32_t aviqtl_effect_catalog_state_snapshot_json(const AviQtlEffectCatalo
 std::uint32_t aviqtl_effect_catalog_state_find_json(const AviQtlEffectCatalogState *handle, const std::uint8_t *id, std::size_t idLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_effect_catalog_state_remove_ids_json(AviQtlEffectCatalogState *handle, const std::uint8_t *input, std::size_t inputLength);
 
-std::uint32_t aviqtl_script_metadata_parse_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 
 std::uint32_t aviqtl_plugin_document_apply_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_script_plugin_catalog_state_create(AviQtlScriptPluginCatalogState **outputHandle);

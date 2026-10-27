@@ -1,7 +1,3 @@
-use crate::abi::{
-    STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_ARGUMENT, STATUS_INVALID_JSON, STATUS_OK,
-    STATUS_OVERLAPPING_BUFFERS, ranges_overlap, slice_is_valid,
-};
 use serde::Serialize;
 use serde_json::{Number, Value};
 
@@ -488,56 +484,6 @@ fn parse_metadata(input: &str) -> Metadata {
         }
     }
     metadata
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_script_metadata_parse_json(
-    input: *const u8,
-    input_length: usize,
-    output: *mut u8,
-    output_capacity: usize,
-    output_length: *mut usize,
-) -> u32 {
-    if !slice_is_valid(input, input_length)
-        || !slice_is_valid(output, output_capacity)
-        || !slice_is_valid(output_length, 1)
-    {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    let overlaps = [
-        ranges_overlap(input, input_length, output, output_capacity),
-        ranges_overlap(input, input_length, output_length, 1),
-        ranges_overlap(output, output_capacity, output_length, 1),
-    ];
-    if overlaps.iter().any(Option::is_none) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    if overlaps.into_iter().flatten().any(|overlap| overlap) {
-        return STATUS_OVERLAPPING_BUFFERS;
-    }
-    let input = if input_length == 0 {
-        &[]
-    } else {
-        // SAFETY: The input range was validated and de-overlapped above.
-        unsafe { std::slice::from_raw_parts(input, input_length) }
-    };
-    let Ok(input) = std::str::from_utf8(input) else {
-        return STATUS_INVALID_ARGUMENT;
-    };
-    let Ok(json) = serde_json::to_vec(&parse_metadata(input)) else {
-        return STATUS_INVALID_JSON;
-    };
-    // SAFETY: The output-length pointer was validated and de-overlapped above.
-    unsafe { output_length.write(json.len()) };
-    if output_capacity < json.len() {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    if !json.is_empty() {
-        // SAFETY: The output range was validated and has sufficient capacity.
-        let output = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
-        output[..json.len()].copy_from_slice(&json);
-    }
-    STATUS_OK
 }
 
 #[cfg(test)]
