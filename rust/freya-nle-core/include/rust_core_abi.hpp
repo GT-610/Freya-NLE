@@ -628,19 +628,6 @@ std::uint32_t aviqtl_timeline_plan_multi_reorder(std::size_t length, const std::
 std::uint32_t aviqtl_keyframe_document_apply_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_keyframe_evaluate_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 
-std::int32_t aviqtl_media_playback_mode(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_media_is_video_file(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_audio_parameter_affects_duration(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_audio_parameter_affects_waveform(const std::uint8_t *value, std::size_t valueLength);
-double aviqtl_media_resolve_audio_time(double relativeTime, std::uint32_t directMode, double directTime, double startTime, double speed);
-double aviqtl_media_resolve_video_time(std::int32_t relativeFrame, double sourceFps, std::uint32_t directMode, double directFrame, double startFrame, double speed);
-std::int32_t aviqtl_media_max_video_duration_frames(std::int32_t totalFrameCount, double sourceFps, double speed, double startFrame, std::int32_t projectFps);
-std::int32_t aviqtl_media_clamp_video_duration_frames(std::int32_t requestedDuration, std::int32_t totalFrameCount, double sourceFps, std::uint32_t directMode, double startFrame, double speed, std::int32_t projectFps);
-std::int32_t aviqtl_media_clamp_audio_duration_frames(std::int32_t requestedDuration, double totalSeconds, std::uint32_t directMode, double startTime, double speed, std::int32_t projectFps);
-std::int32_t aviqtl_permission_from_name(const std::uint8_t *value, std::size_t valueLength);
-std::int32_t aviqtl_permission_for_api(const std::uint8_t *value, std::size_t valueLength);
-std::int32_t aviqtl_permission_count();
-const std::uint8_t *aviqtl_permission_name(std::int32_t permission, std::size_t *outputLength);
 std::uint32_t aviqtl_permission_state_create(const std::uint8_t *input, std::size_t inputLength, AviQtlPermissionState **outputHandle);
 void aviqtl_permission_state_destroy(AviQtlPermissionState *handle);
 std::uint32_t aviqtl_permission_state_reset(AviQtlPermissionState *handle, const std::uint8_t *input, std::size_t inputLength);
@@ -653,11 +640,6 @@ std::uint32_t aviqtl_permission_state_revoke_all(AviQtlPermissionState *handle, 
 std::uint64_t aviqtl_permission_state_mask(const AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
 std::uint32_t aviqtl_permission_state_is_authorized(const AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
 
-std::uint32_t aviqtl_package_id_is_valid(const std::uint8_t *value, std::size_t valueLength);
-std::int32_t aviqtl_package_type(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_package_archive_path_is_safe(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_recovery_id_is_valid(const std::uint8_t *value, std::size_t valueLength);
-std::uint32_t aviqtl_recovery_snapshot_name_is_valid(const std::uint8_t *id, std::size_t idLength, const std::uint8_t *fileName, std::size_t fileNameLength);
 std::uint32_t aviqtl_recovery_metadata_inspect_json(const std::uint8_t *id, std::size_t idLength, const std::uint8_t *metadata, std::size_t metadataLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_recovery_metadata_build_json(const std::uint8_t *id, std::size_t idLength, const std::uint8_t *originalProjectUrl, std::size_t originalProjectUrlLength, const std::uint8_t *displayName, std::size_t displayNameLength, const std::uint8_t *savedAt, std::size_t savedAtLength, const std::uint8_t *snapshotFile, std::size_t snapshotFileLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_recovery_snapshot_id(const std::uint8_t *fileName, std::size_t fileNameLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
