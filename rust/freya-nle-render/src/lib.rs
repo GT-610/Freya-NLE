@@ -2614,7 +2614,6 @@ fn create_native_compute_pipeline(
 struct ComputeDispatch {
     bind_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
-    values: Vec<f32>,
 }
 
 struct ComputeEffectPass {
@@ -2802,7 +2801,6 @@ impl GpuEffectPasses {
                                 ComputeDispatch {
                                     bind_group,
                                     uniform,
-                                    values,
                                 }
                             })
                             .collect();
@@ -2849,11 +2847,13 @@ impl GpuEffectPasses {
                     .get(uniform_index)
                     .and_then(Option::as_ref)
                 {
-                    for dispatch in &compute.dispatches {
+                    for (index, dispatch) in compute.dispatches.iter().enumerate() {
+                        let mut dispatch_values = values.clone();
+                        dispatch_values[1] = index as f32;
                         queue.write_buffer(
                             &dispatch.uniform,
                             0,
-                            &f32_slice_bytes(&dispatch.values),
+                            &f32_slice_bytes(&dispatch_values),
                         );
                     }
                 }
