@@ -4,7 +4,6 @@ pub const ABI_VERSION: u32 = 2;
 pub const CAPABILITY_AUDIO_DSP: u64 = 1 << 1;
 pub const CAPABILITY_NUMERIC_KEYFRAME_BATCH: u64 = 1 << 2;
 pub const CAPABILITY_AUDIO_BATCH_MIX: u64 = 1 << 5;
-pub const CAPABILITY_TIMELINE_EDIT: u64 = 1 << 6;
 pub const CAPABILITY_SETTINGS_DOCUMENT: u64 = 1 << 10;
 pub const CAPABILITY_PACKAGE_DOCUMENT: u64 = 1 << 12;
 pub const CAPABILITY_AUDIO_PLANNING: u64 = 1 << 17;
@@ -15,7 +14,6 @@ pub const CAPABILITY_EXPORT_PLANNING: u64 = 1 << 22;
 pub const CAPABILITIES: u64 = CAPABILITY_AUDIO_DSP
     | CAPABILITY_NUMERIC_KEYFRAME_BATCH
     | CAPABILITY_AUDIO_BATCH_MIX
-    | CAPABILITY_TIMELINE_EDIT
     | CAPABILITY_SETTINGS_DOCUMENT
     | CAPABILITY_PACKAGE_DOCUMENT
     | CAPABILITY_AUDIO_PLANNING
@@ -350,13 +348,6 @@ pub struct AviQtlTimelineMoveInput {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct AviQtlTimelinePosition {
-    pub frame: i32,
-    pub layer: i32,
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct AviQtlSceneSettings {
     pub width: i32,
@@ -660,9 +651,6 @@ mod tests {
         assert_eq!(align_of::<AviQtlTimelineMoveInput>(), 4);
         assert_eq!(offset_of!(AviQtlTimelineMoveInput, clip_id), 0);
         assert_eq!(offset_of!(AviQtlTimelineMoveInput, target_layer), 16);
-
-        assert_eq!(size_of::<AviQtlTimelinePosition>(), 8);
-        assert_eq!(align_of::<AviQtlTimelinePosition>(), 4);
 
         assert_eq!(size_of::<AviQtlSceneSettings>(), 56);
         assert_eq!(align_of::<AviQtlSceneSettings>(), 8);

@@ -9,7 +9,6 @@ enum AviQtlCoreCapability : std::uint64_t {
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_DSP = 1ULL << 1,
     AVIQTL_RUST_CORE_CAPABILITY_NUMERIC_KEYFRAME_BATCH = 1ULL << 2,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_BATCH_MIX = 1ULL << 5,
-    AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_EDIT = 1ULL << 6,
     AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_DOCUMENT = 1ULL << 10,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_DOCUMENT = 1ULL << 12,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_PLANNING = 1ULL << 17,
@@ -396,13 +395,6 @@ static_assert(alignof(AviQtlTimelineMoveInput) == 4);
 static_assert(offsetof(AviQtlTimelineMoveInput, clip_id) == 0);
 static_assert(offsetof(AviQtlTimelineMoveInput, target_layer) == 16);
 
-struct AviQtlTimelinePosition {
-    std::int32_t frame;
-    std::int32_t layer;
-};
-static_assert(sizeof(AviQtlTimelinePosition) == 8);
-static_assert(alignof(AviQtlTimelinePosition) == 4);
-
 struct AviQtlSceneSettings {
     std::int32_t width;
     std::int32_t height;
@@ -443,24 +435,6 @@ void aviqtl_timeline_bake_plan_destroy(AviQtlTimelineBakePlan *handle);
 std::uint32_t aviqtl_timeline_bake_plan_reset(AviQtlTimelineBakePlan *handle, const std::uint8_t *input, std::size_t inputLength);
 std::size_t aviqtl_timeline_bake_plan_effect_count(AviQtlTimelineBakePlan *handle);
 std::uint32_t aviqtl_timeline_bake_plan_evaluate(AviQtlTimelineBakePlan *handle, std::int32_t currentFrame, std::uint32_t fullBake, std::int32_t prefetchFrames, AviQtlRenderBakeOutput *renderOutput, std::size_t renderCapacity, AviQtlAudioBakeOutput *audioOutput, std::size_t audioCapacity, AviQtlEffectParamEntry *paramOutput, std::size_t paramCapacity, AviQtlSceneBakeCounts *counts);
-
-std::uint32_t aviqtl_timeline_find_vacant_frame(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, const std::int32_t *excludedIds, std::size_t excludedIdsLength, std::int32_t layer, std::int32_t startFrame, std::int32_t durationFrames,
-                                                std::int32_t *outputFrame);
-std::uint32_t aviqtl_timeline_plan_batch_move(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, const AviQtlTimelineMoveInput *moves, std::size_t movesLength, const std::int32_t *lockedLayers, std::size_t lockedLayersLength,
-                                              AviQtlTimelineClipGeometry *output, std::size_t outputLength);
-std::uint32_t aviqtl_timeline_plan_delta_move(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, const std::int32_t *movingIds, std::size_t movingIdsLength, const std::int32_t *lockedLayers, std::size_t lockedLayersLength,
-                                              std::int32_t deltaLayer, std::int32_t deltaFrame, AviQtlTimelineClipGeometry *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_timeline_resolve_drag(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, const std::int32_t *movingIds, std::size_t movingIdsLength, const std::int32_t *lockedLayers, std::size_t lockedLayersLength,
-                                           std::int32_t primaryClipId, std::int32_t targetLayer, std::int32_t proposedStartFrame, AviQtlTimelinePosition *output);
-std::uint32_t aviqtl_timeline_plan_resize(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, std::int32_t deltaStartFrame, std::int32_t deltaDurationFrames, AviQtlTimelineClipGeometry *output, std::size_t outputLength);
-std::uint32_t aviqtl_timeline_plan_insert_layers(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, std::int32_t targetLayer, std::int32_t count, std::uint32_t above, AviQtlTimelineClipGeometry *output, std::size_t outputCapacity,
-                                                 std::size_t *outputLength);
-std::uint32_t aviqtl_timeline_plan_shift_layers(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, std::int32_t startLayer, std::int32_t endLayer, std::int32_t delta, AviQtlTimelineClipGeometry *output, std::size_t outputCapacity,
-                                                std::size_t *outputLength);
-std::uint32_t aviqtl_timeline_clipboard_duration(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength, std::int32_t *outputDuration);
-std::uint32_t aviqtl_timeline_plan_clipboard_placement(const AviQtlTimelineClipGeometry *existing, std::size_t existingLength, const AviQtlTimelineClipGeometry *clipboard, std::size_t clipboardLength, std::int32_t requestedFrame, std::int32_t layerOffset,
-                                                       AviQtlTimelineClipGeometry *output, std::size_t outputLength, std::int32_t *outputFrame);
-std::uint32_t aviqtl_timeline_split_clip(const AviQtlTimelineClipGeometry *clip, std::int32_t frame, AviQtlTimelineClipGeometry *first, AviQtlTimelineClipGeometry *second);
 
                                       std::int32_t *outputPrimary);
 
