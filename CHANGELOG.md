@@ -43,9 +43,18 @@ All notable changes to Freya NLE are documented in this file.
   the effect-name translations are in `i18n/effect-metadata.json`. QML
   effect and object packages were already rejected at installation; the QML
   example packages and the Qt Linguist `.ts` sources went with the frontend
-- The legacy C ABI is no longer consumed by anything in the tree. Its exports
-  and `rust/freya-nle-core/include/rust_core_abi.hpp` remain checked for now;
-  retiring them is a follow-up change
+- The C ABI is being retired now that the Qt frontend, its only consumer, is
+  gone. 42 of the 141 exports left: the `policy` surface (media timing,
+  permission tables, package and recovery validation), the `script`, `preset`,
+  `recovery` and `project` document parsers, the easing entry points, the
+  timeline bake helpers, the keyframe-document JSON wrappers, and the effect
+  catalog state, whose registry and opaque handle existed only for Qt. The
+  pure-Rust functions behind them still back the app and the tests, so no
+  behaviour was lost. Retired modules dropped their capability bits and
+  `AVIQTL_RUST_CORE_ABI_VERSION` is now 2. The remaining 99 exports are
+  raw-pointer surfaces whose tests drive them through the buffer protocol;
+  each needs its API reshaped before removal, so
+  `tests/check_rust_abi.py` keeps the header in sync meanwhile
 
 ### Added
 - AviUtl-style expression parameters work again. A parameter stored as a string

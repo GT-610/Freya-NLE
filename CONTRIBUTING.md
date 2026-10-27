@@ -92,9 +92,10 @@ the behavior it was held to, and the
 what deliberately changed, and what is still open.
 
 The C ABI (`aviqtl_*` exports in `freya-nle-core` plus
-`freya-nle-core/include/rust_core_abi.hpp`) is the one surface left over from the
-Qt consumer. It stays in place - and keeps its contract check - until a follow-up
-change retires it; new code must call the Rust API instead of the C ABI.
+`freya-nle-core/include/rust_core_abi.hpp`) is left over from the Qt consumer and is
+being retired in pieces: 42 of its 141 exports are gone, and the remainder keeps its
+contract check until each module's API is reshaped. New code must call the Rust API
+instead of the C ABI.
 
 ## Versions and Releases
 

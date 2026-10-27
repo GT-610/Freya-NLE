@@ -147,16 +147,52 @@ documented the behavior is in git history.
    had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust
    catalog omits the formats (`freya-nle-carla/src/lib.rs:550-559`) instead of repeating
    that; a soundfont format needs a host path before it gets a scan path.
-5. **The C ABI and its contract check.** 141 exports across 21 modules and
-   `freya-nle-core/include/rust_core_abi.hpp` have no consumer left in the tree. The
-   wrappers and their opaque handle plumbing are about 3,800 lines, and roughly a hundred
-   module tests exercise the internal rules through those raw-pointer entry points, so
-   retiring the surface means deleting or porting those tests as well. That is a separate
-   change; `tests/check_rust_abi.py` keeps the header and the exports in sync meanwhile.
+5. **The rest of the C ABI.** The Qt frontend was its only consumer. 42 of the 141
+   exports are gone (see [C ABI retirement](#c-abi-retirement) below). The 99 that remain
+   across 12 modules take raw pointers and opaque handles, and most of their module tests
+   drive them through the size-query and overlap protocol, so each module needs its API
+   reshaped onto safe types before its wrappers can go. `tests/check_rust_abi.py` keeps the
+   header and the exports in sync meanwhile.
 6. **Documentation site.** `docs/` is a separate repository
    (`docs/docs/developer/building.md`, `docs/docs/zh-CN/developer/building.md`) and still
    documents `--frontend qt`, CMake, and the C ABI as a build requirement. That
    repository needs its own update.
+
+## C ABI retirement
+
+`rust/freya-nle-core/include/rust_core_abi.hpp` and its exports existed so the Qt frontend
+could call the Rust core. With that consumer gone, the surface is dead weight, but it is
+not uniform: some modules are thin `extern "C"` shims over functions the Rust frontend
+already calls, while others are raw-pointer protocols whose buffer handling *is* their
+tested behaviour. The shims are retired now, the protocols are left for a change that can
+reshape their APIs.
+
+Gone in this branch, 42 of the 141 exports:
+
+| module | exports retired | what was behind them |
+| --- | --- | --- |
+| `policy` | 18 | media timing, permission tables, package and recovery id validation |
+| `effect` | 7 | effect metadata normalization and the ABI-only catalog registry |
+| `lib` (easing) | 4 | easing name and curve entry points |
+| `preset` | 3 | preset document build/normalize |
+| `recovery` | 3 | recovery metadata inspect/build and snapshot naming |
+| `keyframe_document` | 2 | typed keyframe-document apply and evaluate wrappers |
+| `project` | 2 | project version and document normalization |
+| `timeline` | 2 | render and audio bake helpers |
+| `script` | 1 | script metadata parsing |
+
+The functions behind them stay where the Rust frontend or the tests use them:
+`parse_metadata`, `normalize_project_json`, `bake_render`/`bake_audio`,
+`evaluate_document_track`, `normalize_metadata`, and the policy helpers are still exercised
+directly. Tests that only covered the C buffer protocol (size queries, overlapping ranges,
+null and misaligned pointers) went with the wrappers they tested.
+
+Two contract details follow: retired modules no longer advertise a capability bit in
+`AVIQTL_RUST_CORE_CAPABILITY_*`, and `AVIQTL_RUST_CORE_ABI_VERSION` is 2 because the
+exported surface shrank. The remaining 99 exports are `settings` (12), `timeline_state`
+(13), `permission` (11), `package` (11), `export` (11), `timeline_edit` (10),
+`timeline_domain` (9), `plugin` (7), `bake_plan` (5), `audio` (5), `keyframe` (3), and the
+version/capability pair itself (2).
 
 ## Verification
 
@@ -171,6 +207,9 @@ Run on macOS 26 (Apple M5, Metal) on the branch:
   and the pinned toolchain does not flag them.
 - `python -m unittest tests.test_build_version` and `python tests/test_rust_abi_contract.py`
 - `python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header rust/freya-nle-core/include/rust_core_abi.hpp`
+  stays green after the C ABI retirement above: the header still declares exactly the 99
+  exports that remain, and `tests/test_rust_abi_contract.py` keeps the checker's drift
+  cases honest
 - `python3 BUILD.py --help` (no `--frontend`/`--qt-dir`)
 - `rust/target/debug/freya-nle --frames 120` reports the Apple M5 Metal device, loads the
   61 catalog definitions and 4 script plugins, and prints
