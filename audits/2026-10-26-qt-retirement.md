@@ -60,7 +60,8 @@ name when a package is installed. `BUILD.py` still stages `catalog/effects` and
 packaged layout and the CI checks that look for it did not change.
 
 The C ABI header moved to `rust/freya-nle-core/include/rust_core_abi.hpp` so its contract
-check survives without `core/`. The exports themselves are unchanged; see "Still open".
+check would survive without `core/`; the whole surface was later deleted once its modules
+were retired (see [C ABI retirement](#c-abi-retirement)).
 
 ## Deliberate deviations
 
