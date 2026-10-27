@@ -122,8 +122,10 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
 Compute hosts provide `aviqtl_size()`, `aviqtl_pixel(coord)` (a bounds-checked
 read that returns transparent black outside the layer), `aviqtl_uv(coord)`,
 `aviqtl_texel(uv)` (filtered sampling at an explicit LOD, the compute analogue
-of `aviqtl_sample`), `aviqtl_parameter(index)`, `aviqtl_pass()`, and
-`aviqtl_write(coord, color)` (clamped, dropped outside the layer).
+of `aviqtl_sample`), `aviqtl_original_texel(uv)` (the layer as it entered the
+effect chain, before any effect in it ran), `aviqtl_parameter(index)`,
+`aviqtl_pass()`, and `aviqtl_write(coord, color)` (clamped, dropped outside the
+layer).
 
 Adding `"dispatch": n` (1–8, default 1) runs the shader `n` times over its own
 previous output, which is how a separable blur or a glow spread is written;

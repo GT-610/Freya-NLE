@@ -148,9 +148,11 @@ documented the behavior is in git history.
    `@workgroup_size`. `"dispatch": n` (1–8) chains the shader over its own output with
    `aviqtl_pass()`, matching Qt's `dispatchCount`/`passIndex` ping-pong. The source-level
    validator accepted either contract so installation still works before metadata is
-   paired. What is not carried over is the rest of Qt's contract: extra input textures
-   (`syncExtraTextures`), which need preview-side routing of additional textures before
-   they mean anything.
+   paired. Compute shaders also read the layer as it entered the effect chain
+   (`aviqtl_original_texel`), covering Qt's `sourceProxy` extra texture for effects such as
+   border blur and drop shadow. What is not carried over is binding a *different* layer as
+   an input (`syncExtraTextures` with another item), which needs preview-side routing
+   before it means anything.
 3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
    render route is listed and then renders nothing. The preview planner now reports an
    effect id without a renderer, and an object clip type that is not in the catalog the

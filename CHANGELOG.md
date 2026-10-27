@@ -64,9 +64,10 @@ All notable changes to Freya NLE are documented in this file.
   host binds the layer texture, the parameter block and an `rgba8unorm` output
   storage texture and dispatches one pass per effect. `"dispatch": n` (1–8)
   chains the shader over its own output with `aviqtl_pass()` for separable
-  effects, and `aviqtl_texel(uv)` samples through the host's filtered sampler.
+  effects, and `aviqtl_texel(uv)` samples through the host's filtered sampler
+  while `aviqtl_original_texel(uv)` reads the layer before the effect chain ran.
   Installation rejects a tile that does not match the shader, and the package
-  README documents the helpers. Extra input textures remain open
+  README documents the helpers. Additional layer inputs remain open
 - AviUtl-style expression parameters work again. A parameter stored as a string
   beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
   the keyframe `value` in scope, in the preview, the export, and the audio plan
