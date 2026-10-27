@@ -147,12 +147,12 @@ documented the behavior is in git history.
    had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust
    catalog omits the formats (`freya-nle-carla/src/lib.rs:550-559`) instead of repeating
    that; a soundfont format needs a host path before it gets a scan path.
-5. **The rest of the C ABI.** The Qt frontend was its only consumer. 42 of the 141
-   exports are gone (see [C ABI retirement](#c-abi-retirement) below). The 99 that remain
-   across 12 modules take raw pointers and opaque handles, and most of their module tests
-   drive them through the size-query and overlap protocol, so each module needs its API
-   reshaped onto safe types before its wrappers can go. `tests/check_rust_abi.py` keeps the
-   header and the exports in sync meanwhile.
+5. **The rest of the C ABI.** The Qt frontend was its only consumer. 97 of the 141
+   exports are gone (see [C ABI retirement](#c-abi-retirement) below). The 44 that remain
+   in six modules are state objects and evaluators whose tests drive them through the
+   size-query and overlap protocol, so each needs its API reshaped onto safe types before
+   its wrappers can go. `tests/check_rust_abi.py` keeps the header and the exports in sync
+   meanwhile.
 6. **Documentation site.** `docs/` is a separate repository
    (`docs/docs/developer/building.md`, `docs/docs/zh-CN/developer/building.md`) and still
    documents `--frontend qt`, CMake, and the C ABI as a build requirement. That
@@ -167,12 +167,18 @@ already calls, while others are raw-pointer protocols whose buffer handling *is*
 tested behaviour. The shims are retired now, the protocols are left for a change that can
 reshape their APIs.
 
-Gone in this branch, 42 of the 141 exports:
+Gone in this branch, 97 of the 141 exports:
 
 | module | exports retired | what was behind them |
 | --- | --- | --- |
 | `policy` | 18 | media timing, permission tables, package and recovery id validation |
+| `timeline_state` | 13 | create/reset/snapshot, edit planning, transactions and id hints |
+| `export` | 11 | video, image-sequence, audio-frame and progress planning |
+| `timeline_edit` | 10 | vacancy search, batch/delta moves, drag, resize, layers, clipboard, split |
+| `timeline_domain` | 9 | scene settings, snapping, duration, selection and reorder planning |
 | `effect` | 7 | effect metadata normalization and the ABI-only catalog registry |
+| `plugin` | 7 | the plugin-document dispatcher and the script-plugin catalog registry |
+| `audio` | 5 | batch mixing, playback planning and waveform sampling |
 | `lib` (easing) | 4 | easing name and curve entry points |
 | `preset` | 3 | preset document build/normalize |
 | `recovery` | 3 | recovery metadata inspect/build and snapshot naming |
@@ -183,16 +189,21 @@ Gone in this branch, 42 of the 141 exports:
 
 The functions behind them stay where the Rust frontend or the tests use them:
 `parse_metadata`, `normalize_project_json`, `bake_render`/`bake_audio`,
-`evaluate_document_track`, `normalize_metadata`, and the policy helpers are still exercised
-directly. Tests that only covered the C buffer protocol (size queries, overlapping ranges,
-null and misaligned pointers) went with the wrappers they tested.
+`evaluate_document_track`, `normalize_metadata`, `mix_stereo_tracks`,
+`resample_stereo`, `plan_delta_move`, `plan_video_export`, and the timeline state machine
+are still exercised directly. Tests that only covered the C buffer protocol (size queries,
+overlapping ranges, null and misaligned pointers) went with the wrappers they tested, as
+did the logic that only the wrappers reached: the ABI-only effect and plugin catalogs and
+the C-side playback and waveform planners, which the app implements in `freya-nle`
+instead.
 
 Two contract details follow: retired modules no longer advertise a capability bit in
-`AVIQTL_RUST_CORE_CAPABILITY_*`, and `AVIQTL_RUST_CORE_ABI_VERSION` is 2 because the
-exported surface shrank. The remaining 99 exports are `settings` (12), `timeline_state`
-(13), `permission` (11), `package` (11), `export` (11), `timeline_edit` (10),
-`timeline_domain` (9), `plugin` (7), `bake_plan` (5), `audio` (5), `keyframe` (3), and the
-version/capability pair itself (2).
+`AVIQTL_RUST_CORE_CAPABILITY_*` (eight remain), and `AVIQTL_RUST_CORE_ABI_VERSION` is 2
+because the exported surface shrank. The remaining 44 exports are `settings` (12),
+`package` (11), `permission` (11), `bake_plan` (5), `keyframe` (3), and the
+version/capability pair itself (2). All five state modules build their documents and state
+machines for the Rust frontend already; what is left is their handle plumbing and the
+tests that go through it.
 
 ## Verification
 

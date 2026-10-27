@@ -47,8 +47,8 @@ whole project document.
 
 `freya-nle-core/include/rust_core_abi.hpp` declares the raw C ABI that `freya-nle-core` still
 exports. Its only consumer was the retired Qt frontend, so the surface is going module by
-module: 42 of the 141 exports are already gone, and the rest stay with the contract check
-until their APIs can be reshaped onto safe types (see
+module: 97 of the 141 exports are already gone, and the 44 left stay with the contract
+check until their APIs can be reshaped onto safe types (see
 [the retirement audit](../audits/2026-10-26-qt-retirement.md)).
 `tests/check_rust_abi.py` keeps the declaration and the exports in sync meanwhile.
 
