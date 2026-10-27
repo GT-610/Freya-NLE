@@ -50,18 +50,6 @@ enum Request {
     },
 }
 
-#[derive(Debug, Deserialize)]
-struct EvaluationRequest {
-    track: Value,
-    fallback: Value,
-    frame: i32,
-}
-
-#[derive(Debug, Serialize)]
-struct EvaluationResponse {
-    value: Value,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Response {
@@ -423,23 +411,6 @@ pub(crate) fn evaluate_document_track(
 ) -> Value {
     let points = resolve_track(track, fallback, duration);
     evaluate_resolved_track(&points, frame, fallback)
-}
-
-fn evaluate_request(request: EvaluationRequest) -> EvaluationResponse {
-    let mut points = if is_structured(&request.track) {
-        let duration = inferred_duration(&request.track);
-        flatten(&normalize_track(
-            &request.track,
-            &request.fallback,
-            duration,
-        ))
-    } else {
-        track_points(&request.track)
-    };
-    sort_points(&mut points);
-    EvaluationResponse {
-        value: evaluate_track(&points, request.frame, &request.fallback),
-    }
 }
 
 fn normalize_track(track: &Value, fallback: &Value, duration: i32) -> Value {
@@ -1084,35 +1055,38 @@ mod tests {
 
     #[test]
     fn evaluates_typed_numeric_discrete_and_color_tracks() {
-        let integer_endpoint = evaluate_request(EvaluationRequest {
-            track: json!([
+        let integer_endpoint = evaluate_document_track(
+            &json!([
                 {"frame": 0, "value": {"$aviqtlType": "int", "value": 10}, "interp": "linear"},
                 {"frame": 10, "value": {"$aviqtlType": "int", "value": 20}, "interp": "linear"}
             ]),
-            fallback: json!({"$aviqtlType": "int", "value": 0}),
-            frame: 0,
-        });
-        assert_eq!(integer_endpoint.value["$aviqtlType"], "int");
-        assert_eq!(integer_endpoint.value["value"], 10);
+            &json!({"$aviqtlType": "int", "value": 0}),
+            10,
+            0,
+        );
+        assert_eq!(integer_endpoint["$aviqtlType"], "int");
+        assert_eq!(integer_endpoint["value"], 10);
 
-        let held = evaluate_request(EvaluationRequest {
-            track: json!([
+        let held = evaluate_document_track(
+            &json!([
                 {"frame": 0, "value": "first", "interp": "none"},
                 {"frame": 10, "value": "second", "interp": "none"}
             ]),
-            fallback: json!("fallback"),
-            frame: 5,
-        });
-        assert_eq!(held.value, "first");
+            &json!("fallback"),
+            10,
+            5,
+        );
+        assert_eq!(held, "first");
 
-        let color = evaluate_request(EvaluationRequest {
-            track: json!([
+        let color = evaluate_document_track(
+            &json!([
                 {"frame": 0, "value": "#ff0000", "interp": "linear"},
                 {"frame": 10, "value": "#0000ff", "interp": "linear"}
             ]),
-            fallback: json!("#000000"),
-            frame: 5,
-        });
-        assert_eq!(color.value, "#ff7f007f");
+            &json!("#000000"),
+            10,
+            5,
+        );
+        assert_eq!(color, "#ff7f007f");
     }
 }

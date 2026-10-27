@@ -24,11 +24,11 @@ class RustAbiContractCheckerTest(unittest.TestCase):
 
     def test_signature_drift_is_reported(self):
         header = self.header.replace(
-            "std::int32_t aviqtl_project_current_version();",
-            "std::uint32_t aviqtl_project_current_version();",
+            "std::uint32_t aviqtl_core_abi_version();",
+            "std::int32_t aviqtl_core_abi_version();",
         )
         errors = check_rust_abi.compare_contract(self.sources, header)
-        self.assertTrue(any("signature mismatch for aviqtl_project_current_version" in error for error in errors))
+        self.assertTrue(any("signature mismatch for aviqtl_core_abi_version" in error for error in errors))
 
     def test_struct_drift_is_reported(self):
         header = self.header.replace("    double period;", "    float period;", 1)

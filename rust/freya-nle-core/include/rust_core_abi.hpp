@@ -3,33 +3,23 @@
 #include <cstddef>
 #include <cstdint>
 
-inline constexpr std::uint32_t AVIQTL_RUST_CORE_ABI_VERSION = 1;
+inline constexpr std::uint32_t AVIQTL_RUST_CORE_ABI_VERSION = 2;
 
 enum AviQtlCoreCapability : std::uint64_t {
-    AVIQTL_RUST_CORE_CAPABILITY_EASING = 1ULL << 0,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_DSP = 1ULL << 1,
     AVIQTL_RUST_CORE_CAPABILITY_NUMERIC_KEYFRAME_BATCH = 1ULL << 2,
-    AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_BAKE = 1ULL << 3,
-    AVIQTL_RUST_CORE_CAPABILITY_PROJECT_DOCUMENT = 1ULL << 4,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_BATCH_MIX = 1ULL << 5,
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_EDIT = 1ULL << 6,
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_DOMAIN = 1ULL << 7,
-    AVIQTL_RUST_CORE_CAPABILITY_KEYFRAME_DOCUMENT = 1ULL << 8,
-    AVIQTL_RUST_CORE_CAPABILITY_CORE_POLICY = 1ULL << 9,
     AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_DOCUMENT = 1ULL << 10,
-    AVIQTL_RUST_CORE_CAPABILITY_PRESET_DOCUMENT = 1ULL << 11,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_DOCUMENT = 1ULL << 12,
-    AVIQTL_RUST_CORE_CAPABILITY_EFFECT_DOCUMENT = 1ULL << 13,
-    AVIQTL_RUST_CORE_CAPABILITY_SCRIPT_DOCUMENT = 1ULL << 14,
     AVIQTL_RUST_CORE_CAPABILITY_PLUGIN_DOCUMENT = 1ULL << 15,
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_STATE = 1ULL << 16,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_PLANNING = 1ULL << 17,
     AVIQTL_RUST_CORE_CAPABILITY_PERMISSION_STATE = 1ULL << 18,
     AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_STATE = 1ULL << 19,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_CATALOG_STATE = 1ULL << 20,
-    AVIQTL_RUST_CORE_CAPABILITY_RECOVERY_DOCUMENT = 1ULL << 21,
     AVIQTL_RUST_CORE_CAPABILITY_EXPORT_PLANNING = 1ULL << 22,
-    AVIQTL_RUST_CORE_CAPABILITY_EFFECT_CATALOG_STATE = 1ULL << 23,
     AVIQTL_RUST_CORE_CAPABILITY_SCRIPT_PLUGIN_CATALOG_STATE = 1ULL << 24,
 };
 
@@ -673,13 +663,6 @@ std::uint32_t aviqtl_package_catalog_state_filter_json(const AviQtlPackageCatalo
 std::uint32_t aviqtl_package_catalog_state_upgrade_ids_json(const AviQtlPackageCatalogState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_package_catalog_state_set_installed(AviQtlPackageCatalogState *handle, const std::uint8_t *packageId, std::size_t packageIdLength, const std::uint8_t *version, std::size_t versionLength, std::uint32_t installed, std::uint32_t *changed);
 
-std::uint32_t aviqtl_effect_metadata_normalize_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_effect_catalog_state_create(AviQtlEffectCatalogState **outputHandle);
-void aviqtl_effect_catalog_state_destroy(AviQtlEffectCatalogState *handle);
-std::uint32_t aviqtl_effect_catalog_state_register_json(AviQtlEffectCatalogState *handle, const std::uint8_t *input, std::size_t inputLength);
-std::uint32_t aviqtl_effect_catalog_state_snapshot_json(const AviQtlEffectCatalogState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_effect_catalog_state_find_json(const AviQtlEffectCatalogState *handle, const std::uint8_t *id, std::size_t idLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_effect_catalog_state_remove_ids_json(AviQtlEffectCatalogState *handle, const std::uint8_t *input, std::size_t inputLength);
 
 
 std::uint32_t aviqtl_plugin_document_apply_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
