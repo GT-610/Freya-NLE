@@ -7,13 +7,10 @@ inline constexpr std::uint32_t AVIQTL_RUST_CORE_ABI_VERSION = 2;
 
 enum AviQtlCoreCapability : std::uint64_t {
     AVIQTL_RUST_CORE_CAPABILITY_NUMERIC_KEYFRAME_BATCH = 1ULL << 2,
-    AVIQTL_RUST_CORE_CAPABILITY_AUDIO_BATCH_MIX = 1ULL << 5,
-    AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_DOCUMENT = 1ULL << 10,
+    AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_BAKE = 1ULL << 3,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_DOCUMENT = 1ULL << 12,
     AVIQTL_RUST_CORE_CAPABILITY_PERMISSION_STATE = 1ULL << 18,
-    AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_STATE = 1ULL << 19,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_CATALOG_STATE = 1ULL << 20,
-    AVIQTL_RUST_CORE_CAPABILITY_EXPORT_PLANNING = 1ULL << 22,
 };
 
 enum AviQtlCoreStatus : std::uint32_t {
@@ -27,7 +24,6 @@ enum AviQtlCoreStatus : std::uint32_t {
 
 struct AviQtlTimelineBakePlan;
 struct AviQtlPermissionState;
-struct AviQtlSettingsState;
 struct AviQtlPackageCatalogState;
 struct AviQtlEffectCatalogState;
 
@@ -311,19 +307,6 @@ std::uint32_t aviqtl_permission_state_grant_all(AviQtlPermissionState *handle, c
 std::uint32_t aviqtl_permission_state_revoke_all(AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
 std::uint64_t aviqtl_permission_state_mask(const AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
 std::uint32_t aviqtl_permission_state_is_authorized(const AviQtlPermissionState *handle, const std::uint8_t *plugin, std::size_t pluginLength);
-
-std::uint32_t aviqtl_settings_state_create_defaults(const std::uint8_t *platformDefaults, std::size_t platformDefaultsLength, AviQtlSettingsState **outputHandle);
-std::uint32_t aviqtl_settings_state_create(const std::uint8_t *input, std::size_t inputLength, AviQtlSettingsState **outputHandle);
-void aviqtl_settings_state_destroy(AviQtlSettingsState *handle);
-std::uint32_t aviqtl_settings_state_reset(AviQtlSettingsState *handle, const std::uint8_t *input, std::size_t inputLength);
-std::uint32_t aviqtl_settings_state_merge_json(AviQtlSettingsState *handle, const std::uint8_t *loaded, std::size_t loadedLength, std::uint32_t *migrated);
-std::uint32_t aviqtl_settings_state_snapshot_json(const AviQtlSettingsState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_settings_state_persistent_json(const AviQtlSettingsState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_settings_state_set_value_json(AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, const std::uint8_t *valueDocument, std::size_t valueDocumentLength, std::uint32_t *changed, std::uint32_t *persistent);
-std::uint32_t aviqtl_settings_state_remove_value(AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, std::uint32_t *changed, std::uint32_t *persistent);
-std::int32_t aviqtl_settings_state_get_i32(const AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, std::int32_t fallback);
-double aviqtl_settings_state_get_f64(const AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, double fallback);
-std::uint32_t aviqtl_settings_state_get_bool(const AviQtlSettingsState *handle, const std::uint8_t *key, std::size_t keyLength, std::uint32_t fallback);
 
                                        std::size_t keyframesLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
                                            std::size_t *outputLength);
