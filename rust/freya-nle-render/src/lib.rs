@@ -5,7 +5,7 @@ mod procedural;
 mod shape;
 mod text;
 
-pub use effects::{NativeRenderDefinition, VisualEffect};
+pub use effects::{NativeEffectMode, NativeRenderDefinition, VisualEffect};
 pub use procedural::{ProceduralRasterError, rasterize_procedural_object};
 pub use shape::{ShapeRasterError, rasterize_shape};
 pub use text::{TextRasterError, TextRasterizer};
@@ -75,6 +75,48 @@ fn aviqtl_fragment(input: NativeVertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+const NATIVE_COMPUTE_PREFIX: &str = r#"
+struct NativeParameters {
+    header: vec4<f32>,
+    values: array<vec4<f32>>,
+};
+
+@group(0) @binding(0) var aviqtl_input_texture: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read> aviqtl_parameters: NativeParameters;
+@group(0) @binding(5) var aviqtl_output_texture: texture_storage_2d<rgba8unorm, write>;
+
+fn aviqtl_size() -> vec2<u32> {
+    return textureDimensions(aviqtl_output_texture);
+}
+
+fn aviqtl_pixel(coord: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(aviqtl_size());
+    if coord.x < 0 || coord.y < 0 || coord.x >= size.x || coord.y >= size.y {
+        return vec4<f32>(0.0);
+    }
+    return textureLoad(aviqtl_input_texture, coord, 0);
+}
+
+fn aviqtl_uv(coord: vec2<i32>) -> vec2<f32> {
+    return (vec2<f32>(coord) + vec2<f32>(0.5)) / vec2<f32>(aviqtl_size());
+}
+
+fn aviqtl_parameter(index: u32) -> vec4<f32> {
+    if index >= arrayLength(&aviqtl_parameters.values) {
+        return vec4<f32>(0.0);
+    }
+    return aviqtl_parameters.values[index];
+}
+
+fn aviqtl_write(coord: vec2<i32>, color: vec4<f32>) {
+    let size = vec2<i32>(aviqtl_size());
+    if coord.x < 0 || coord.y < 0 || coord.x >= size.x || coord.y >= size.y {
+        return;
+    }
+    textureStore(aviqtl_output_texture, coord, clamp(color, vec4<f32>(0.0), vec4<f32>(1.0)));
+}
+"#;
+
 fn native_shader_module_source(source: &str) -> String {
     let mut combined = String::with_capacity(
         NATIVE_SHADER_PREFIX.len() + source.len() + NATIVE_SHADER_SUFFIX.len() + 2,
@@ -87,22 +129,30 @@ fn native_shader_module_source(source: &str) -> String {
     combined
 }
 
-/// Validates a package shader against the host-owned `aviqtl-wgsl-v1` contract.
-pub fn validate_native_shader(source: &str) -> Result<(), String> {
-    for forbidden in ["@group", "@binding", "@vertex", "@fragment", "@compute"] {
-        if source.contains(forbidden) {
-            return Err(format!("package shader may not declare {forbidden}"));
-        }
-    }
-    let combined = native_shader_module_source(source);
-    let module = naga::front::wgsl::parse_str(&combined).map_err(|error| {
+fn native_compute_module_source(source: &str) -> String {
+    let mut combined = String::with_capacity(NATIVE_COMPUTE_PREFIX.len() + source.len() + 2);
+    combined.push_str(NATIVE_COMPUTE_PREFIX);
+    combined.push('\n');
+    combined.push_str(source);
+    combined
+}
+
+fn parse_native_module(combined: &str) -> Result<naga::Module, String> {
+    naga::front::wgsl::parse_str(combined).map_err(|error| {
         let mut message = String::from("invalid WGSL: ");
-        let _ = write!(message, "{}", error.emit_to_string(&combined));
+        let _ = write!(message, "{}", error.emit_to_string(combined));
         message
-    })?;
+    })
+}
+
+fn validate_bindings(module: &naga::Module, mode: NativeEffectMode) -> Result<(), String> {
+    let allowed_bindings: &[(u32, u32)] = match mode {
+        NativeEffectMode::Fragment => &[(0, 0), (0, 1), (0, 4)],
+        NativeEffectMode::Compute { .. } => &[(0, 0), (0, 4), (0, 5)],
+    };
     for (_, variable) in module.global_variables.iter() {
         if let Some(binding) = &variable.binding
-            && !matches!((binding.group, binding.binding), (0, 0 | 1 | 4))
+            && !allowed_bindings.contains(&(binding.group, binding.binding))
         {
             return Err(format!(
                 "package shader declares unsupported resource binding @group({}) @binding({})",
@@ -110,24 +160,113 @@ pub fn validate_native_shader(source: &str) -> Result<(), String> {
             ));
         }
     }
-    if module.entry_points.len() != 2
-        || !module
-            .entry_points
-            .iter()
-            .any(|entry| entry.name == "aviqtl_vertex" && entry.stage == naga::ShaderStage::Vertex)
-        || !module.entry_points.iter().any(|entry| {
-            entry.name == "aviqtl_fragment" && entry.stage == naga::ShaderStage::Fragment
-        })
-    {
-        return Err("package shader may not declare additional entry points".to_owned());
+    Ok(())
+}
+
+fn validate_compute_entry(module: &naga::Module, workgroup: [u32; 2]) -> Result<(), String> {
+    let Some(entry) = module
+        .entry_points
+        .iter()
+        .find(|entry| entry.name == "aviqtl_main")
+    else {
+        return Err("compute package shader must declare `fn aviqtl_main`".to_owned());
+    };
+    if module.entry_points.len() != 1 || entry.stage != naga::ShaderStage::Compute {
+        return Err("compute package shader may not declare additional entry points".to_owned());
     }
+    let [x, y] = workgroup;
+    if entry.workgroup_size != [x, y, 1] {
+        return Err(format!(
+            "compute package shader must use @workgroup_size({x}, {y}, 1)",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_module(module: &naga::Module) -> Result<(), String> {
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
     )
-    .validate(&module)
+    .validate(module)
     .map_err(|error| format!("invalid WGSL interface: {error}"))?;
     Ok(())
+}
+
+/// Validates a package shader against the host-owned `aviqtl-wgsl-v1` contract.
+pub fn validate_native_shader(source: &str, mode: NativeEffectMode) -> Result<(), String> {
+    for forbidden in ["@group", "@binding", "@vertex", "@fragment"] {
+        if source.contains(forbidden) {
+            return Err(format!("package shader may not declare {forbidden}"));
+        }
+    }
+    if mode == NativeEffectMode::Fragment && source.contains("@compute") {
+        return Err("package shader may not declare @compute".to_owned());
+    }
+    match mode {
+        NativeEffectMode::Fragment => {
+            let combined = native_shader_module_source(source);
+            let module = parse_native_module(&combined)?;
+            validate_bindings(&module, mode)?;
+            if module.entry_points.len() != 2
+                || !module.entry_points.iter().any(|entry| {
+                    entry.name == "aviqtl_vertex" && entry.stage == naga::ShaderStage::Vertex
+                })
+                || !module.entry_points.iter().any(|entry| {
+                    entry.name == "aviqtl_fragment" && entry.stage == naga::ShaderStage::Fragment
+                })
+            {
+                return Err("package shader may not declare additional entry points".to_owned());
+            }
+            validate_module(&module)
+        }
+        NativeEffectMode::Compute { workgroup } => {
+            let combined = native_compute_module_source(source);
+            let module = parse_native_module(&combined)?;
+            validate_bindings(&module, mode)?;
+            validate_compute_entry(&module, workgroup)?;
+            validate_module(&module)
+        }
+    }
+}
+
+/// Validates a shader before its package metadata is known: it must satisfy the
+/// fragment contract, or declare a compute entry with a workgroup the host can
+/// dispatch. Package loading re-checks the declared dispatch shape.
+pub fn validate_native_shader_source(source: &str) -> Result<(), String> {
+    match validate_native_shader(source, NativeEffectMode::Fragment) {
+        Ok(()) => Ok(()),
+        Err(fragment_error) => {
+            for forbidden in ["@group", "@binding", "@vertex", "@fragment"] {
+                if source.contains(forbidden) {
+                    return Err(format!("package shader may not declare {forbidden}"));
+                }
+            }
+            let combined = native_compute_module_source(source);
+            let module = parse_native_module(&combined)?;
+            validate_bindings(&module, NativeEffectMode::Compute { workgroup: [8, 8] })?;
+            let Some(entry) = module
+                .entry_points
+                .iter()
+                .find(|entry| entry.name == "aviqtl_main")
+            else {
+                return Err(format!(
+                    "package shader is neither a valid fragment effect nor a compute effect: {fragment_error}"
+                ));
+            };
+            if module.entry_points.len() != 1 || entry.stage != naga::ShaderStage::Compute {
+                return Err("package shader may not declare additional entry points".to_owned());
+            }
+            let [x, y, z] = entry.workgroup_size;
+            if x == 0 || y == 0 || z != 1 || x > 256 || y > 256 || u64::from(x) * u64::from(y) > 256
+            {
+                return Err(format!(
+                    "compute package shader declares an unsupported @workgroup_size({x}, {y}, {z})",
+                ));
+            }
+            validate_module(&module)
+        }
+    }
 }
 
 const SHADER: &str = r#"
@@ -1546,6 +1685,7 @@ pub struct Compositor {
     add_pipeline: wgpu::RenderPipeline,
     complex_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    compute_bind_group_layout: wgpu::BindGroupLayout,
     background_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
@@ -1566,6 +1706,7 @@ struct GpuContext<'a> {
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
     layer_layout: &'a wgpu::BindGroupLayout,
+    compute_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
     target_format: wgpu::TextureFormat,
 }
@@ -1668,6 +1809,42 @@ impl Compositor {
                 },
             ],
         });
+        let compute_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("freya-nle-compositor-compute-layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
         let background_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("freya-nle-compositor-background-layout"),
@@ -1843,6 +2020,7 @@ impl Compositor {
             add_pipeline,
             complex_pipeline,
             bind_group_layout,
+            compute_bind_group_layout,
             background_bind_group_layout,
             sampler,
             target_format,
@@ -1955,6 +2133,7 @@ impl Compositor {
             device,
             queue,
             layer_layout: &self.bind_group_layout,
+            compute_layout: &self.compute_bind_group_layout,
             sampler: &self.sampler,
             target_format: self.target_format,
         };
@@ -2255,7 +2434,12 @@ fn create_composition_texture(
         usage: wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | if format == wgpu::TextureFormat::Rgba8Unorm {
+                wgpu::TextureUsages::STORAGE_BINDING
+            } else {
+                wgpu::TextureUsages::empty()
+            },
         view_formats: &[],
     })
 }
@@ -2341,9 +2525,11 @@ struct GpuEffectPasses {
     uniforms: Vec<wgpu::Buffer>,
     bind_groups: Vec<wgpu::BindGroup>,
     native_pipelines: Vec<Option<wgpu::RenderPipeline>>,
+    compute_passes: Vec<Option<ComputeEffectPass>>,
     destinations: Vec<usize>,
     effect_pass_counts: Vec<usize>,
     native_shader_hashes: Vec<Option<u64>>,
+    size: (u32, u32),
     output_index: usize,
 }
 
@@ -2390,6 +2576,37 @@ fn create_native_effect_pipeline(
     })
 }
 
+fn create_native_compute_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source: &str,
+) -> wgpu::ComputePipeline {
+    let shader_source = native_compute_module_source(source);
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("freya-nle-native-compute-shader"),
+        source: wgpu::ShaderSource::Wgsl(Cow::Owned(shader_source)),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("freya-nle-native-compute-pipeline-layout"),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("freya-nle-native-compute-pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("aviqtl_main"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
+struct ComputeEffectPass {
+    pipeline: wgpu::ComputePipeline,
+    bind_group: wgpu::BindGroup,
+    workgroup: [u32; 2],
+}
+
 impl GpuEffectPasses {
     fn new(
         gpu: GpuContext<'_>,
@@ -2413,7 +2630,11 @@ impl GpuEffectPasses {
         let mut uniforms = Vec::with_capacity(plan.len());
         let mut bind_groups = Vec::with_capacity(plan.len());
         let mut native_pipelines = Vec::with_capacity(plan.len());
+        let mut compute_passes = Vec::with_capacity(plan.len());
         let mut destinations = Vec::with_capacity(plan.len());
+        // Storage textures are writable on every format the compositor is
+        // instantiated with today; anything else keeps the render pipeline.
+        let compute_supported = gpu.target_format == wgpu::TextureFormat::Rgba8Unorm;
         let effect_pass_counts = effects
             .iter()
             .map(VisualEffect::pass_count)
@@ -2463,18 +2684,56 @@ impl GpuEffectPasses {
                     ],
                 }),
             );
-            native_pipelines.push(
-                effects[pass_plan.effect_index]
-                    .native_shader()
-                    .map(|source| {
-                        create_native_effect_pipeline(
-                            gpu.device,
-                            gpu.layer_layout,
-                            gpu.target_format,
-                            source,
-                        )
-                    }),
-            );
+            let effect = &effects[pass_plan.effect_index];
+            let compute_mode = effect.native_mode().and_then(|mode| match mode {
+                NativeEffectMode::Fragment => None,
+                NativeEffectMode::Compute { workgroup } => Some(workgroup),
+            });
+            native_pipelines.push(match (compute_mode, effect.native_shader()) {
+                (None, Some(source)) => Some(create_native_effect_pipeline(
+                    gpu.device,
+                    gpu.layer_layout,
+                    gpu.target_format,
+                    source,
+                )),
+                _ => None,
+            });
+            let compute_pass = compute_mode
+                .filter(|_| compute_supported)
+                .and_then(|workgroup| {
+                    let source = effect.native_shader()?;
+                    let pipeline =
+                        create_native_compute_pipeline(gpu.device, gpu.compute_layout, source);
+                    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("freya-nle-native-compute-bind-group"),
+                        layout: gpu.compute_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(input_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: uniforms
+                                    .last()
+                                    .expect("the effect uniform was inserted above")
+                                    .as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &views[pass_plan.destination],
+                                ),
+                            },
+                        ],
+                    });
+                    Some(ComputeEffectPass {
+                        pipeline,
+                        bind_group,
+                        workgroup,
+                    })
+                });
+            compute_passes.push(compute_pass);
             destinations.push(pass_plan.destination);
         }
         Self {
@@ -2483,8 +2742,10 @@ impl GpuEffectPasses {
             uniforms,
             bind_groups,
             native_pipelines,
+            compute_passes,
             destinations,
             effect_pass_counts,
+            size,
             native_shader_hashes: effects
                 .iter()
                 .map(VisualEffect::native_shader_hash)
@@ -2525,12 +2786,27 @@ impl GpuEffectPasses {
     }
 
     fn encode(&self, encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::RenderPipeline) {
-        for ((bind_group, destination), native_pipeline) in self
+        for (((bind_group, destination), native_pipeline), compute) in self
             .bind_groups
             .iter()
             .zip(&self.destinations)
             .zip(&self.native_pipelines)
+            .zip(&self.compute_passes)
         {
+            if let Some(compute) = compute {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("freya-nle-native-compute-pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&compute.pipeline);
+                pass.set_bind_group(0, &compute.bind_group, &[]);
+                pass.dispatch_workgroups(
+                    self.size.0.div_ceil(compute.workgroup[0]).max(1),
+                    self.size.1.div_ceil(compute.workgroup[1]).max(1),
+                    1,
+                );
+                continue;
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("freya-nle-single-effect-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3446,19 +3722,61 @@ fn aviqtl_effect(
     return mix(input_color, shifted, amount);
 }
 "#;
-    assert!(validate_native_shader(shader).is_ok());
-    assert!(validate_native_shader("@fragment fn aviqtl_effect() {}").is_err());
+    let fragment = NativeEffectMode::Fragment;
+    assert!(validate_native_shader(shader, fragment).is_ok());
+    assert!(validate_native_shader("@fragment fn aviqtl_effect() {}", fragment).is_err());
     assert!(
         validate_native_shader(
-            "@ group(2) @ binding(0) var extra: texture_2d<f32>; fn aviqtl_effect(input_color: vec4<f32>, uv: vec2<f32>, canvas_size: vec2<f32>, time_seconds: f32) -> vec4<f32> { return input_color; }"
+            "@ group(2) @ binding(0) var extra: texture_2d<f32>; fn aviqtl_effect(input_color: vec4<f32>, uv: vec2<f32>, canvas_size: vec2<f32>, time_seconds: f32) -> vec4<f32> { return input_color; }",
+            fragment,
         )
         .is_err()
     );
-    assert!(validate_native_shader("fn other() {}").is_err());
+    assert!(validate_native_shader("fn other() {}", fragment).is_err());
     assert!(
         validate_native_shader(
-            "fn aviqtl_effect(input_color: vec4<f32>) -> vec4<f32> { return input_color; }"
+            "fn aviqtl_effect(input_color: vec4<f32>) -> vec4<f32> { return input_color; }",
+            fragment,
         )
         .is_err()
+    );
+}
+
+#[test]
+fn compute_shader_validation_enforces_the_dispatch_contract() {
+    let shader = r#"
+@compute @workgroup_size(16, 8, 1)
+fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let coord = vec2<i32>(id.xy);
+    let amount = aviqtl_parameter(0u).x;
+    let color = aviqtl_pixel(coord);
+    aviqtl_write(coord, mix(color, vec4<f32>(1.0), amount));
+}
+"#;
+    let compute = NativeEffectMode::Compute { workgroup: [16, 8] };
+    assert!(validate_native_shader(shader, compute).is_ok());
+    // The declared tile must match the metadata.
+    assert!(
+        validate_native_shader(shader, NativeEffectMode::Compute { workgroup: [8, 8] }).is_err()
+    );
+    // A fragment effect is not a compute effect and vice versa.
+    assert!(validate_native_shader("fn aviqtl_effect() {}", compute).is_err());
+    assert!(
+        validate_native_shader(
+            &shader.replace("fn aviqtl_main", "fn aviqtl_other"),
+            compute
+        )
+        .is_err()
+    );
+    // Source-level validation accepts both contracts.
+    assert!(validate_native_shader_source(shader).is_ok());
+    assert!(
+        validate_native_shader_source(
+            r#"
+@compute @workgroup_size(4, 4, 1)
+fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {}
+"#
+        )
+        .is_ok()
     );
 }

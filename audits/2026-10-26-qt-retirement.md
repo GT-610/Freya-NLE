@@ -131,12 +131,16 @@ documented the behavior is in git history.
    completes. What is left of Qt's path is the explicit `AVHWDeviceContext` /
    `hw_frames_ctx` setup: hardware-frame decoding, and a hardware upload path for
    VAAPI/QSV instead of the software fallback.
-2. **Compute-shader effects.** Qt's `ComputeEffect` exposed work-group sizes and extra
-   input textures (`core/src/compute_effect.cpp:54,94,189`) and 10 shipped `.comp`
-   shaders used them. The native package contract allows one fragment pass, up to 16
-   `vec4` uniforms, and no extra textures (`freya-nle-render/src/lib.rs:91-134`). The
-   built-in effects have wgpu equivalents, but third-party compute packages cannot be
-   authored.
+2. **Compute-shader effects, partly carried over.** Qt's `ComputeEffect` exposed
+   work-group sizes and extra input textures (`core/src/compute_effect.cpp:54,94,189`) and
+   10 shipped `.comp` shaders used them. Native packages can now declare
+   `"mode": "compute"` with a `workgroup` tile: the host binds the layer texture, the
+   parameter block and an `rgba8unorm` output storage texture, dispatches one compute pass
+   per effect, and rejects metadata whose tile does not match the shader's
+   `@workgroup_size`. The source-level validator accepted either contract so installation
+   still works before metadata is paired. What is not carried over yet is the rest of Qt's
+   contract: extra input textures (`syncExtraTextures`) and multi-dispatch ping-pong, which
+   need preview-side routing of additional textures before they mean anything.
 3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
    render route is listed and then renders nothing. The preview planner now reports an
    effect id without a renderer, and an object clip type that is not in the catalog the

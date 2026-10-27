@@ -43,8 +43,10 @@ no-gpu-probes/ - standalone probes used to measure GPU-support decisions
 
 Effects and objects are native JSON + WGSL packages. Each package contains a
 `manifest.json`, one or more metadata JSON files, and the shaders they declare,
-and every entry must declare the `aviqtl-wgsl-v1` runtime. QML is not a package
-runtime: metadata that names a QML component is rejected at installation time.
+and every entry must declare the `aviqtl-wgsl-v1` runtime, either as a fragment
+effect or (with `"mode": "compute"` and a `workgroup` tile) a compute dispatch.
+QML is not a package runtime: metadata that names a QML component is rejected at
+installation time.
 
 See the [effects and objects documentation](https://aviqtl.gt610.dpdns.org/developer/effects)
 for the metadata schema, the shader contract, and the package layout. The

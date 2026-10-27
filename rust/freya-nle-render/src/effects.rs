@@ -1,12 +1,31 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// How a package shader runs on the host pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeEffectMode {
+    /// One fragment pass per photo tile; the default for `aviqtl-wgsl-v1`.
+    Fragment,
+    /// One compute dispatch over the layer texture, tiled by `workgroup`.
+    Compute { workgroup: [u32; 2] },
+}
+
+impl NativeEffectMode {
+    pub(crate) fn workgroup(self) -> Option<[u32; 2]> {
+        match self {
+            Self::Fragment => None,
+            Self::Compute { workgroup } => Some(workgroup),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeRenderDefinition {
     pub id: String,
     pub kind: String,
     pub uniforms: Vec<String>,
     pub shader_source: Arc<str>,
+    pub mode: NativeEffectMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,6 +267,7 @@ pub enum VisualEffect {
     Native {
         package_id: String,
         shader_source: Arc<str>,
+        mode: NativeEffectMode,
         parameters: Box<[[f32; 4]; 16]>,
         time_seconds: f32,
     },
@@ -259,11 +279,13 @@ impl Hash for VisualEffect {
         if let Self::Native {
             package_id,
             shader_source,
+            mode,
             ..
         } = self
         {
             package_id.hash(state);
             shader_source.hash(state);
+            mode.workgroup().hash(state);
             return;
         }
         for value in self.encoded()[1..].iter().copied() {
@@ -781,10 +803,20 @@ impl VisualEffect {
         }
     }
 
+    pub(crate) fn native_mode(&self) -> Option<NativeEffectMode> {
+        match self {
+            Self::Native { mode, .. } => Some(*mode),
+            _ => None,
+        }
+    }
+
     pub(crate) fn native_shader_hash(&self) -> Option<u64> {
         let source = self.native_shader()?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
+        self.native_mode()
+            .and_then(NativeEffectMode::workgroup)
+            .hash(&mut hasher);
         Some(hasher.finish())
     }
 }
@@ -850,6 +882,7 @@ mod tests {
         let effect = VisualEffect::Native {
             package_id: "effect.native".to_owned(),
             shader_source: Arc::from("fn aviqtl_effect() {}"),
+            mode: NativeEffectMode::Fragment,
             parameters: Box::new(parameters),
             time_seconds: 1.5,
         };
@@ -871,6 +904,7 @@ mod tests {
             VisualEffect::Native {
                 package_id: "effect.native".to_owned(),
                 shader_source: Arc::from("fn aviqtl_effect() {}"),
+                mode: NativeEffectMode::Fragment,
                 parameters: Box::new(parameters),
                 time_seconds,
             }
@@ -887,6 +921,7 @@ mod tests {
             hash(&VisualEffect::Native {
                 package_id: "effect.native".to_owned(),
                 shader_source: Arc::from("fn aviqtl_effect() { let changed = 1; }"),
+                mode: NativeEffectMode::Fragment,
                 parameters: Box::new([[0.0; 4]; 16]),
                 time_seconds: 0.0,
             })

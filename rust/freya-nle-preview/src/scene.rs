@@ -477,6 +477,7 @@ fn layer_visual_effects(
                 Some(VisualEffect::Native {
                     package_id: definition.id.clone(),
                     shader_source: definition.shader_source.clone(),
+                    mode: definition.mode,
                     parameters: Box::new(parameters),
                     time_seconds: relative_frame as f32 / fps.max(1.0) as f32,
                 })
@@ -1162,6 +1163,7 @@ mod tests {
             .map(str::to_owned)
             .collect(),
             shader_source: std::sync::Arc::from("fn aviqtl_effect() {}"),
+            mode: freya_nle_render::NativeEffectMode::Fragment,
         }]);
 
         let planned = planner
@@ -1217,6 +1219,7 @@ mod tests {
             kind: "effect".to_owned(),
             uniforms: vec!["enabled".to_owned()],
             shader_source: std::sync::Arc::from("fn aviqtl_effect() {}"),
+            mode: freya_nle_render::NativeEffectMode::Fragment,
         }]);
 
         let planned = planner
@@ -1242,6 +1245,57 @@ mod tests {
         };
         assert_eq!(parameters[0], [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(*time_seconds, 1.0);
+    }
+
+    #[test]
+    fn compute_native_definitions_keep_their_dispatch_shape() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 320, "height": 180, "fps": 25.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 100, "width": 320, "height": 180, "fps": 25.0}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "rect",
+                "start": 0,
+                "duration": 100,
+                "layer": 0,
+                "effects": [
+                    {"id": "rect", "name": "Rectangle", "enabled": true, "params": {}},
+                    {"id": "effect.compute", "name": "Compute", "enabled": true, "params": {"amount": 0.5}}
+                ]
+            }]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        planner.set_native_definitions([NativeRenderDefinition {
+            id: "effect.compute".to_owned(),
+            kind: "effect".to_owned(),
+            uniforms: vec!["amount".to_owned()],
+            shader_source: std::sync::Arc::from(
+                "@compute @workgroup_size(16, 8, 1) fn aviqtl_main() {}",
+            ),
+            mode: freya_nle_render::NativeEffectMode::Compute { workgroup: [16, 8] },
+        }]);
+
+        let planned = planner
+            .build(&document, 1, 25)
+            .expect("compute effect plans");
+        let native = planned.scene.layers[0]
+            .effects
+            .iter()
+            .find(|effect| matches!(effect, VisualEffect::Native { .. }))
+            .expect("compute effect is attached");
+        let VisualEffect::Native {
+            mode, parameters, ..
+        } = native
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            *mode,
+            freya_nle_render::NativeEffectMode::Compute { workgroup: [16, 8] }
+        );
+        assert_eq!(parameters[0], [0.5, 0.0, 0.0, 0.0]);
     }
 
     #[test]

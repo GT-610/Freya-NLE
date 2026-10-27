@@ -8,6 +8,7 @@ This directory contains installable Effect and Object packages for the Slint/wgp
 | --- | --- | --- | --- |
 | [color-effects](color-effects/) | Effect | 1 effect | Native WGSL color tint |
 | [weather-objects](weather-objects/) | Object | 2 objects | Native WGSL rain and snow animations |
+| [compute-effects](compute-effects/) | Effect | 1 effect | Compute-shader Rec. 709 desaturation |
 
 ## Package model
 
@@ -82,11 +83,49 @@ fn aviqtl_effect(
 }
 ```
 
-The host also provides `aviqtl_sample(uv)` for neighboring source samples. Package shaders cannot declare bindings, shader stages, or entry points; those resources remain host-owned and are validated before installation.
+The host also provides `aviqtl_sample(uv)` for neighboring source samples. Fragment shaders cannot declare bindings, shader stages, or entry points; those resources remain host-owned and are validated before installation.
 
 - An Effect processes the existing layer texture.
 - An Object receives a transparent canvas matching the scene size.
 - Preview and export execute the same wgpu pipeline.
+
+### Compute effects
+
+Adding a dispatch shape to the runtime runs the package as a compute shader
+instead of a fragment pass:
+
+```json
+"runtime": {
+  "engine": "aviqtl-wgsl-v1",
+  "shader": "MyEffect.wgsl",
+  "mode": "compute",
+  "workgroup": [16, 8],
+  "uniforms": ["amount"]
+}
+```
+
+`workgroup` is the tile the shader declares and the host dispatches over; it
+defaults to `[8, 8]`. Each axis is 1–256 and a tile holds at most 256
+invocations, matching WebGPU's default limits. The package supplies exactly one
+entry point:
+
+```wgsl
+@compute @workgroup_size(16, 8, 1)
+fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let coord = vec2<i32>(id.xy);
+    let amount = aviqtl_parameter(0u).x;
+    let color = aviqtl_pixel(coord);
+    aviqtl_write(coord, mix(color, vec4<f32>(1.0), amount));
+}
+```
+
+Compute hosts provide `aviqtl_size()`, `aviqtl_pixel(coord)` (a bounds-checked
+read that returns transparent black outside the layer), `aviqtl_uv(coord)`,
+`aviqtl_parameter(index)`, and `aviqtl_write(coord, color)` (clamped, dropped
+outside the layer). There is no sampler in compute mode, so sample neighbors
+with explicit coordinates instead of `aviqtl_sample`. A shader whose
+`@workgroup_size` differs from the metadata `workgroup` is rejected, and the
+dispatch needs the `rgba8unorm` layer format the preview and export use.
 
 ## Testing a package
 

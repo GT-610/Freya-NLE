@@ -58,6 +58,14 @@ All notable changes to Freya NLE are documented in this file.
   `AviQtl*` structs
 
 ### Added
+- Native effect packages can run as compute shaders. A package declares
+  `"mode": "compute"` and a `workgroup` tile in its `aviqtl-wgsl-v1` runtime, then
+  provides one `@compute @workgroup_size(x, y, 1) fn aviqtl_main` entry point; the
+  host binds the layer texture, the parameter block and an `rgba8unorm` output
+  storage texture and dispatches one pass per effect. Installation rejects a tile
+  that does not match the shader, and the package README documents the
+  `aviqtl_pixel`/`aviqtl_write` helpers. Extra input textures and multi-dispatch
+  ping-pong remain open
 - AviUtl-style expression parameters work again. A parameter stored as a string
   beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
   the keyframe `value` in scope, in the preview, the export, and the audio plan

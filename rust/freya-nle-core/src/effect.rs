@@ -40,6 +40,36 @@ fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
     if !valid_runtime_path(shader) || !shader.ends_with(".wgsl") {
         return None;
     }
+    let mode = match string(runtime.get("mode")) {
+        None | Some("fragment") => None,
+        Some("compute") => Some("compute"),
+        Some(_) => return None,
+    };
+    let workgroup = runtime.get("workgroup").and_then(Value::as_array);
+    if workgroup.is_some() && mode.is_none() {
+        return None;
+    }
+    let workgroup = match workgroup {
+        None => [8, 8],
+        Some(values) => {
+            let mut axes = values.iter().map(Value::as_u64);
+            let x = axes.next().flatten()?;
+            let y = axes.next().flatten()?;
+            if axes.next().is_some() {
+                return None;
+            }
+            let axes = [x, y].map(u32::try_from);
+            let [x, y] = axes;
+            let (x, y) = (x.ok()?, y.ok()?);
+            if !(1..=256).contains(&x)
+                || !(1..=256).contains(&y)
+                || u32::try_from(u64::from(x) * u64::from(y)).map_or(true, |product| product > 256)
+            {
+                return None;
+            }
+            [x, y]
+        }
+    };
     let uniforms = runtime
         .get("uniforms")
         .and_then(Value::as_array)
@@ -58,7 +88,7 @@ fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
     {
         return None;
     }
-    Some(Map::from_iter([
+    let mut normalized = Map::from_iter([
         (
             "engine".to_owned(),
             Value::String("aviqtl-wgsl-v1".to_owned()),
@@ -73,7 +103,15 @@ fn normalize_runtime(value: &Value) -> Option<Map<String, Value>> {
                     .collect(),
             ),
         ),
-    ]))
+    ]);
+    if let Some(mode) = mode {
+        normalized.insert("mode".to_owned(), Value::String(mode.to_owned()));
+        normalized.insert(
+            "workgroup".to_owned(),
+            Value::Array(vec![Value::from(workgroup[0]), Value::from(workgroup[1])]),
+        );
+    }
+    Some(normalized)
 }
 
 pub(crate) fn normalize_metadata(input: &[u8]) -> Option<Map<String, Value>> {
@@ -230,6 +268,89 @@ mod tests {
                     &serde_json::to_vec(&invalid).expect("serialize metadata fixture")
                 )
                 .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn compute_runtimes_keep_their_dispatch_shape() {
+        let native = |runtime: Value| {
+            json!({
+                "id": "effect.compute",
+                "name": "Compute effect",
+                "version": "1.0.0",
+                "kind": "effect",
+                "categories": ["Native"],
+                "params": {},
+                "ui": {"controls": []},
+                "runtime": runtime
+            })
+        };
+        let normalized = normalize_metadata(
+            &serde_json::to_vec(&native(json!({
+                "engine": "aviqtl-wgsl-v1",
+                "shader": "shaders/blur.wgsl",
+                "mode": "compute",
+                "workgroup": [16, 4],
+                "uniforms": ["radius"]
+            })))
+            .expect("serialize metadata fixture"),
+        )
+        .expect("valid compute metadata");
+        assert_eq!(normalized["runtime"]["mode"], "compute");
+        assert_eq!(normalized["runtime"]["workgroup"], json!([16, 4]));
+
+        // The dispatch shape defaults to one warp tile per axis.
+        let defaulted = normalize_metadata(
+            &serde_json::to_vec(&native(json!({
+                "engine": "aviqtl-wgsl-v1",
+                "shader": "shaders/blur.wgsl",
+                "mode": "compute",
+                "uniforms": []
+            })))
+            .expect("serialize metadata fixture"),
+        )
+        .expect("valid compute metadata");
+        assert_eq!(defaulted["runtime"]["workgroup"], json!([8, 8]));
+
+        // Fragment remains the default and cannot carry a dispatch shape.
+        let fragment = normalize_metadata(
+            &serde_json::to_vec(&native(json!({
+                "engine": "aviqtl-wgsl-v1",
+                "shader": "shaders/main.wgsl",
+                "uniforms": []
+            })))
+            .expect("serialize metadata fixture"),
+        )
+        .expect("valid fragment metadata");
+        assert!(fragment["runtime"].get("mode").is_none());
+
+        for invalid in [
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"raytracing","uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","workgroup":[8,8],"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","workgroup":[0,8],"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","workgroup":[8],"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","workgroup":[32,16],"uniforms":[]}),
+            ),
+            native(
+                json!({"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","mode":"compute","workgroup":[8,8,1],"uniforms":[]}),
+            ),
+        ] {
+            assert!(
+                normalize_metadata(
+                    &serde_json::to_vec(&invalid).expect("serialize metadata fixture")
+                )
+                .is_none(),
+                "{invalid}"
             );
         }
     }

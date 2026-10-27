@@ -1,0 +1,13 @@
+{
+  "id": "com.aviqtl.effects.compute",
+  "name": "Native Compute Effects",
+  "version": "1.0.0",
+  "author": "AviQtl Team",
+  "description": "Effects implemented as native WGSL compute shaders",
+  "min_app_version": "0.8.0",
+  "type": "effect",
+  "effects": [
+    "compute_desaturate"
+  ],
+  "license": "AGPL-3.0"
+}

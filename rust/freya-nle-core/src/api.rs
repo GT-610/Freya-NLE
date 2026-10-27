@@ -111,6 +111,9 @@ pub struct NativeEffectRuntime {
     pub engine: String,
     pub shader: String,
     pub uniforms: Vec<String>,
+    /// `Some` when the package runs as a compute shader; the values are its
+    /// per-axis workgroup size.
+    pub workgroup: Option<[u32; 2]>,
 }
 
 /// Rust-owned package catalog projection shared by native front ends.
@@ -320,6 +323,15 @@ pub fn parse_effect_metadata(input: &[u8]) -> Option<EffectMetadata> {
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
                 .collect(),
+            workgroup: runtime
+                .get("workgroup")
+                .and_then(Value::as_array)
+                .and_then(|axes| {
+                    let mut values = axes.iter().filter_map(Value::as_u64);
+                    let x = u32::try_from(values.next()?).ok()?;
+                    let y = u32::try_from(values.next()?).ok()?;
+                    Some([x, y])
+                }),
         });
     Some(EffectMetadata {
         id: string("id"),
