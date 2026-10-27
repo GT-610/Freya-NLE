@@ -202,9 +202,10 @@ Run on macOS 26 (Apple M5, Metal) on the branch:
 - `cargo test --manifest-path rust/Cargo.toml --locked --workspace --all-features`
 - `cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings`
   is also clean on the pinned 1.97.1 toolchain. The host used for this audit has
-  Homebrew Rust 1.99.1 without rustup, whose newer clippy reports two pre-existing
-  `Atomic::fetch_update` deprecations in `freya-nle-audio`; they predate this change
-  and the pinned toolchain does not flag them.
+  Homebrew Rust 1.99.1 without rustup, whose newer clippy reports three pre-existing
+  lints in `freya-nle-audio` (two `Atomic::fetch_update` deprecations and a
+  `chunks_exact` suggestion); they predate this change and the pinned toolchain does
+  not flag them.
 - `python -m unittest tests.test_build_version` and `python tests/test_rust_abi_contract.py`
 - `python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header rust/freya-nle-core/include/rust_core_abi.hpp`
   stays green after the C ABI retirement above: the header still declares exactly the 99

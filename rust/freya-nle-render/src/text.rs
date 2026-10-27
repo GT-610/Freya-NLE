@@ -523,7 +523,7 @@ fn justified_word_offsets(
         return None;
     }
     let natural = word_widths.iter().sum::<f32>() + space_width * gaps as f32;
-    if !(target_width > natural) {
+    if !natural.is_finite() || target_width <= natural {
         return None;
     }
     let extra_per_gap = (target_width - natural) / gaps as f32;
