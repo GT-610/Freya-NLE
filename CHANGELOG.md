@@ -65,9 +65,12 @@ All notable changes to Freya NLE are documented in this file.
   storage texture and dispatches one pass per effect. `"dispatch": n` (1–8)
   chains the shader over its own output with `aviqtl_pass()` for separable
   effects, and `aviqtl_texel(uv)` samples through the host's filtered sampler
-  while `aviqtl_original_texel(uv)` reads the layer before the effect chain ran.
+  while `aviqtl_original_texel(uv)` reads the layer before the effect chain ran
+  and `aviqtl_background_texel(uv)` reads the composition of the layers below.
+  Effect passes now record just before their layer is composited, so the
+  background input is the current accumulation rather than an empty target.
   Installation rejects a tile that does not match the shader, and the package
-  README documents the helpers. Additional layer inputs remain open
+  README documents the helpers. Binding an arbitrary named layer remains open
 - AviUtl-style expression parameters work again. A parameter stored as a string
   beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
   the keyframe `value` in scope, in the preview, the export, and the audio plan

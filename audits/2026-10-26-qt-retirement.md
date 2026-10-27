@@ -150,9 +150,12 @@ documented the behavior is in git history.
    validator accepted either contract so installation still works before metadata is
    paired. Compute shaders also read the layer as it entered the effect chain
    (`aviqtl_original_texel`), covering Qt's `sourceProxy` extra texture for effects such as
-   border blur and drop shadow. What is not carried over is binding a *different* layer as
-   an input (`syncExtraTextures` with another item), which needs preview-side routing
-   before it means anything.
+   border blur and drop shadow, and the composition below the layer
+   (`aviqtl_background_texel`), covering Qt's `blend_layer` background input. Effect passes
+   now record immediately before their layer is composited so that background sees the
+   current accumulation. What is not carried over is binding an *arbitrary* QQuickItem as
+   an extra texture (`syncExtraTextures` with a named item); the editor's layer blend modes
+   cover the common cases.
 3. **Unrouted catalog entries.** A definition that passes metadata validation but has no
    render route is listed and then renders nothing. The preview planner now reports an
    effect id without a renderer, and an object clip type that is not in the catalog the

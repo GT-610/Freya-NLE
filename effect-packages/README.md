@@ -123,7 +123,8 @@ Compute hosts provide `aviqtl_size()`, `aviqtl_pixel(coord)` (a bounds-checked
 read that returns transparent black outside the layer), `aviqtl_uv(coord)`,
 `aviqtl_texel(uv)` (filtered sampling at an explicit LOD, the compute analogue
 of `aviqtl_sample`), `aviqtl_original_texel(uv)` (the layer as it entered the
-effect chain, before any effect in it ran), `aviqtl_parameter(index)`,
+effect chain, before any effect in it ran), `aviqtl_background_texel(uv)` (the
+composition of the layers below this one), `aviqtl_parameter(index)`,
 `aviqtl_pass()`, and `aviqtl_write(coord, color)` (clamped, dropped outside the
 layer).
 

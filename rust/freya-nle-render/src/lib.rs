@@ -87,6 +87,8 @@ struct NativeParameters {
 @group(0) @binding(4) var<storage, read> aviqtl_parameters: NativeParameters;
 @group(0) @binding(5) var aviqtl_output_texture: texture_storage_2d<rgba8unorm, write>;
 
+@group(1) @binding(0) var aviqtl_background_texture: texture_2d<f32>;
+
 fn aviqtl_size() -> vec2<u32> {
     return textureDimensions(aviqtl_output_texture);
 }
@@ -113,6 +115,10 @@ fn aviqtl_texel(uv: vec2<f32>) -> vec4<f32> {
 
 fn aviqtl_original_texel(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(aviqtl_original_texture, aviqtl_input_sampler, uv, 0.0);
+}
+
+fn aviqtl_background_texel(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(aviqtl_background_texture, aviqtl_input_sampler, uv, 0.0);
 }
 
 fn aviqtl_parameter(index: u32) -> vec4<f32> {
@@ -162,7 +168,7 @@ fn parse_native_module(combined: &str) -> Result<naga::Module, String> {
 fn validate_bindings(module: &naga::Module, mode: NativeEffectMode) -> Result<(), String> {
     let allowed_bindings: &[(u32, u32)] = match mode {
         NativeEffectMode::Fragment => &[(0, 0), (0, 1), (0, 4)],
-        NativeEffectMode::Compute { .. } => &[(0, 0), (0, 1), (0, 3), (0, 4), (0, 5)],
+        NativeEffectMode::Compute { .. } => &[(0, 0), (0, 1), (0, 3), (0, 4), (0, 5), (1, 0)],
     };
     for (_, variable) in module.global_variables.iter() {
         if let Some(binding) = &variable.binding
@@ -1706,6 +1712,7 @@ pub struct Compositor {
     complex_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     compute_bind_group_layout: wgpu::BindGroupLayout,
+    compute_background_layout: wgpu::BindGroupLayout,
     background_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
@@ -1727,6 +1734,7 @@ struct GpuContext<'a> {
     queue: &'a wgpu::Queue,
     layer_layout: &'a wgpu::BindGroupLayout,
     compute_layout: &'a wgpu::BindGroupLayout,
+    compute_background_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
     target_format: wgpu::TextureFormat,
 }
@@ -1880,6 +1888,20 @@ impl Compositor {
                         count: None,
                     },
                 ],
+            });
+        let compute_background_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("freya-nle-compositor-compute-background-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
             });
         let background_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2057,6 +2079,7 @@ impl Compositor {
             complex_pipeline,
             bind_group_layout,
             compute_bind_group_layout,
+            compute_background_layout,
             background_bind_group_layout,
             sampler,
             target_format,
@@ -2170,6 +2193,7 @@ impl Compositor {
             queue,
             layer_layout: &self.bind_group_layout,
             compute_layout: &self.compute_bind_group_layout,
+            compute_background_layout: &self.compute_background_layout,
             sampler: &self.sampler,
             target_format: self.target_format,
         };
@@ -2189,12 +2213,6 @@ impl Compositor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("freya-nle-compositor-encoder"),
         });
-        for layer in &ordered {
-            self.layers
-                .get(&layer.cache_key)
-                .expect("active layer was prepared before effect rendering")
-                .encode_effect_passes(&mut encoder, &self.effect_pipeline);
-        }
         if self.sample_count > 1 {
             let multisample_view = targets
                 .multisample_view
@@ -2224,6 +2242,12 @@ impl Compositor {
                     .layers
                     .get(&layer.cache_key)
                     .expect("active layer was prepared before rendering");
+                gpu_layer.encode_effect_passes(
+                    &mut encoder,
+                    &self.effect_pipeline,
+                    device,
+                    &targets.views[current_target],
+                );
                 if let Some(pipeline) = self.fixed_pipeline(gpu_layer.blend_mode) {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("freya-nle-compositor-msaa-fixed-pass"),
@@ -2303,6 +2327,12 @@ impl Compositor {
                 .layers
                 .get(&layer.cache_key)
                 .expect("active layer was prepared before rendering");
+            gpu_layer.encode_effect_passes(
+                &mut encoder,
+                &self.effect_pipeline,
+                device,
+                &targets.views[current_target],
+            );
             if let Some(pipeline) = self.fixed_pipeline(gpu_layer.blend_mode) {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("freya-nle-compositor-fixed-pass"),
@@ -2615,6 +2645,7 @@ fn create_native_effect_pipeline(
 fn create_native_compute_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
+    background_layout: &wgpu::BindGroupLayout,
     source: &str,
 ) -> wgpu::ComputePipeline {
     let shader_source = native_compute_module_source(source);
@@ -2624,7 +2655,7 @@ fn create_native_compute_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("freya-nle-native-compute-pipeline-layout"),
-        bind_group_layouts: &[Some(layout)],
+        bind_group_layouts: &[Some(layout), Some(background_layout)],
         immediate_size: 0,
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -2646,6 +2677,7 @@ struct ComputeEffectPass {
     pipeline: wgpu::ComputePipeline,
     workgroup: [u32; 2],
     dispatches: Vec<ComputeDispatch>,
+    background_layout: wgpu::BindGroupLayout,
     // Ping-pong targets for all but the final dispatch.
     _textures: Vec<wgpu::Texture>,
 }
@@ -2766,8 +2798,12 @@ impl GpuEffectPasses {
                     .filter(|_| compute_supported)
                     .and_then(|(workgroup, dispatch)| {
                         let source = effect.native_shader()?;
-                        let pipeline =
-                            create_native_compute_pipeline(gpu.device, gpu.compute_layout, source);
+                        let pipeline = create_native_compute_pipeline(
+                            gpu.device,
+                            gpu.compute_layout,
+                            gpu.compute_background_layout,
+                            source,
+                        );
                         let intermediates = dispatch.saturating_sub(1) as usize;
                         let ping_pong = (0..intermediates.min(2))
                             .map(|_| ping_pong_texture(gpu.device, size))
@@ -2846,6 +2882,7 @@ impl GpuEffectPasses {
                             pipeline,
                             workgroup,
                             dispatches,
+                            background_layout: gpu.compute_background_layout.clone(),
                             _textures: ping_pong,
                         })
                     });
@@ -2916,7 +2953,13 @@ impl GpuEffectPasses {
         &self.views[self.output_index]
     }
 
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::RenderPipeline) {
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        device: &wgpu::Device,
+        background: &wgpu::TextureView,
+    ) {
         for (((bind_group, destination), native_pipeline), compute) in self
             .bind_groups
             .iter()
@@ -2925,11 +2968,20 @@ impl GpuEffectPasses {
             .zip(&self.compute_passes)
         {
             if let Some(compute) = compute {
+                let background_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("freya-nle-native-compute-background-bind-group"),
+                    layout: &compute.background_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(background),
+                    }],
+                });
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("freya-nle-native-compute-pass"),
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&compute.pipeline);
+                pass.set_bind_group(1, &background_bind_group, &[]);
                 for dispatch in &compute.dispatches {
                     pass.set_bind_group(0, &dispatch.bind_group, &[]);
                     pass.dispatch_workgroups(
@@ -3157,9 +3209,11 @@ impl GpuLayer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipeline: &wgpu::RenderPipeline,
+        device: &wgpu::Device,
+        background: &wgpu::TextureView,
     ) {
         if let Some(effect_passes) = &self.effect_passes {
-            effect_passes.encode(encoder, pipeline);
+            effect_passes.encode(encoder, pipeline, device, background);
         }
     }
 }
