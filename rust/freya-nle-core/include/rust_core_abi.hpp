@@ -10,7 +10,6 @@ enum AviQtlCoreCapability : std::uint64_t {
     AVIQTL_RUST_CORE_CAPABILITY_NUMERIC_KEYFRAME_BATCH = 1ULL << 2,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_BATCH_MIX = 1ULL << 5,
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_EDIT = 1ULL << 6,
-    AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_DOMAIN = 1ULL << 7,
     AVIQTL_RUST_CORE_CAPABILITY_SETTINGS_DOCUMENT = 1ULL << 10,
     AVIQTL_RUST_CORE_CAPABILITY_PACKAGE_DOCUMENT = 1ULL << 12,
     AVIQTL_RUST_CORE_CAPABILITY_AUDIO_PLANNING = 1ULL << 17,
@@ -463,16 +462,7 @@ std::uint32_t aviqtl_timeline_plan_clipboard_placement(const AviQtlTimelineClipG
                                                        AviQtlTimelineClipGeometry *output, std::size_t outputLength, std::int32_t *outputFrame);
 std::uint32_t aviqtl_timeline_split_clip(const AviQtlTimelineClipGeometry *clip, std::int32_t frame, AviQtlTimelineClipGeometry *first, AviQtlTimelineClipGeometry *second);
 
-std::uint32_t aviqtl_timeline_normalize_scene_settings(const AviQtlSceneSettings *input, AviQtlSceneSettings *output);
-std::int32_t aviqtl_timeline_snap_frame(double frame, std::uint32_t ignoreSnap, const AviQtlSceneSettings *settings, double timelineScale);
-std::int32_t aviqtl_timeline_duration(const AviQtlTimelineClipGeometry *clips, std::size_t clipsLength);
-std::int32_t aviqtl_timeline_clamp_scene_duration(std::int32_t requestedDuration, std::int32_t sceneDuration, double speed, std::int32_t offset);
-std::uint32_t aviqtl_selection_replace(const std::int32_t *ids, std::size_t idsLength, std::int32_t requestedPrimary, std::int32_t *output, std::size_t outputCapacity, std::size_t *outputLength, std::int32_t *outputPrimary);
-std::uint32_t aviqtl_selection_toggle(const std::int32_t *currentIds, std::size_t currentIdsLength, std::int32_t currentPrimary, std::int32_t toggledId, std::int32_t *output, std::size_t outputCapacity, std::size_t *outputLength,
                                       std::int32_t *outputPrimary);
-std::uint32_t aviqtl_timeline_normalize_removal_indices(std::size_t length, const std::int32_t *indices, std::size_t indicesLength, std::int32_t minimumIndex, std::int32_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_timeline_plan_index_move(std::size_t length, std::int32_t oldIndex, std::int32_t newIndex, std::int32_t minimumIndex, std::int32_t *redo, std::int32_t *undo);
-std::uint32_t aviqtl_timeline_plan_multi_reorder(std::size_t length, const std::int32_t *indices, std::size_t indicesLength, std::int32_t targetIndex, std::int32_t minimumIndex, std::int32_t *redo, std::int32_t *undo, std::size_t *outputSelectedCount);
 
 std::uint32_t aviqtl_permission_state_create(const std::uint8_t *input, std::size_t inputLength, AviQtlPermissionState **outputHandle);
 void aviqtl_permission_state_destroy(AviQtlPermissionState *handle);
