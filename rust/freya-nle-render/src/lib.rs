@@ -82,6 +82,7 @@ struct NativeParameters {
 };
 
 @group(0) @binding(0) var aviqtl_input_texture: texture_2d<f32>;
+@group(0) @binding(1) var aviqtl_input_sampler: sampler;
 @group(0) @binding(4) var<storage, read> aviqtl_parameters: NativeParameters;
 @group(0) @binding(5) var aviqtl_output_texture: texture_storage_2d<rgba8unorm, write>;
 
@@ -103,6 +104,10 @@ fn aviqtl_pixel(coord: vec2<i32>) -> vec4<f32> {
 
 fn aviqtl_uv(coord: vec2<i32>) -> vec2<f32> {
     return (vec2<f32>(coord) + vec2<f32>(0.5)) / vec2<f32>(aviqtl_size());
+}
+
+fn aviqtl_texel(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(aviqtl_input_texture, aviqtl_input_sampler, uv, 0.0);
 }
 
 fn aviqtl_parameter(index: u32) -> vec4<f32> {
@@ -152,7 +157,7 @@ fn parse_native_module(combined: &str) -> Result<naga::Module, String> {
 fn validate_bindings(module: &naga::Module, mode: NativeEffectMode) -> Result<(), String> {
     let allowed_bindings: &[(u32, u32)] = match mode {
         NativeEffectMode::Fragment => &[(0, 0), (0, 1), (0, 4)],
-        NativeEffectMode::Compute { .. } => &[(0, 0), (0, 4), (0, 5)],
+        NativeEffectMode::Compute { .. } => &[(0, 0), (0, 1), (0, 4), (0, 5)],
     };
     for (_, variable) in module.global_variables.iter() {
         if let Some(binding) = &variable.binding
@@ -1834,6 +1839,12 @@ impl Compositor {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
                         binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
@@ -2784,6 +2795,12 @@ impl GpuEffectPasses {
                                                 binding: 0,
                                                 resource: wgpu::BindingResource::TextureView(
                                                     source_view,
+                                                ),
+                                            },
+                                            wgpu::BindGroupEntry {
+                                                binding: 1,
+                                                resource: wgpu::BindingResource::Sampler(
+                                                    gpu.sampler,
                                                 ),
                                             },
                                             wgpu::BindGroupEntry {

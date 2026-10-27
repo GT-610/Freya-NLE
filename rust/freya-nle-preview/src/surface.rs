@@ -491,7 +491,7 @@ mod tests {
                 "duration": 100,
                 "layer": 0,
                 "effects": [
-                    {"id": "rect", "enabled": true, "params": {"sizeW": 60, "sizeH": 60, "color": "#ff0000", "opacity": 1.0, "shapeType": "polygon", "sides": 4}},
+                    {"id": "rect", "enabled": true, "params": {"sizeW": 60, "sizeH": 60, "color": "#00ff00", "opacity": 1.0, "shapeType": "polygon", "sides": 4}},
                     {"id": "effect.compute", "enabled": true, "params": {"amount": 1.0}}
                 ]
             }]
@@ -511,10 +511,15 @@ mod tests {
 @compute @workgroup_size(8, 8, 1)
 fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let coord = vec2<i32>(id.xy);
+    // Pass 0 copies the layer through the filtered sampler; pass 1 turns the
+    // sampled green into blue so a wrong pass order or a broken sampler shows.
+    let sampled = aviqtl_texel(aviqtl_uv(coord));
     if aviqtl_pass() == 0u {
-        aviqtl_write(coord, vec4<f32>(0.0, 1.0, 0.0, 1.0));
-    } else {
+        aviqtl_write(coord, sampled);
+    } else if sampled.g > 0.5 {
         aviqtl_write(coord, vec4<f32>(0.0, 0.0, 1.0, 1.0));
+    } else {
+        aviqtl_write(coord, vec4<f32>(1.0, 0.0, 0.0, 1.0));
     }
 }
 "#,
