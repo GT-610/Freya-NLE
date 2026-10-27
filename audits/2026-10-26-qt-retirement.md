@@ -139,6 +139,8 @@ documented the behavior is in git history.
    (create a VideoToolbox/VAAPI device, prefer its pixel format during decode,
    transfer frames to system memory before the scaler), but relaxing a crate-level
    safety policy is a project decision rather than a missing implementation.
+   This branch therefore keeps software decoding and records the design here; turning it on
+   is a follow-up that starts with that policy decision.
 2. **Compute-shader effects, partly carried over.** Qt's `ComputeEffect` exposed
    work-group sizes and extra input textures (`core/src/compute_effect.cpp:54,94,189`) and
    10 shipped `.comp` shaders used them. Native packages can now declare

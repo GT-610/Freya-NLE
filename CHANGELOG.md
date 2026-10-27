@@ -21,6 +21,36 @@ All notable changes to Freya NLE are documented in this file.
   empty launcher. `--help` prints the options and `--version` prints the version
   instead of both being rejected as unknown arguments
 
+- Native effect packages can run as compute shaders. A package declares
+  `"mode": "compute"` and a `workgroup` tile in its `aviqtl-wgsl-v1` runtime, then
+  provides one `@compute @workgroup_size(x, y, 1) fn aviqtl_main` entry point; the
+  host binds the layer texture, the parameter block and an `rgba8unorm` output
+  storage texture and dispatches one pass per effect. `"dispatch": n` (1–8)
+  chains the shader over its own output with `aviqtl_pass()` for separable
+  effects, and `aviqtl_texel(uv)` samples through the host's filtered sampler
+  while `aviqtl_original_texel(uv)` reads the layer before the effect chain ran
+  and `aviqtl_background_texel(uv)` reads the composition of the layers below.
+  Effect passes now record just before their layer is composited, so the
+  background input is the current accumulation rather than an empty target.
+  Installation rejects a tile that does not match the shader, and the package
+  README documents the helpers. Binding an arbitrary named layer remains open
+- AviUtl-style expression parameters work again. A parameter stored as a string
+  beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
+  the keyframe `value` in scope, in the preview, the export, and the audio plan
+  alike. A broken expression keeps the keyframe value instead of zeroing the
+  parameter
+- macOS exports can use the Apple VideoToolbox encoders (`h264_videotoolbox`,
+  `hevc_videotoolbox`) when the linked FFmpeg provides them. A hardware encoder
+  that cannot open still falls back to `libx264`/`libx265`/`libaom-av1`, so the
+  export completes either way
+- Lua plugins keep the conveniences they had under the Qt frontend: LuaJIT's
+  signed `bit` library (`tobit`, `bswap`, and `tohex` included), the flat
+  `aviqtl_*` function spellings next to the `aviqtl.*` tables, and `print`
+- Saving a project stores media that lives inside the project directory as a
+  project-relative path, so a project and its footage move together. Loading a
+  project or recovery snapshot refuses documents over 256 MiB before reading
+  them, matching the bound the Qt frontend applied
+
 ### Changed
 - The project is called Freya NLE. Crate names, the binary, the macOS bundle
   identifier, the user data directory, and the window titles follow the new
@@ -56,37 +86,6 @@ All notable changes to Freya NLE are documented in this file.
   wrappers still back the app and the tests, and the plain data they shared now lives
   in `freya-nle-core`'s `types` module with Rust names instead of the old fixed-layout
   `AviQtl*` structs
-
-### Added
-- Native effect packages can run as compute shaders. A package declares
-  `"mode": "compute"` and a `workgroup` tile in its `aviqtl-wgsl-v1` runtime, then
-  provides one `@compute @workgroup_size(x, y, 1) fn aviqtl_main` entry point; the
-  host binds the layer texture, the parameter block and an `rgba8unorm` output
-  storage texture and dispatches one pass per effect. `"dispatch": n` (1–8)
-  chains the shader over its own output with `aviqtl_pass()` for separable
-  effects, and `aviqtl_texel(uv)` samples through the host's filtered sampler
-  while `aviqtl_original_texel(uv)` reads the layer before the effect chain ran
-  and `aviqtl_background_texel(uv)` reads the composition of the layers below.
-  Effect passes now record just before their layer is composited, so the
-  background input is the current accumulation rather than an empty target.
-  Installation rejects a tile that does not match the shader, and the package
-  README documents the helpers. Binding an arbitrary named layer remains open
-- AviUtl-style expression parameters work again. A parameter stored as a string
-  beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
-  the keyframe `value` in scope, in the preview, the export, and the audio plan
-  alike. A broken expression keeps the keyframe value instead of zeroing the
-  parameter
-- macOS exports can use the Apple VideoToolbox encoders (`h264_videotoolbox`,
-  `hevc_videotoolbox`) when the linked FFmpeg provides them. A hardware encoder
-  that cannot open still falls back to `libx264`/`libx265`/`libaom-av1`, so the
-  export completes either way
-- Lua plugins keep the conveniences they had under the Qt frontend: LuaJIT's
-  signed `bit` library (`tobit`, `bswap`, and `tohex` included), the flat
-  `aviqtl_*` function spellings next to the `aviqtl.*` tables, and `print`
-- Saving a project stores media that lives inside the project directory as a
-  project-relative path, so a project and its footage move together. Loading a
-  project or recovery snapshot refuses documents over 256 MiB before reading
-  them, matching the bound the Qt frontend applied
 
 ### Fixed
 - A macOS release no longer fails at the archive step: packaging writes
