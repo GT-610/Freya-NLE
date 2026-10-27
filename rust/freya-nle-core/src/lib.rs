@@ -124,6 +124,8 @@ impl EasingKind {
         Self::Custom,
     ];
 
+    #[cfg(test)]
+    #[cfg(test)]
     pub(crate) fn from_abi(value: u32) -> Option<Self> {
         Self::ALL.get(value as usize).copied()
     }

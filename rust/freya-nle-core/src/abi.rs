@@ -1,9 +1,8 @@
 use std::mem::{align_of, size_of};
 
 pub const ABI_VERSION: u32 = 2;
-pub const CAPABILITY_NUMERIC_KEYFRAME_BATCH: u64 = 1 << 2;
 pub const CAPABILITY_TIMELINE_BAKE: u64 = 1 << 3;
-pub const CAPABILITIES: u64 = CAPABILITY_NUMERIC_KEYFRAME_BATCH | CAPABILITY_TIMELINE_BAKE;
+pub const CAPABILITIES: u64 = CAPABILITY_TIMELINE_BAKE;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_INVALID_ARGUMENT: u32 = 1;
@@ -11,25 +10,6 @@ pub const STATUS_OVERLAPPING_BUFFERS: u32 = 2;
 pub const STATUS_BUFFER_TOO_SMALL: u32 = 3;
 pub const STATUS_INVALID_JSON: u32 = 4;
 pub const STATUS_LOCKED_LAYER: u32 = 6;
-
-/// Decodes a caller-provided UTF-8 byte range.
-///
-/// # Safety
-///
-/// `value` must be valid for `length` readable bytes and remain alive for the returned
-/// reference's lifetime. A null pointer is permitted only when `length` is zero.
-pub(crate) unsafe fn utf8<'a>(value: *const u8, length: usize) -> Option<&'a str> {
-    if !slice_is_valid(value, length) {
-        return None;
-    }
-    let bytes = if length == 0 {
-        &[]
-    } else {
-        // SAFETY: The caller upholds the readable-range and lifetime contract.
-        unsafe { std::slice::from_raw_parts(value, length) }
-    };
-    std::str::from_utf8(bytes).ok()
-}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -58,30 +38,6 @@ pub struct AviQtlAudioMeter {
     pub peak_right: f32,
     pub rms_left: f32,
     pub rms_right: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct AviQtlNumericKeyframe {
-    pub frame: i32,
-    pub interpolation: u32,
-    pub step_frames: u32,
-    pub custom_points_offset: u32,
-    pub custom_points_length: u32,
-    pub reserved: u32,
-    pub value: f64,
-    pub amplitude: f64,
-    pub period: f64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct AviQtlNumericTrackView {
-    pub keyframes: *const AviQtlNumericKeyframe,
-    pub keyframes_length: usize,
-    pub custom_points: *const f64,
-    pub custom_points_length: usize,
-    pub fallback_value: f64,
 }
 
 #[repr(C)]
@@ -302,14 +258,6 @@ mod tests {
         assert_eq!(offset_of!(AviQtlAudioMeter, peak_left), 0);
         assert_eq!(offset_of!(AviQtlAudioMeter, rms_right), 12);
 
-        assert_eq!(size_of::<AviQtlNumericKeyframe>(), 48);
-        assert_eq!(align_of::<AviQtlNumericKeyframe>(), 8);
-        assert_eq!(offset_of!(AviQtlNumericKeyframe, frame), 0);
-        assert_eq!(offset_of!(AviQtlNumericKeyframe, interpolation), 4);
-        assert_eq!(offset_of!(AviQtlNumericKeyframe, custom_points_length), 16);
-        assert_eq!(offset_of!(AviQtlNumericKeyframe, value), 24);
-        assert_eq!(offset_of!(AviQtlNumericKeyframe, period), 40);
-
         assert_eq!(size_of::<AviQtlRenderBakeInput>(), 68);
         assert_eq!(align_of::<AviQtlRenderBakeInput>(), 4);
         assert_eq!(offset_of!(AviQtlRenderBakeInput, clip_id), 0);
@@ -363,15 +311,7 @@ mod tests {
         assert_eq!(offset_of!(AviQtlSceneSettings, magnetic_snap_range), 52);
 
         #[cfg(target_pointer_width = "64")]
-        {
-            assert_eq!(size_of::<AviQtlNumericTrackView>(), 40);
-            assert_eq!(align_of::<AviQtlNumericTrackView>(), 8);
-            assert_eq!(offset_of!(AviQtlNumericTrackView, keyframes), 0);
-            assert_eq!(offset_of!(AviQtlNumericTrackView, keyframes_length), 8);
-            assert_eq!(offset_of!(AviQtlNumericTrackView, custom_points), 16);
-            assert_eq!(offset_of!(AviQtlNumericTrackView, custom_points_length), 24);
-            assert_eq!(offset_of!(AviQtlNumericTrackView, fallback_value), 32);
-        }
+        {}
     }
 
     #[test]

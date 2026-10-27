@@ -6,7 +6,6 @@
 inline constexpr std::uint32_t AVIQTL_RUST_CORE_ABI_VERSION = 2;
 
 enum AviQtlCoreCapability : std::uint64_t {
-    AVIQTL_RUST_CORE_CAPABILITY_NUMERIC_KEYFRAME_BATCH = 1ULL << 2,
     AVIQTL_RUST_CORE_CAPABILITY_TIMELINE_BAKE = 1ULL << 3,
 };
 
@@ -67,37 +66,7 @@ static_assert(offsetof(AviQtlAudioBatchTrack, clip_id) == 56);
 static_assert(offsetof(AviQtlAudioBatchTrack, reserved) == 68);
 #endif
 
-struct AviQtlNumericKeyframe {
-    std::int32_t frame;
-    std::uint32_t interpolation;
-    std::uint32_t step_frames;
-    std::uint32_t custom_points_offset;
-    std::uint32_t custom_points_length;
-    std::uint32_t reserved;
-    double value;
-    double amplitude;
-    double period;
-};
-static_assert(sizeof(AviQtlNumericKeyframe) == 48);
-static_assert(alignof(AviQtlNumericKeyframe) == 8);
-static_assert(offsetof(AviQtlNumericKeyframe, frame) == 0);
-static_assert(offsetof(AviQtlNumericKeyframe, interpolation) == 4);
-static_assert(offsetof(AviQtlNumericKeyframe, custom_points_length) == 16);
-static_assert(offsetof(AviQtlNumericKeyframe, value) == 24);
-static_assert(offsetof(AviQtlNumericKeyframe, period) == 40);
-
-struct AviQtlNumericTrackView {
-    const AviQtlNumericKeyframe *keyframes;
-    std::size_t keyframes_length;
-    const double *custom_points;
-    std::size_t custom_points_length;
-    double fallback_value;
-};
-static_assert(offsetof(AviQtlNumericTrackView, keyframes) == 0);
-static_assert(offsetof(AviQtlNumericTrackView, fallback_value) == sizeof(void *) * 2 + sizeof(std::size_t) * 2);
 #if INTPTR_MAX == INT64_MAX
-static_assert(sizeof(AviQtlNumericTrackView) == 40);
-static_assert(alignof(AviQtlNumericTrackView) == 8);
 #endif
 
 struct AviQtlRenderBakeInput {
@@ -278,10 +247,6 @@ extern "C" {
 
 std::uint32_t aviqtl_core_abi_version();
 std::uint64_t aviqtl_core_capabilities();
-
-std::uint32_t aviqtl_numeric_keyframe_batch_evaluate(const AviQtlNumericTrackView *tracks, std::size_t tracksLength, std::int32_t frame, double *output, std::size_t outputLength);
-std::uint32_t aviqtl_numeric_keyframe_evaluate_typed(const AviQtlNumericTrackView *track, std::int32_t frame, std::uint32_t discrete, double *output);
-std::uint32_t aviqtl_numeric_interpolation_from_name(const std::uint8_t *value, std::size_t valueLength);
 
 std::uint32_t aviqtl_timeline_bake_plan_create(const std::uint8_t *input, std::size_t inputLength, AviQtlTimelineBakePlan **outputHandle);
 void aviqtl_timeline_bake_plan_destroy(AviQtlTimelineBakePlan *handle);
