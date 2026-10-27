@@ -1,7 +1,3 @@
-use crate::abi::{
-    STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_ARGUMENT, STATUS_INVALID_JSON, STATUS_OK,
-    STATUS_OVERLAPPING_BUFFERS, STATUS_UNSUPPORTED_VERSION, ranges_overlap, slice_is_valid,
-};
 use crate::policy::canonical_playback_mode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
@@ -538,77 +534,10 @@ pub(crate) fn parse_project_document(input: &[u8]) -> Result<ProjectDocument, Pr
     serde_json::from_value(root).map_err(|_| ProjectError::InvalidJson)
 }
 
+#[cfg(test)]
 fn normalize_project_json(input: &[u8]) -> Result<Vec<u8>, ProjectError> {
     let document = parse_project_document(input)?;
     serde_json::to_vec(&document).map_err(|_| ProjectError::InvalidJson)
-}
-
-/// Returns the project file-format version emitted by the Rust document core.
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_project_current_version() -> i32 {
-    MAX_PROJECT_VERSION
-}
-
-/// Parses and normalizes a project document into caller-owned UTF-8 JSON storage.
-///
-/// A null output with zero capacity is a size query. In that mode, or when the
-/// provided buffer is too small, `output_length` receives the required byte count
-/// and `STATUS_BUFFER_TOO_SMALL` is returned.
-///
-/// # Safety
-///
-/// Non-zero lengths require valid byte ranges. `output_length` must point to writable,
-/// aligned storage. Input, output, and output-length ranges must not overlap.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_project_normalize_json(
-    input: *const u8,
-    input_length: usize,
-    output: *mut u8,
-    output_capacity: usize,
-    output_length: *mut usize,
-) -> u32 {
-    if !slice_is_valid(input, input_length)
-        || !slice_is_valid(output, output_capacity)
-        || !slice_is_valid(output_length, 1)
-    {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    let overlaps = [
-        ranges_overlap(input, input_length, output, output_capacity),
-        ranges_overlap(input, input_length, output_length, 1),
-        ranges_overlap(output, output_capacity, output_length, 1),
-    ];
-    if overlaps.iter().any(Option::is_none) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    if overlaps.into_iter().flatten().any(|overlap| overlap) {
-        return STATUS_OVERLAPPING_BUFFERS;
-    }
-
-    let input = if input_length == 0 {
-        &[]
-    } else {
-        // SAFETY: The input range was validated and all output overlap was rejected.
-        unsafe { std::slice::from_raw_parts(input, input_length) }
-    };
-    let normalized = match normalize_project_json(input) {
-        Ok(normalized) => normalized,
-        Err(ProjectError::InvalidJson) => return STATUS_INVALID_JSON,
-        Err(ProjectError::UnsupportedVersion) => return STATUS_UNSUPPORTED_VERSION,
-    };
-    // SAFETY: The output-length pointer was validated and checked for overlap.
-    unsafe { output_length.write(normalized.len()) };
-    if output_capacity < normalized.len() {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    let output = if output_capacity == 0 {
-        &mut []
-    } else {
-        // SAFETY: The output range was validated and checked against every input range.
-        unsafe { std::slice::from_raw_parts_mut(output, output_capacity) }
-    };
-    output[..normalized.len()].copy_from_slice(&normalized);
-    STATUS_OK
 }
 
 #[cfg(test)]
@@ -668,7 +597,7 @@ mod tests {
             "documentExtension": {"owner": "plugin"}
         }"#;
         let document = parse_project_document(input.as_bytes()).expect("typed project document");
-        assert_eq!(document.version, aviqtl_project_current_version());
+        assert_eq!(document.version, MAX_PROJECT_VERSION);
         assert_eq!(document.scenes[0].id, 1);
         assert_eq!(document.clips[0].scene_id, 1);
         assert_eq!(document.extra["documentExtension"]["owner"], "plugin");
@@ -742,68 +671,5 @@ mod tests {
             normalize_project_json(br#"{"version": 4}"#),
             Err(ProjectError::UnsupportedVersion)
         );
-    }
-
-    #[test]
-    fn ffi_supports_size_queries_and_rejects_overlap() {
-        let input = br#"{"version":3,"settings":{},"scenes":[],"clips":[]}"#;
-        let mut required = 0_usize;
-        // SAFETY: Input and output-length storage are valid and disjoint.
-        let status = unsafe {
-            aviqtl_project_normalize_json(
-                input.as_ptr(),
-                input.len(),
-                std::ptr::null_mut(),
-                0,
-                &mut required,
-            )
-        };
-        assert_eq!(status, STATUS_BUFFER_TOO_SMALL);
-        assert!(required > 1);
-
-        let mut undersized = vec![0xA5_u8; required - 1];
-        let original_undersized = undersized.clone();
-        let mut reported = 0_usize;
-        // SAFETY: The non-empty output is valid and disjoint but deliberately too small.
-        let status = unsafe {
-            aviqtl_project_normalize_json(
-                input.as_ptr(),
-                input.len(),
-                undersized.as_mut_ptr(),
-                undersized.len(),
-                &mut reported,
-            )
-        };
-        assert_eq!(status, STATUS_BUFFER_TOO_SMALL);
-        assert_eq!(reported, required);
-        assert_eq!(undersized, original_undersized);
-
-        let mut output = vec![0_u8; required];
-        // SAFETY: All ranges are valid, writable where required, and disjoint.
-        let status = unsafe {
-            aviqtl_project_normalize_json(
-                input.as_ptr(),
-                input.len(),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut required,
-            )
-        };
-        assert_eq!(status, STATUS_OK);
-        assert!(serde_json::from_slice::<Value>(&output).is_ok());
-
-        let mut overlapping = input.to_vec();
-        let mut ignored = 0_usize;
-        // SAFETY: The deliberate overlap must be rejected before slices are constructed.
-        let status = unsafe {
-            aviqtl_project_normalize_json(
-                overlapping.as_ptr(),
-                overlapping.len(),
-                overlapping.as_mut_ptr(),
-                overlapping.len(),
-                &mut ignored,
-            )
-        };
-        assert_eq!(status, STATUS_OVERLAPPING_BUFFERS);
     }
 }

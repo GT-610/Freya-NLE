@@ -26,7 +26,7 @@ mod timeline_domain;
 mod timeline_edit;
 mod timeline_state;
 
-use abi::{AviQtlEasingParameters, slice_is_valid, utf8};
+use abi::AviQtlEasingParameters;
 use std::f64::consts::PI;
 
 const DEFAULT_ELASTIC_PERIOD: f64 = 0.3;
@@ -509,82 +509,9 @@ pub(crate) fn evaluate(
     }
 }
 
-/// Resolves an easing kind from a UTF-8 name.
-///
-/// # Safety
-///
-/// `value` must be valid for `value_length` readable bytes for the duration of the call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_easing_kind_from_name(
-    value: *const u8,
-    value_length: usize,
-) -> i32 {
-    // SAFETY: The caller upholds the byte-range contract above.
-    unsafe { utf8(value, value_length) }
-        .and_then(EasingKind::from_name)
-        .map_or(-1, |kind| kind as i32)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_easing_count() -> usize {
-    EasingKind::NAMES.len()
-}
-
-/// Returns one static easing name. The returned bytes are not NUL-terminated and must be
-/// consumed using the length written to `output_length`.
-///
-/// # Safety
-///
-/// `output_length` must be writable for one element.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_easing_name(kind: u32, output_length: *mut usize) -> *const u8 {
-    if !slice_is_valid(output_length, 1) {
-        return std::ptr::null();
-    }
-    let Some(name) = EasingKind::NAMES.get(kind as usize) else {
-        // SAFETY: The output pointer was validated above.
-        unsafe { output_length.write(0) };
-        return std::ptr::null();
-    };
-    // SAFETY: The output pointer was validated above. Names have static lifetime.
-    unsafe { output_length.write(name.len()) };
-    name.as_ptr()
-}
-
-#[unsafe(no_mangle)]
-/// Evaluates one easing curve through the stable C ABI.
-///
-/// # Safety
-///
-/// When `points_len` is non-zero, `points` must address at least
-/// `points_len` contiguous, initialized `f64` values and remain valid for the
-/// duration of the call. A zero length permits a null pointer.
-pub unsafe extern "C" fn aviqtl_easing_evaluate(
-    kind: u32,
-    t: f64,
-    points: *const f64,
-    points_len: usize,
-    parameters: AviQtlEasingParameters,
-) -> f64 {
-    let Some(kind) = EasingKind::from_abi(kind) else {
-        return t;
-    };
-    let points = if !slice_is_valid(points, points_len) {
-        return t;
-    } else if points_len == 0 {
-        &[]
-    } else {
-        // SAFETY: The C++ adapter supplies a pointer to `points_len` contiguous
-        // doubles and keeps the vector alive for the duration of this call.
-        unsafe { std::slice::from_raw_parts(points, points_len) }
-    };
-    evaluate(kind, t, points, parameters)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{align_of, size_of};
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
@@ -632,58 +559,6 @@ mod tests {
             case_count += 1;
         }
         assert_eq!(case_count, EasingKind::Custom as usize + 1);
-    }
-
-    #[test]
-    fn ffi_rejects_invalid_inputs_without_panicking() {
-        let parameters = AviQtlEasingParameters {
-            amplitude: 1.0,
-            period: 0.3,
-        };
-        // SAFETY: Both calls use null only with either a zero length or an
-        // intentionally invalid pair that the boundary must reject before use.
-        unsafe {
-            assert_eq!(
-                aviqtl_easing_evaluate(999, 0.25, std::ptr::null(), 0, parameters),
-                0.25
-            );
-            assert_eq!(
-                aviqtl_easing_evaluate(
-                    EasingKind::Custom as u32,
-                    0.25,
-                    std::ptr::null(),
-                    6,
-                    parameters,
-                ),
-                0.25
-            );
-            let bytes = [0_u8; size_of::<f64>() + align_of::<f64>()];
-            let misaligned_offset = (0..align_of::<f64>())
-                .find(|offset| {
-                    !(bytes.as_ptr() as usize + offset).is_multiple_of(align_of::<f64>())
-                })
-                .expect("a misaligned offset");
-            assert_eq!(
-                aviqtl_easing_evaluate(
-                    EasingKind::Custom as u32,
-                    0.25,
-                    bytes.as_ptr().add(misaligned_offset).cast(),
-                    1,
-                    parameters,
-                ),
-                0.25
-            );
-            assert_eq!(
-                aviqtl_easing_evaluate(
-                    EasingKind::Custom as u32,
-                    0.25,
-                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
-                    isize::MAX as usize / size_of::<f64>() + 1,
-                    parameters,
-                ),
-                0.25
-            );
-        }
     }
 
     #[test]

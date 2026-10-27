@@ -559,10 +559,6 @@ extern "C" {
 std::uint32_t aviqtl_core_abi_version();
 std::uint64_t aviqtl_core_capabilities();
 
-std::int32_t aviqtl_easing_kind_from_name(const std::uint8_t *value, std::size_t valueLength);
-std::size_t aviqtl_easing_count();
-const std::uint8_t *aviqtl_easing_name(std::uint32_t kind, std::size_t *outputLength);
-double aviqtl_easing_evaluate(std::uint32_t kind, double t, const double *points, std::size_t pointsLength, AviQtlEasingParameters parameters);
 
 std::uint32_t aviqtl_audio_resample_stereo_linear(const float *input, std::size_t inputLength, float *output, std::size_t outputLength, double sourceRate);
 std::uint32_t aviqtl_audio_mix_stereo_batch(const AviQtlAudioBatchTrack *tracks, std::size_t tracksLength, float *master, std::size_t masterLength, AviQtlAudioBatchResult *results, std::size_t resultsLength);
@@ -698,6 +694,4 @@ std::uint32_t aviqtl_script_plugin_catalog_state_store_json(AviQtlScriptPluginCa
 std::uint32_t aviqtl_script_plugin_catalog_state_snapshot_json(const AviQtlScriptPluginCatalogState *handle, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 std::uint32_t aviqtl_script_plugin_catalog_state_find_json(const AviQtlScriptPluginCatalogState *handle, const std::uint8_t *id, std::size_t idLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 
-std::int32_t aviqtl_project_current_version();
-std::uint32_t aviqtl_project_normalize_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 }
