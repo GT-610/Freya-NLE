@@ -1,21 +1,9 @@
 use crate::abi::{
     AviQtlAudioBakeInput, AviQtlAudioBakeOutput, AviQtlRenderBakeInput, AviQtlRenderBakeOutput,
-    STATUS_INVALID_ARGUMENT, STATUS_OK, STATUS_OVERLAPPING_BUFFERS, ranges_overlap, slice_is_valid,
 };
 use std::cmp::Ordering;
 
 const DEFAULT_SPEED_PERCENT: f32 = 100.0;
-
-fn validate_io<T, U>(input: *const T, output: *mut U) -> u32 {
-    if !slice_is_valid(input, 1) || !slice_is_valid(output, 1) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    match ranges_overlap(input, 1, output, 1) {
-        Some(true) => STATUS_OVERLAPPING_BUFFERS,
-        Some(false) => STATUS_OK,
-        None => STATUS_INVALID_ARGUMENT,
-    }
-}
 
 pub(crate) fn audio_defaults() -> AviQtlAudioBakeOutput {
     AviQtlAudioBakeOutput {
@@ -83,60 +71,9 @@ pub(crate) fn bake_audio(input: AviQtlAudioBakeInput) -> AviQtlAudioBakeOutput {
     baked
 }
 
-/// Builds a render component from caller-owned plain data.
-///
-/// # Safety
-///
-/// `input` must point to one initialized input value and `output` to one writable output value.
-/// Both pointers must be aligned and valid for the duration of the call, and their ranges must
-/// not overlap.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_render(
-    input: *const AviQtlRenderBakeInput,
-    output: *mut AviQtlRenderBakeOutput,
-) -> u32 {
-    let status = validate_io(input, output);
-    if status != STATUS_OK {
-        return status;
-    }
-
-    // SAFETY: Both single-value ranges were validated above and do not overlap.
-    let input = unsafe { input.read() };
-    let baked = bake_render(input);
-    // SAFETY: The output range was validated as aligned, writable, and non-overlapping.
-    unsafe { output.write(baked) };
-    STATUS_OK
-}
-
-/// Builds an audio component from caller-owned plain data.
-///
-/// # Safety
-///
-/// `input` must point to one initialized input value and `output` to one writable output value.
-/// Both pointers must be aligned and valid for the duration of the call, and their ranges must
-/// not overlap.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_audio(
-    input: *const AviQtlAudioBakeInput,
-    output: *mut AviQtlAudioBakeOutput,
-) -> u32 {
-    let status = validate_io(input, output);
-    if status != STATUS_OK {
-        return status;
-    }
-
-    // SAFETY: Both single-value ranges were validated above and do not overlap.
-    let input = unsafe { input.read() };
-    let baked = bake_audio(input);
-    // SAFETY: The output range was validated as aligned, writable, and non-overlapping.
-    unsafe { output.write(baked) };
-    STATUS_OK
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{MaybeUninit, size_of};
 
     fn render_input() -> AviQtlRenderBakeInput {
         AviQtlRenderBakeInput {
@@ -185,12 +122,8 @@ mod tests {
 
     #[test]
     fn builds_render_defaults_and_transform_state() {
-        let mut output = AviQtlRenderBakeOutput::default();
         let input = render_input();
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_render(&input, &mut output) },
-            STATUS_OK
-        );
+        let output = bake_render(input);
         assert_eq!(output.time_position, 15.0);
         assert_eq!(output.scale_x, 1.25);
         assert_eq!(output.opacity, 0.75);
@@ -198,10 +131,7 @@ mod tests {
 
         let mut without_transform = input;
         without_transform.has_transform = 0;
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_render(&without_transform, &mut output) },
-            STATUS_OK
-        );
+        let output = bake_render(without_transform);
         assert_eq!(output.x, 0.0);
         assert_eq!(output.scale_x, 1.0);
         assert_eq!(output.opacity, 1.0);
@@ -210,11 +140,7 @@ mod tests {
     #[test]
     fn builds_audio_defaults_and_clamps_effect_state() {
         let input = audio_input();
-        let mut output = audio_defaults();
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_audio(&input, &mut output) },
-            STATUS_OK
-        );
+        let output = bake_audio(input);
         assert_eq!(output.clip_id, 8);
         assert_eq!(output.source_start_time, 0.0);
         assert_eq!(output.playback_speed, 1.5);
@@ -224,47 +150,9 @@ mod tests {
 
         let mut invalid_fps = input;
         invalid_fps.fps = 0.0;
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_audio(&invalid_fps, &mut output) },
-            STATUS_OK
-        );
+        let output = bake_audio(invalid_fps);
         assert_eq!(output.clip_id, -1);
         assert_eq!(output.playback_speed, 1.0);
         assert_eq!(output.volume, 1.0);
-    }
-
-    #[test]
-    fn rejects_null_misaligned_and_overlapping_ranges() {
-        let input = render_input();
-        let mut output = AviQtlRenderBakeOutput::default();
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_render(std::ptr::null(), &mut output) },
-            STATUS_INVALID_ARGUMENT
-        );
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_render(&input, std::ptr::null_mut()) },
-            STATUS_INVALID_ARGUMENT
-        );
-
-        let mut words = [0_u32; size_of::<AviQtlRenderBakeInput>().div_ceil(size_of::<u32>()) + 1];
-        let misaligned = unsafe {
-            words
-                .as_mut_ptr()
-                .cast::<u8>()
-                .add(1)
-                .cast::<AviQtlRenderBakeInput>()
-        };
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_render(misaligned, &mut output) },
-            STATUS_INVALID_ARGUMENT
-        );
-
-        let mut shared = MaybeUninit::<AviQtlRenderBakeOutput>::uninit();
-        let shared_input = shared.as_mut_ptr().cast::<AviQtlRenderBakeInput>();
-        unsafe { shared_input.write(input) };
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_render(shared_input, shared.as_mut_ptr()) },
-            STATUS_OVERLAPPING_BUFFERS
-        );
     }
 }

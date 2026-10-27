@@ -570,8 +570,6 @@ std::uint32_t aviqtl_numeric_keyframe_batch_evaluate(const AviQtlNumericTrackVie
 std::uint32_t aviqtl_numeric_keyframe_evaluate_typed(const AviQtlNumericTrackView *track, std::int32_t frame, std::uint32_t discrete, double *output);
 std::uint32_t aviqtl_numeric_interpolation_from_name(const std::uint8_t *value, std::size_t valueLength);
 
-std::uint32_t aviqtl_timeline_bake_render(const AviQtlRenderBakeInput *input, AviQtlRenderBakeOutput *output);
-std::uint32_t aviqtl_timeline_bake_audio(const AviQtlAudioBakeInput *input, AviQtlAudioBakeOutput *output);
 std::uint32_t aviqtl_timeline_bake_plan_create(const std::uint8_t *input, std::size_t inputLength, AviQtlTimelineBakePlan **outputHandle);
 void aviqtl_timeline_bake_plan_destroy(AviQtlTimelineBakePlan *handle);
 std::uint32_t aviqtl_timeline_bake_plan_reset(AviQtlTimelineBakePlan *handle, const std::uint8_t *input, std::size_t inputLength);
@@ -621,8 +619,6 @@ std::uint32_t aviqtl_timeline_normalize_removal_indices(std::size_t length, cons
 std::uint32_t aviqtl_timeline_plan_index_move(std::size_t length, std::int32_t oldIndex, std::int32_t newIndex, std::int32_t minimumIndex, std::int32_t *redo, std::int32_t *undo);
 std::uint32_t aviqtl_timeline_plan_multi_reorder(std::size_t length, const std::int32_t *indices, std::size_t indicesLength, std::int32_t targetIndex, std::int32_t minimumIndex, std::int32_t *redo, std::int32_t *undo, std::size_t *outputSelectedCount);
 
-std::uint32_t aviqtl_keyframe_document_apply_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
-std::uint32_t aviqtl_keyframe_evaluate_json(const std::uint8_t *input, std::size_t inputLength, std::uint8_t *output, std::size_t outputCapacity, std::size_t *outputLength);
 
 std::uint32_t aviqtl_permission_state_create(const std::uint8_t *input, std::size_t inputLength, AviQtlPermissionState **outputHandle);
 void aviqtl_permission_state_destroy(AviQtlPermissionState *handle);
