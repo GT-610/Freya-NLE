@@ -164,10 +164,13 @@ documented the behavior is in git history.
    had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust
    catalog omits the formats (`freya-nle-carla/src/lib.rs:550-559`) instead of repeating
    that; a soundfont format needs a host path before it gets a scan path.
-5. **Documentation site.** `docs/` is a separate repository
-   (`docs/docs/developer/building.md`, `docs/docs/zh-CN/developer/building.md`) and still
-   documents `--frontend qt`, CMake, and the C ABI as a build requirement. That
-   repository needs its own update (it still names the retired ABI check).
+5. **Documentation site.** `docs/` is a separate repository (submodule on its
+   `release/0.7.0-rc.1` branch) and its sources still describe the Qt build:
+   `developer/building.md` and `developer/release-checklist.md` name CMake, the
+   `--frontend qt` flag and `tests/check_rust_abi.py`; `developer/index.md` still lists
+   "C++23 / Qt 6 + Qt Quick" as the application UI; `guide/start-here/about.md` and
+   `guide/help-and-reference/faq.md` tell the pre-migration story. Those need a
+   docs-repository change and a submodule bump, not a change on this branch.
 
 ## C ABI retirement
 
@@ -237,6 +240,13 @@ Run on macOS 26 (Apple M5, Metal) on the branch:
   `chunks_exact` suggestion); they predate this change and the pinned toolchain does
   not flag them.
 - `python -m unittest tests.test_build_version`
+- `python3 BUILD.py --xcode --offline` after the compute-package work assembles, signs and
+  verifies `build/Freya NLE.app` (44 `Resources/effects`, 17 `Resources/objects`,
+  `effect-packages`, `plugins`, `repos`), writes
+  `dist/AviQtl-macOS-Xcode-arm64.zip`, and the packaged
+  `Contents/MacOS/freya-nle --frames 60` loads all 61 definitions and 4 script plugins,
+  reports `main_same_device: true`, `timeline_same_device: true` and no wgpu errors, and
+  exits 0
 - `python3 BUILD.py --help` (no `--frontend`/`--qt-dir`)
 - `rust/target/debug/freya-nle --frames 120` reports the Apple M5 Metal device, loads the
   61 catalog definitions and 4 script plugins, and prints
