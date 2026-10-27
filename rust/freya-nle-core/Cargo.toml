@@ -5,9 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[lib]
-crate-type = ["rlib", "staticlib"]
-
 [dependencies]
 luna-core = "=3.0.0"
 serde = { version = "1.0", features = ["derive"] }

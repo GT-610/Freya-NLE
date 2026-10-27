@@ -1,4 +1,4 @@
-use crate::abi::{AviQtlAudioMeter, AviQtlAudioMixParameters};
+use crate::types::{AudioMeter, AudioMixParameters};
 
 /// Safe Rust parameters for mixing one stereo track.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -104,7 +104,7 @@ pub fn mix_stereo_tracks(
     })
 }
 
-impl From<StereoMixParameters> for AviQtlAudioMixParameters {
+impl From<StereoMixParameters> for AudioMixParameters {
     fn from(parameters: StereoMixParameters) -> Self {
         Self {
             relative_time: parameters.relative_time,
@@ -119,7 +119,7 @@ impl From<StereoMixParameters> for AviQtlAudioMixParameters {
     }
 }
 
-fn fade_gain(parameters: AviQtlAudioMixParameters) -> f32 {
+fn fade_gain(parameters: AudioMixParameters) -> f32 {
     let mut gain: f64 = 1.0;
     if parameters.fade_in_seconds > 0.0 {
         gain = gain.min(
@@ -151,11 +151,7 @@ fn resample_stereo_linear(input: &[f32], output: &mut [f32], source_rate: f64) {
     }
 }
 
-fn mix_stereo(
-    clip: &[f32],
-    master: &mut [f32],
-    parameters: AviQtlAudioMixParameters,
-) -> AviQtlAudioMeter {
+fn mix_stereo(clip: &[f32], master: &mut [f32], parameters: AudioMixParameters) -> AudioMeter {
     let gain = parameters.volume * parameters.master_volume * fade_gain(parameters);
     let left_gain = gain
         * if parameters.pan <= 0.0 {
@@ -170,7 +166,7 @@ fn mix_stereo(
             1.0 + parameters.pan
         };
 
-    let mut meter = AviQtlAudioMeter::default();
+    let mut meter = AudioMeter::default();
     let mut square_left = 0.0;
     let mut square_right = 0.0;
     for (clip_frame, master_frame) in clip

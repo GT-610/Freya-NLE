@@ -147,27 +147,19 @@ documented the behavior is in git history.
    had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust
    catalog omits the formats (`freya-nle-carla/src/lib.rs:550-559`) instead of repeating
    that; a soundfont format needs a host path before it gets a scan path.
-5. **The rest of the C ABI.** The Qt frontend was its only consumer. 131 of the 141
-   exports are gone (see [C ABI retirement](#c-abi-retirement) below). The 10 that remain
-   are the bake-plan handle, the numeric-keyframe evaluators and the version/capability
-   pair; the first two still carry the raw-pointer representation their tests are written
-   against, so they need an internal representation change first.
-   `tests/check_rust_abi.py` keeps the header and the exports in sync meanwhile.
-6. **Documentation site.** `docs/` is a separate repository
+5. **Documentation site.** `docs/` is a separate repository
    (`docs/docs/developer/building.md`, `docs/docs/zh-CN/developer/building.md`) and still
    documents `--frontend qt`, CMake, and the C ABI as a build requirement. That
-   repository needs its own update.
+   repository needs its own update (it still names the retired ABI check).
 
 ## C ABI retirement
 
 `rust/freya-nle-core/include/rust_core_abi.hpp` and its exports existed so the Qt frontend
-could call the Rust core. With that consumer gone, the surface is dead weight, but it is
-not uniform: some modules are thin `extern "C"` shims over functions the Rust frontend
-already calls, while others are raw-pointer protocols whose buffer handling *is* their
-tested behaviour. The shims are retired now, the protocols are left for a change that can
-reshape their APIs.
-
-Gone in this branch, 131 of the 141 exports:
+could call the Rust core. With that consumer gone the surface was dead weight, so it was
+retired module by module: the thin `extern "C"` shims first, then the raw-pointer
+protocols after their callers moved onto the safe Rust APIs. **All 141 exports are gone**,
+and the header, `tests/check_rust_abi.py`, its contract test, the CI step, the static
+library crate type and the ABI version/capability table left with them.
 
 | module | exports retired | what was behind them |
 | --- | --- | --- |
@@ -182,9 +174,11 @@ Gone in this branch, 131 of the 141 exports:
 | `effect` | 7 | effect metadata normalization and the ABI-only catalog registry |
 | `plugin` | 7 | the plugin-document dispatcher and the script-plugin catalog registry |
 | `audio` | 5 | batch mixing, playback planning and waveform sampling |
+| `bake_plan` | 5 | the opaque scene-plan handle and its full-bake evaluation |
 | `lib` (easing) | 4 | easing name and curve entry points |
 | `preset` | 3 | preset document build/normalize |
 | `recovery` | 3 | recovery metadata inspect/build and snapshot naming |
+| `keyframe` | 3 | numeric interpolation names, typed and batch track evaluation |
 | `keyframe_document` | 2 | typed keyframe-document apply and evaluate wrappers |
 | `project` | 2 | project version and document normalization |
 | `timeline` | 2 | render and audio bake helpers |
@@ -192,19 +186,26 @@ Gone in this branch, 131 of the 141 exports:
 
 The functions behind them stay where the Rust frontend or the tests use them:
 `parse_metadata`, `normalize_project_json`, `bake_render`/`bake_audio`,
-`evaluate_document_track`, `normalize_metadata`, `mix_stereo_tracks`,
-`resample_stereo`, `plan_delta_move`, `plan_video_export`, `SettingsState`,
-`PluginPermissionState`, `api::PackageCatalog`, and the timeline state machine are still
-exercised directly. Tests that only covered the C buffer protocol (size queries,
-overlapping ranges, null and misaligned pointers) went with the wrappers they tested, as
-did the logic that only the wrappers reached: the ABI-only effect and plugin catalogs and
-the C-side playback and waveform planners, which the app implements in `freya-nle`
-instead.
+`evaluate_document_track`, `evaluate_numeric_segment`, `normalize_metadata`,
+`mix_stereo_tracks`, `resample_stereo`, `plan_delta_move`, `plan_video_export`,
+`SettingsState`, `PluginPermissionState`, `api::PackageCatalog`, `SceneRenderPlan` and the
+timeline state machine are still exercised directly.
 
-Two contract details follow: retired modules no longer advertise a capability bit in
-`AVIQTL_RUST_CORE_CAPABILITY_*` (two remain, for the bake plan and numeric keyframes), and
-`AVIQTL_RUST_CORE_ABI_VERSION` is 2 because the exported surface shrank. The remaining 10
-exports are `bake_plan` (5), `keyframe` (3), and the version/capability pair itself (2).
+Two consequences worth recording:
+
+- **What left with the wrappers.** Buffer-protocol tests (size queries, overlapping
+  ranges, null and misaligned pointers) had nothing left to guard. So did logic only the
+  wrappers reached: the ABI-only effect and plugin catalogs, the C-side playback and
+  waveform planners that `freya-nle` implements itself, and the bake plan's full-bake
+  output mode, whose scene-plan JSON parser survives as a `#[cfg(test)]` fixture parser
+  because the typed tests are written against that format.
+- **The remaining data types.** `abi.rs` became `freya-nle-core/src/types.rs`: the plain
+  `EasingParameters`, `AudioMixParameters`/`AudioMeter`, `RenderBakeInput`/`Output`,
+  `AudioBakeInput`/`Output`, `TimelineClipGeometry`, `TimelineMoveInput`,
+  `SceneSettings` and `IdAllocation` that the bake, timeline and audio pipelines pass
+  around. They lost their `#[repr(C)]` layouts and the `AviQtl*` spelling, kept only the
+  fields the Rust callers read, and `timeline_edit` reports its planning errors through a
+  small `EditError` enum instead of the old status codes.
 
 ## Verification
 
@@ -218,11 +219,7 @@ Run on macOS 26 (Apple M5, Metal) on the branch:
   lints in `freya-nle-audio` (two `Atomic::fetch_update` deprecations and a
   `chunks_exact` suggestion); they predate this change and the pinned toolchain does
   not flag them.
-- `python -m unittest tests.test_build_version` and `python tests/test_rust_abi_contract.py`
-- `python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header rust/freya-nle-core/include/rust_core_abi.hpp`
-  stays green after the C ABI retirement above: the header still declares exactly the 99
-  exports that remain, and `tests/test_rust_abi_contract.py` keeps the checker's drift
-  cases honest
+- `python -m unittest tests.test_build_version`
 - `python3 BUILD.py --help` (no `--frontend`/`--qt-dir`)
 - `rust/target/debug/freya-nle --frames 120` reports the Apple M5 Metal device, loads the
   61 catalog definitions and 4 script plugins, and prints

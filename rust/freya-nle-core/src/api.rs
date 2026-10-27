@@ -1,14 +1,13 @@
 //! Safe Rust entry points for application code.
 //!
 //! This module deliberately keeps the project document and reversible patch representation
-//! private. Rust front ends can own and edit the authoritative timeline without crossing the C
-//! ABI, while the existing Qt adapter continues to use the unchanged exported ABI.
+//! private. Front ends own and edit the authoritative timeline through these functions.
 
-use crate::abi::{AviQtlSceneSettings, AviQtlTimelineClipGeometry};
 use crate::project::parse_project_document;
 use crate::timeline_state::{
     EntityKind, StateError, TimelineState as CoreTimelineState, Transaction,
 };
+use crate::types::{SceneSettings, TimelineClipGeometry};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -69,11 +68,11 @@ pub use crate::timeline_state::{
 /// Returns the visible timeline duration for the supplied clips.
 ///
 /// Non-positive clip durations are ignored and an empty timeline is one frame long, matching the
-/// Qt timeline controller and the C ABI entry point.
+/// Qt timeline controller this replaced.
 pub fn timeline_duration<'a>(clips: impl IntoIterator<Item = &'a ClipDocument>) -> i32 {
     let geometry = clips
         .into_iter()
-        .map(|clip| AviQtlTimelineClipGeometry {
+        .map(|clip| TimelineClipGeometry {
             clip_id: clip.id,
             layer: clip.layer,
             start_frame: clip.start,
@@ -441,7 +440,7 @@ pub fn snap_scene_frame(
     crate::timeline_domain::snap_frame(
         frame,
         ignore_snap,
-        AviQtlSceneSettings {
+        SceneSettings {
             width: scene.width,
             height: scene.height,
             fps: scene.fps,
@@ -767,15 +766,12 @@ pub fn find_vacant_scene_frame(
     ))
 }
 
-fn scene_clip_geometry(
-    document: &ProjectDocument,
-    scene_id: i32,
-) -> Vec<AviQtlTimelineClipGeometry> {
+fn scene_clip_geometry(document: &ProjectDocument, scene_id: i32) -> Vec<TimelineClipGeometry> {
     document
         .clips
         .iter()
         .filter(|clip| clip.scene_id == scene_id)
-        .map(|clip| AviQtlTimelineClipGeometry {
+        .map(|clip| TimelineClipGeometry {
             clip_id: clip.id,
             layer: clip.layer,
             start_frame: clip.start,
@@ -784,10 +780,10 @@ fn scene_clip_geometry(
         .collect()
 }
 
-fn clip_document_geometry(clips: &[ClipDocument]) -> Vec<AviQtlTimelineClipGeometry> {
+fn clip_document_geometry(clips: &[ClipDocument]) -> Vec<TimelineClipGeometry> {
     clips
         .iter()
-        .map(|clip| AviQtlTimelineClipGeometry {
+        .map(|clip| TimelineClipGeometry {
             clip_id: clip.id,
             layer: clip.layer,
             start_frame: clip.start,
@@ -796,7 +792,7 @@ fn clip_document_geometry(clips: &[ClipDocument]) -> Vec<AviQtlTimelineClipGeome
         .collect()
 }
 
-fn clip_geometry_updates(geometry: Vec<AviQtlTimelineClipGeometry>) -> Vec<ClipGeometryUpdate> {
+fn clip_geometry_updates(geometry: Vec<TimelineClipGeometry>) -> Vec<ClipGeometryUpdate> {
     geometry
         .into_iter()
         .map(|clip| ClipGeometryUpdate {

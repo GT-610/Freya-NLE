@@ -1,4 +1,4 @@
-use crate::abi::AviQtlEasingParameters;
+use crate::types::EasingParameters;
 use crate::{EasingKind, evaluate};
 
 fn qt_hash_word(mut key: usize) -> usize {
@@ -103,7 +103,7 @@ pub(crate) fn evaluate_numeric_segment(segment: NumericSegment<'_>) -> f64 {
                 kind,
                 t,
                 segment.custom_points,
-                AviQtlEasingParameters {
+                EasingParameters {
                     amplitude: segment.amplitude,
                     period: segment.period,
                 },

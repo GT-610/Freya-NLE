@@ -1,6 +1,5 @@
 #![recursion_limit = "256"]
 
-mod abi;
 pub mod api;
 mod audio;
 mod bake_plan;
@@ -25,9 +24,10 @@ mod timeline;
 mod timeline_domain;
 mod timeline_edit;
 mod timeline_state;
+mod types;
 
-use abi::AviQtlEasingParameters;
 use std::f64::consts::PI;
+use types::EasingParameters;
 
 const DEFAULT_ELASTIC_PERIOD: f64 = 0.3;
 
@@ -261,7 +261,7 @@ pub(crate) fn evaluate(
     kind: EasingKind,
     t: f64,
     points: &[f64],
-    parameters: AviQtlEasingParameters,
+    parameters: EasingParameters,
 ) -> f64 {
     let elastic_period = if parameters.period > 0.0 {
         parameters.period
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn matches_cpp_golden_values() {
-        let parameters = AviQtlEasingParameters {
+        let parameters = EasingParameters {
             amplitude: 0.8,
             period: 0.42,
         };
@@ -571,7 +571,7 @@ mod tests {
             EasingKind::EaseInOutElastic,
             EasingKind::EaseOutInElastic,
         ];
-        let fallback_parameters = AviQtlEasingParameters {
+        let fallback_parameters = EasingParameters {
             amplitude: 0.8,
             period: DEFAULT_ELASTIC_PERIOD,
         };
@@ -583,7 +583,7 @@ mod tests {
                     kind,
                     0.37,
                     &[],
-                    AviQtlEasingParameters {
+                    EasingParameters {
                         amplitude: 0.8,
                         period,
                     },

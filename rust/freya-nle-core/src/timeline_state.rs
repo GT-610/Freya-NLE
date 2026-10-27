@@ -1,4 +1,3 @@
-use crate::abi::AviQtlIdAllocation;
 use crate::keyframe_document::{move_track, remove_track, set_track, split_track, sync_track};
 use crate::policy::{
     PlaybackMode, audio_duration_frames, audio_parameter_affects_duration, is_video_file,
@@ -9,6 +8,7 @@ use crate::project::{
     MAX_TIMELINE_LAYER, ProjectDocument, ProjectError, ProjectSettings, SceneDocument,
 };
 use crate::timeline_domain::allocate_id;
+use crate::types::IdAllocation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -78,7 +78,7 @@ impl TimelineState {
         };
         let mut allocated = Vec::with_capacity(count);
         for _ in 0..count {
-            let AviQtlIdAllocation {
+            let IdAllocation {
                 allocated_id,
                 next_id,
             } = allocate_id(&existing, next_hint, 1).ok_or(StateError::InvalidArgument)?;

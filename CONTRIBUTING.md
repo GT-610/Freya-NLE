@@ -34,7 +34,7 @@ plugins/       - example Lua plugins used by the plugin host
 effect-packages/ - native, installable effect and object packages
 assets/        - icons, screenshots, and other shipped resources
 i18n/          - effect-metadata translations and translated READMEs
-tests/         - build and C ABI checks (Python)
+tests/         - build metadata checks (Python)
 tools/         - repository utilities
 no-gpu-probes/ - standalone probes used to measure GPU-support decisions
 ```
@@ -60,8 +60,6 @@ cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --locked --workspace --all-features
 python -m unittest tests.test_build_version
-python tests/test_rust_abi_contract.py
-python tests/check_rust_abi.py --rust-src rust/freya-nle-core/src --header rust/freya-nle-core/include/rust_core_abi.hpp
 ```
 
 On Windows, use the MSVC developer environment and the same `FFMPEG_DIR`,
@@ -91,11 +89,9 @@ the behavior it was held to, and the
 [retirement audit](audits/2026-10-26-qt-retirement.md) records what was migrated,
 what deliberately changed, and what is still open.
 
-The C ABI (`aviqtl_*` exports in `freya-nle-core` plus
-`freya-nle-core/include/rust_core_abi.hpp`) is left over from the Qt consumer and is
-being retired in pieces: 131 of its 141 exports are gone, and the remainder keeps its
-contract check until each module's API is reshaped. New code must call the Rust API
-instead of the C ABI.
+The C ABI is gone with the Qt consumer: no `aviqtl_*` exports, header, or contract
+check remain. `freya-nle-core` exposes Rust APIs only, and the shared bake/timeline data
+types live in its `types` module.
 
 ## Versions and Releases
 

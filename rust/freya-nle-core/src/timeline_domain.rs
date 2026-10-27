@@ -1,18 +1,18 @@
-use crate::abi::{AviQtlIdAllocation, AviQtlSceneSettings, AviQtlTimelineClipGeometry};
 use crate::project::DEFAULT_FPS;
+use crate::types::{IdAllocation, SceneSettings, TimelineClipGeometry};
 use std::collections::BTreeSet;
 
 pub(crate) fn allocate_id(
     existing_ids: &[i32],
     next_hint: i32,
     minimum_id: i32,
-) -> Option<AviQtlIdAllocation> {
+) -> Option<IdAllocation> {
     let minimum_id = minimum_id.max(0);
     let mut candidate = next_hint.max(minimum_id);
     while existing_ids.contains(&candidate) {
         candidate = candidate.checked_add(1)?;
     }
-    Some(AviQtlIdAllocation {
+    Some(IdAllocation {
         allocated_id: candidate,
         next_id: candidate.saturating_add(1),
     })
@@ -29,7 +29,7 @@ fn rounded_non_negative(value: f64) -> i32 {
 pub(crate) fn snap_frame(
     frame: f64,
     ignore_snap: bool,
-    settings: AviQtlSceneSettings,
+    settings: SceneSettings,
     timeline_scale: f64,
 ) -> i32 {
     if ignore_snap || settings.enable_snap == 0 {
@@ -78,7 +78,7 @@ pub(crate) fn snap_frame(
     rounded_non_negative(((frame - offset) / step).round() * step + offset)
 }
 
-pub(crate) fn timeline_duration(clips: &[AviQtlTimelineClipGeometry]) -> i32 {
+pub(crate) fn timeline_duration(clips: &[TimelineClipGeometry]) -> i32 {
     clips
         .iter()
         .filter(|clip| clip.duration_frames > 0)
@@ -176,7 +176,7 @@ mod tests {
     fn allocation_skips_existing_ids_and_respects_minimum() {
         assert_eq!(
             allocate_id(&[1, 2, 4], 1, 1),
-            Some(AviQtlIdAllocation {
+            Some(IdAllocation {
                 allocated_id: 3,
                 next_id: 4,
             })
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn grid_snapping_and_duration_rules_match_the_timeline() {
-        let settings = AviQtlSceneSettings {
+        let settings = SceneSettings {
             width: 1920,
             height: 1080,
             fps: 30.0,
@@ -203,13 +203,13 @@ mod tests {
         assert_eq!(snap_frame(16.0, true, settings, 1.0), 16);
 
         let clips = [
-            AviQtlTimelineClipGeometry {
+            TimelineClipGeometry {
                 clip_id: 1,
                 layer: 0,
                 start_frame: 5,
                 duration_frames: 10,
             },
-            AviQtlTimelineClipGeometry {
+            TimelineClipGeometry {
                 clip_id: 2,
                 layer: 1,
                 start_frame: 20,
