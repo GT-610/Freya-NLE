@@ -1,10 +1,11 @@
 # Compute effects
 
-A compute-shader package: `ComputeDesaturate.wgsl` declares one
-`@compute @workgroup_size(8, 8, 1) fn aviqtl_main` entry point and mixes each
-pixel toward its Rec. 709 luminance. The metadata advertises the same
-`workgroup` tile in its `aviqtl-wgsl-v1` runtime, so the host dispatch covers the
-layer texture without leftover pixels.
+Two compute-shader effects. `ComputeDesaturate.wgsl` mixes each pixel toward its
+Rec. 709 luminance in one dispatch; `ComputeBlur.wgsl` declares `"dispatch": 2`
+and blurs horizontally on pass 0 and vertically on pass 1, so the ping-pong
+targets turn it into a separable Gaussian. Both advertise the same `workgroup`
+tile in their `aviqtl-wgsl-v1` runtime, so the host dispatch covers the layer
+texture without leftover pixels.
 
 See the [native package contract](../README.md#compute-effects) for the helper
 functions available in compute shaders.

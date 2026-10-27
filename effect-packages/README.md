@@ -8,7 +8,7 @@ This directory contains installable Effect and Object packages for the Slint/wgp
 | --- | --- | --- | --- |
 | [color-effects](color-effects/) | Effect | 1 effect | Native WGSL color tint |
 | [weather-objects](weather-objects/) | Object | 2 objects | Native WGSL rain and snow animations |
-| [compute-effects](compute-effects/) | Effect | 1 effect | Compute-shader Rec. 709 desaturation |
+| [compute-effects](compute-effects/) | Effect | 2 effects | Compute-shader desaturation and a two-pass blur |
 
 ## Package model
 
