@@ -1,7 +1,3 @@
-use crate::abi::{
-    STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_ARGUMENT, STATUS_INVALID_JSON, STATUS_OK,
-    STATUS_OVERLAPPING_BUFFERS, ranges_overlap, slice_is_valid,
-};
 use crate::keyframe::{NumericSegment, evaluate_numeric_segment};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -52,18 +48,6 @@ enum Request {
         first_half_duration: i32,
         original_duration: i32,
     },
-}
-
-#[derive(Debug, Deserialize)]
-struct EvaluationRequest {
-    track: Value,
-    fallback: Value,
-    frame: i32,
-}
-
-#[derive(Debug, Serialize)]
-struct EvaluationResponse {
-    value: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -427,23 +411,6 @@ pub(crate) fn evaluate_document_track(
 ) -> Value {
     let points = resolve_track(track, fallback, duration);
     evaluate_resolved_track(&points, frame, fallback)
-}
-
-fn evaluate_request(request: EvaluationRequest) -> EvaluationResponse {
-    let mut points = if is_structured(&request.track) {
-        let duration = inferred_duration(&request.track);
-        flatten(&normalize_track(
-            &request.track,
-            &request.fallback,
-            duration,
-        ))
-    } else {
-        track_points(&request.track)
-    };
-    sort_points(&mut points);
-    EvaluationResponse {
-        value: evaluate_track(&points, request.frame, &request.fallback),
-    }
 }
 
 fn normalize_track(track: &Value, fallback: &Value, duration: i32) -> Value {
@@ -910,118 +877,6 @@ pub(crate) fn split_track(
         .then(|| (response.track, response.secondary_track.unwrap_or_default()))
 }
 
-/// Applies a typed keyframe-document operation encoded as JSON.
-///
-/// # Safety
-///
-/// The input must be readable, output writable, and all ranges disjoint. A null output with zero
-/// capacity is a size query. Insufficient capacity never writes partial JSON.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_keyframe_document_apply_json(
-    input: *const u8,
-    input_length: usize,
-    output: *mut u8,
-    output_capacity: usize,
-    output_length: *mut usize,
-) -> u32 {
-    if !slice_is_valid(input, input_length)
-        || !slice_is_valid(output, output_capacity)
-        || !slice_is_valid(output_length, 1)
-    {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    let overlaps = [
-        ranges_overlap(input, input_length, output, output_capacity),
-        ranges_overlap(input, input_length, output_length, 1),
-        ranges_overlap(output, output_capacity, output_length, 1),
-    ];
-    if overlaps.iter().any(Option::is_none) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    if overlaps.into_iter().flatten().any(|overlap| overlap) {
-        return STATUS_OVERLAPPING_BUFFERS;
-    }
-    let input = if input_length == 0 {
-        &[]
-    } else {
-        // SAFETY: The input range was validated and checked against both outputs.
-        unsafe { std::slice::from_raw_parts(input, input_length) }
-    };
-    let Ok(request) = serde_json::from_slice::<Request>(input) else {
-        return STATUS_INVALID_JSON;
-    };
-    let Ok(encoded) = serde_json::to_vec(&apply(request)) else {
-        return STATUS_INVALID_JSON;
-    };
-    // SAFETY: The length output was validated and checked for overlap.
-    unsafe { output_length.write(encoded.len()) };
-    if output_capacity < encoded.len() {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    if !encoded.is_empty() {
-        // SAFETY: Capacity was checked, and the output is valid and disjoint.
-        let output = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
-        output[..encoded.len()].copy_from_slice(&encoded);
-    }
-    STATUS_OK
-}
-
-/// Evaluates a typed keyframe track encoded as JSON.
-///
-/// # Safety
-///
-/// The input must be readable, output writable, and all ranges disjoint. A null output with zero
-/// capacity is a size query. Insufficient capacity never writes partial JSON.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_keyframe_evaluate_json(
-    input: *const u8,
-    input_length: usize,
-    output: *mut u8,
-    output_capacity: usize,
-    output_length: *mut usize,
-) -> u32 {
-    if !slice_is_valid(input, input_length)
-        || !slice_is_valid(output, output_capacity)
-        || !slice_is_valid(output_length, 1)
-    {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    let overlaps = [
-        ranges_overlap(input, input_length, output, output_capacity),
-        ranges_overlap(input, input_length, output_length, 1),
-        ranges_overlap(output, output_capacity, output_length, 1),
-    ];
-    if overlaps.iter().any(Option::is_none) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    if overlaps.into_iter().flatten().any(|overlap| overlap) {
-        return STATUS_OVERLAPPING_BUFFERS;
-    }
-    let input = if input_length == 0 {
-        &[]
-    } else {
-        // SAFETY: The input range was validated and checked against both outputs.
-        unsafe { std::slice::from_raw_parts(input, input_length) }
-    };
-    let Ok(request) = serde_json::from_slice::<EvaluationRequest>(input) else {
-        return STATUS_INVALID_JSON;
-    };
-    let Ok(encoded) = serde_json::to_vec(&evaluate_request(request)) else {
-        return STATUS_INVALID_JSON;
-    };
-    // SAFETY: The length output was validated and checked for overlap.
-    unsafe { output_length.write(encoded.len()) };
-    if output_capacity < encoded.len() {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    if !encoded.is_empty() {
-        // SAFETY: Capacity was checked, and the output is valid and disjoint.
-        let output = unsafe { std::slice::from_raw_parts_mut(output, output_capacity) };
-        output[..encoded.len()].copy_from_slice(&encoded);
-    }
-    STATUS_OK
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1200,76 +1055,38 @@ mod tests {
 
     #[test]
     fn evaluates_typed_numeric_discrete_and_color_tracks() {
-        let integer_endpoint = evaluate_request(EvaluationRequest {
-            track: json!([
+        let integer_endpoint = evaluate_document_track(
+            &json!([
                 {"frame": 0, "value": {"$aviqtlType": "int", "value": 10}, "interp": "linear"},
                 {"frame": 10, "value": {"$aviqtlType": "int", "value": 20}, "interp": "linear"}
             ]),
-            fallback: json!({"$aviqtlType": "int", "value": 0}),
-            frame: 0,
-        });
-        assert_eq!(integer_endpoint.value["$aviqtlType"], "int");
-        assert_eq!(integer_endpoint.value["value"], 10);
+            &json!({"$aviqtlType": "int", "value": 0}),
+            10,
+            0,
+        );
+        assert_eq!(integer_endpoint["$aviqtlType"], "int");
+        assert_eq!(integer_endpoint["value"], 10);
 
-        let held = evaluate_request(EvaluationRequest {
-            track: json!([
+        let held = evaluate_document_track(
+            &json!([
                 {"frame": 0, "value": "first", "interp": "none"},
                 {"frame": 10, "value": "second", "interp": "none"}
             ]),
-            fallback: json!("fallback"),
-            frame: 5,
-        });
-        assert_eq!(held.value, "first");
+            &json!("fallback"),
+            10,
+            5,
+        );
+        assert_eq!(held, "first");
 
-        let color = evaluate_request(EvaluationRequest {
-            track: json!([
+        let color = evaluate_document_track(
+            &json!([
                 {"frame": 0, "value": "#ff0000", "interp": "linear"},
                 {"frame": 10, "value": "#0000ff", "interp": "linear"}
             ]),
-            fallback: json!("#000000"),
-            frame: 5,
-        });
-        assert_eq!(color.value, "#ff7f007f");
-    }
-
-    #[test]
-    fn ffi_size_query_and_small_buffer_do_not_write_partial_json() {
-        let request = serde_json::to_vec(&json!({
-            "operation": "normalize",
-            "track": [],
-            "fallback": 1.0,
-            "duration": 10
-        }))
-        .unwrap();
-        let mut required = 0_usize;
-        // SAFETY: The request and length output are valid and disjoint.
-        let status = unsafe {
-            aviqtl_keyframe_document_apply_json(
-                request.as_ptr(),
-                request.len(),
-                std::ptr::null_mut(),
-                0,
-                &mut required,
-            )
-        };
-        assert_eq!(status, STATUS_BUFFER_TOO_SMALL);
-        assert!(required > 1);
-
-        let mut output = vec![0xa5_u8; required - 1];
-        let original = output.clone();
-        let mut reported = 0_usize;
-        // SAFETY: Every range is valid and disjoint; the output is intentionally undersized.
-        let status = unsafe {
-            aviqtl_keyframe_document_apply_json(
-                request.as_ptr(),
-                request.len(),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut reported,
-            )
-        };
-        assert_eq!(status, STATUS_BUFFER_TOO_SMALL);
-        assert_eq!(reported, required);
-        assert_eq!(output, original);
+            &json!("#000000"),
+            10,
+            5,
+        );
+        assert_eq!(color, "#ff7f007f");
     }
 }

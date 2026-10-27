@@ -238,7 +238,12 @@ impl ExoFilter {
         if digits.len() % 2 != 0 {
             return None;
         }
-        digits.chunks_exact(2).map(hex_byte).collect()
+        digits
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| hex_byte(pair))
+            .collect()
     }
 
     /// The object's text content, which ExEdit stores as hex-encoded UTF-16LE.
@@ -250,8 +255,10 @@ impl ExoFilter {
             return None;
         }
         let units = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .take_while(|unit| *unit != 0)
             .collect::<Vec<_>>();
         Some(String::from_utf16_lossy(&units))

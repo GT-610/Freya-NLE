@@ -1,0 +1,22 @@
+{
+    "id": "frame_buffer",
+    "name": "フレームバッファ",
+    "builtin": true,
+    "params": {
+        "clearBelow": false
+    },
+    "ui": {
+        "controls": [
+            {
+                "param": "clearBelow",
+                "label": "下位レイヤーをクリア",
+                "type": "bool"
+            }
+        ]
+    },
+    "version": "1.0.0",
+    "kind": "object",
+    "categories": [
+        "基本"
+    ]
+}

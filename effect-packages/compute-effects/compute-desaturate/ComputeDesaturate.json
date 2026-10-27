@@ -1,0 +1,33 @@
+{
+  "id": "compute_desaturate",
+  "name": "Compute Desaturate",
+  "params": {
+    "amount": 1.0
+  },
+  "ui": {
+    "controls": [
+      {
+        "type": "slider",
+        "param": "amount",
+        "label": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.01
+      }
+    ]
+  },
+  "version": "1.0.0",
+  "kind": "effect",
+  "categories": [
+    "Color"
+  ],
+  "runtime": {
+    "engine": "aviqtl-wgsl-v1",
+    "shader": "ComputeDesaturate.wgsl",
+    "mode": "compute",
+    "workgroup": [8, 8],
+    "uniforms": [
+      "amount"
+    ]
+  }
+}

@@ -2,9 +2,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Locales that translate the Japanese effect and object metadata. Japanese is
+/// the source language, so it needs no catalog of its own.
+const EFFECT_METADATA_LOCALES: &[(&str, &str)] = &[
+    ("en_US", "EFFECT_METADATA_ENGLISH"),
+    ("zh_CN", "EFFECT_METADATA_SIMPLIFIED_CHINESE"),
+];
+
 fn main() {
-    println!("cargo:rerun-if-changed=../../i18n/AviQtl_en_US.ts");
-    println!("cargo:rerun-if-changed=../../i18n/AviQtl_zh_CN.ts");
+    println!("cargo:rerun-if-changed=../../i18n/effect-metadata.json");
     generate_effect_metadata_translations().expect("generate effect metadata translations");
 
     let config = slint_build::CompilerConfiguration::new()
@@ -15,60 +21,35 @@ fn main() {
 
 fn generate_effect_metadata_translations() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
-    let source_root = manifest_dir.join("../..");
-    let english = read_effect_metadata_translations(&source_root.join("i18n/AviQtl_en_US.ts"))?;
-    let chinese = read_effect_metadata_translations(&source_root.join("i18n/AviQtl_zh_CN.ts"))?;
+    let catalog_path = manifest_dir.join("../../i18n/effect-metadata.json");
     let output = PathBuf::from(env::var("OUT_DIR")?).join("effect_metadata_translations.rs");
     let mut generated = String::new();
-    write_translation_array(&mut generated, "EFFECT_METADATA_ENGLISH", &english);
-    write_translation_array(
-        &mut generated,
-        "EFFECT_METADATA_SIMPLIFIED_CHINESE",
-        &chinese,
-    );
+    for (locale, symbol) in EFFECT_METADATA_LOCALES {
+        let translations = read_effect_metadata_translations(&catalog_path, locale)?;
+        write_translation_array(&mut generated, symbol, &translations);
+    }
     fs::write(output, generated)?;
     Ok(())
 }
 
 fn read_effect_metadata_translations(
     path: &Path,
+    locale: &str,
 ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-    let xml = fs::read_to_string(path)?;
-    let document = roxmltree::Document::parse_with_options(
-        &xml,
-        roxmltree::ParsingOptions {
-            allow_dtd: true,
-            ..Default::default()
-        },
-    )?;
-    let mut translations = document
-        .descendants()
-        .filter(|node| node.has_tag_name("context"))
-        .filter(|context| {
-            context
-                .children()
-                .find(|node| node.has_tag_name("name"))
-                .and_then(|node| node.text())
-                == Some("AviQtl::Core::EffectRegistry")
-        })
-        .flat_map(|context| {
-            context
-                .children()
-                .filter(|node| node.has_tag_name("message"))
-        })
-        .filter_map(|message| {
-            let source = message
-                .children()
-                .find(|node| node.has_tag_name("source"))?
-                .text()?;
-            let translation = message
-                .children()
-                .find(|node| node.has_tag_name("translation"))?
-                .text()?;
+    let catalog: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+    let entries = catalog
+        .get(locale)
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| format!("{} has no {:?} translations", path.display(), locale))?;
+    let mut translations = entries
+        .iter()
+        .filter_map(|(source, translation)| {
+            let translation = translation.as_str()?;
             (!source.is_empty() && !translation.is_empty())
-                .then(|| (source.to_owned(), translation.to_owned()))
+                .then(|| (source.clone(), translation.to_owned()))
         })
         .collect::<Vec<_>>();
+    // `localized_effect_metadata` binary-searches the generated table.
     translations.sort_by(|left, right| left.0.cmp(&right.0));
     translations.dedup_by(|left, right| left.0 == right.0);
     Ok(translations)

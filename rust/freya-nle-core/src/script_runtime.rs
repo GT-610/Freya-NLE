@@ -205,6 +205,7 @@ impl ScriptRuntime {
         remove_unsafe_globals(&mut vm)?;
         install_math_shortcuts(&mut vm)?;
         install_aviqtl_api(&mut vm)?;
+        install_lua_compatibility(&mut vm)?;
         inject_parameters(&mut vm, parameters)?;
 
         let mut runtime = Self { plugin_id, vm };
@@ -308,7 +309,6 @@ fn remove_unsafe_globals(vm: &mut Vm) -> Result<(), ScriptRuntimeError> {
         "loadstring",
         "loadfile",
         "dofile",
-        "print",
         "require",
         "module",
         "io",
@@ -457,6 +457,106 @@ fn install_aviqtl_api(vm: &mut Vm) -> Result<(), ScriptRuntimeError> {
     // rename keep running; new scripts should use `freya`.
     vm.set_global("aviqtl", api)
         .map_err(|error| runtime_error(vm, error))
+}
+
+/// Sugar that Qt-era plugins were written against: LuaJIT's signed `bit` library on top of the
+/// VM's `bit32`, and the flat `aviqtl_*` spellings of the table API. Both stay available so a
+/// script written for the Qt frontend keeps running unchanged.
+const LUA_COMPATIBILITY: &str = r#"
+bit = {
+    band = bit32.band,
+    bor = bit32.bor,
+    bxor = bit32.bxor,
+    bnot = bit32.bnot,
+    lshift = bit32.lshift,
+    rshift = bit32.rshift,
+    arshift = bit32.arshift,
+    rol = bit32.lrotate,
+    ror = bit32.rrotate,
+}
+
+function bit.tobit(value)
+    local unsigned = bit32.band(value, 0xFFFFFFFF)
+    if unsigned >= 2147483648 then
+        return unsigned - 4294967296
+    end
+    return unsigned
+end
+
+function bit.bswap(value)
+    local unsigned = bit32.band(value, 0xFFFFFFFF)
+    return bit.tobit(
+        bit32.lshift(bit32.band(unsigned, 0x000000FF), 24)
+            + bit32.lshift(bit32.band(unsigned, 0x0000FF00), 8)
+            + bit32.rshift(bit32.band(unsigned, 0x00FF0000), 8)
+            + bit32.rshift(bit32.band(unsigned, 0xFF000000), 24))
+end
+
+function bit.tohex(value, digits)
+    digits = digits or 8
+    local uppercase = digits < 0
+    if uppercase then
+        digits = -digits
+    end
+    if digits > 8 then
+        digits = 8
+    end
+    local text = string.format("%08x", bit32.band(value, 0xFFFFFFFF))
+    if digits < 8 then
+        text = string.sub(text, 9 - digits)
+    end
+    if uppercase then
+        text = string.upper(text)
+    end
+    return text
+end
+
+aviqtl_log = aviqtl.log
+aviqtl_undo = aviqtl.undo
+aviqtl_redo = aviqtl.redo
+aviqtl_transport_play = aviqtl.transport.play
+aviqtl_transport_pause = aviqtl.transport.pause
+aviqtl_transport_toggle = aviqtl.transport.toggle
+aviqtl_transport_seek = aviqtl.transport.seek
+aviqtl_transport_get_frame = aviqtl.transport.get_frame
+aviqtl_transport_is_playing = aviqtl.transport.is_playing
+aviqtl_clip_create = aviqtl.clip.create
+aviqtl_clip_delete = aviqtl.clip.delete
+aviqtl_clip_update = aviqtl.clip.update
+aviqtl_clip_select = aviqtl.clip.select
+aviqtl_clip_split = aviqtl.clip.split
+aviqtl_clip_copy = aviqtl.clip.copy
+aviqtl_clip_cut = aviqtl.clip.cut
+aviqtl_clip_paste = aviqtl.clip.paste
+aviqtl_clip_list = aviqtl.clip.list
+aviqtl_effect_add = aviqtl.effect.add
+aviqtl_effect_remove = aviqtl.effect.remove
+aviqtl_effect_set_param = aviqtl.effect.set_param
+aviqtl_project_width = aviqtl.project.width
+aviqtl_project_height = aviqtl.project.height
+aviqtl_project_fps = aviqtl.project.fps
+aviqtl_project_save = aviqtl.project.save
+aviqtl_project_load = aviqtl.project.load
+aviqtl_settings_set = aviqtl.settings.set
+aviqtl_settings_get = aviqtl.settings.get
+aviqtl_scene_create = aviqtl.scene.create
+aviqtl_scene_remove = aviqtl.scene.remove
+aviqtl_scene_switch = aviqtl.scene.switch
+aviqtl_command_begin_group = aviqtl.command.begin_group
+aviqtl_command_end_group = aviqtl.command.end_group
+"#;
+
+fn install_lua_compatibility(vm: &mut Vm) -> Result<(), ScriptRuntimeError> {
+    // `bit32` is the 5.2 library the VM ships; the compatibility chunk above
+    // turns it into the signed LuaJIT `bit` surface Qt-era scripts expect.
+    vm.open_bit32();
+    if let Err(error) = vm.eval_chunk(LUA_COMPATIBILITY, "lua-compatibility") {
+        return Err(ScriptRuntimeError::new(format!(
+            "lua-compatibility: {}",
+            vm.error_text(&error)
+        )));
+    }
+    Ok(())
 }
 
 fn inject_parameters(
@@ -1178,5 +1278,36 @@ mod tests {
                 execution.diagnostics
             );
         }
+    }
+
+    #[test]
+    fn luajit_conveniences_and_flat_api_spellings_keep_working() {
+        let source = r#"
+            aviqtl_log("flat " .. bit.tohex(bit.band(0xFF00, 0x0F00)))
+            aviqtl_log(tostring(bit.tobit(0xFFFFFFFF)))
+            aviqtl_log(tostring(bit.bswap(0x01020304)))
+            aviqtl_log(tostring(type(print)))
+            aviqtl_log(tostring(aviqtl_log == aviqtl.log))
+        "#;
+        let permissions = permissions(&[PluginPermission::LogOutput]);
+        let (_, execution) = ScriptRuntime::load(
+            "plugin",
+            source,
+            "plugin.lua",
+            &BTreeMap::new(),
+            &permissions,
+            ScriptHostSnapshot::default(),
+        )
+        .expect("plugin loads");
+        assert_eq!(
+            execution.commands,
+            vec![
+                ScriptHostCommand::Log("flat 00000f00".to_owned()),
+                ScriptHostCommand::Log("-1".to_owned()),
+                ScriptHostCommand::Log("67305985".to_owned()),
+                ScriptHostCommand::Log("function".to_owned()),
+                ScriptHostCommand::Log("true".to_owned()),
+            ]
+        );
     }
 }

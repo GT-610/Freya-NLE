@@ -1,10 +1,15 @@
 use freya_nle_core::api::{ProjectDocument, TimelineState};
+use serde_json::{Map, Value};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// File extension a project is saved with.
 pub const PROJECT_EXTENSION: &str = "freya";
+
+/// Largest project or recovery document that is read or written, matching the bound the Qt
+/// frontend applied before its retirement.
+pub const MAX_PROJECT_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The extension projects were saved with before the rename. Still opened.
 pub const LEGACY_PROJECT_EXTENSION: &str = "aviqtl";
@@ -97,7 +102,7 @@ impl ProjectSession {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let bytes = read_document(path, MAX_PROJECT_DOCUMENT_BYTES)?;
         let mut project =
             Self::from_json(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
         project.path = Some(path.to_path_buf());
@@ -128,8 +133,7 @@ impl ProjectSession {
         snapshot_path: &Path,
         _original_project_url: &str,
     ) -> Result<Self, String> {
-        let bytes = fs::read(snapshot_path)
-            .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
+        let bytes = read_document(snapshot_path, MAX_PROJECT_DOCUMENT_BYTES)?;
         let state = TimelineState::from_json(&bytes)
             .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
         let document = state.snapshot();
@@ -151,16 +155,16 @@ impl ProjectSession {
     pub fn save(&mut self) -> Result<(), String> {
         let path = self
             .path
-            .as_deref()
+            .clone()
             .ok_or_else(|| "choose a project path before saving".to_owned())?;
-        let bytes = self.snapshot_bytes()?;
-        write_atomic(path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+        let bytes = self.snapshot_bytes_for(&path)?;
+        write_atomic(&path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
         self.dirty = false;
         Ok(())
     }
 
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
-        let bytes = self.snapshot_bytes()?;
+        let bytes = self.snapshot_bytes_for(path)?;
         write_atomic(path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
         self.path = Some(path.to_path_buf());
         self.dirty = false;
@@ -173,6 +177,103 @@ impl ProjectSession {
             .snapshot_json()
             .map_err(|error| error.to_string())?;
         serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())
+    }
+
+    /// Serializes the project for `path`, storing media that lives beside it with a relative
+    /// path. A project and its media then move together instead of breaking at the old location.
+    fn snapshot_bytes_for(&self, path: &Path) -> Result<Vec<u8>, String> {
+        let mut json = self
+            .state
+            .snapshot_json()
+            .map_err(|error| error.to_string())?;
+        if let Some(directory) = path.parent() {
+            relativize_media_paths(&mut json, directory);
+        }
+        let bytes = serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > MAX_PROJECT_DOCUMENT_BYTES {
+            return Err(format!(
+                "{}: project exceeds the maximum allowed size of {MAX_PROJECT_DOCUMENT_BYTES} bytes",
+                path.display()
+            ));
+        }
+        Ok(bytes)
+    }
+}
+
+fn read_document(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let metadata = fs::metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if metadata.len() > limit {
+        return Err(document_too_large(path, limit));
+    }
+    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if bytes.len() as u64 > limit {
+        return Err(document_too_large(path, limit));
+    }
+    Ok(bytes)
+}
+
+fn document_too_large(path: &Path, limit: u64) -> String {
+    format!(
+        "{}: file exceeds the maximum allowed size of {limit} bytes",
+        path.display()
+    )
+}
+
+/// Rewrites the media parameters of every clip that point inside `project_directory` to
+/// project-relative paths. Files outside the directory keep their absolute path, which keeps a
+/// project that references shared footage stable when it is saved elsewhere.
+fn relativize_media_paths(document: &mut Value, project_directory: &Path) {
+    let Ok(directory) = std::path::absolute(project_directory) else {
+        return;
+    };
+    let Some(clips) = document.get_mut("clips").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for clip in clips {
+        if let Some(params) = clip.get_mut("params").and_then(Value::as_object_mut) {
+            for (object, key) in [("video", "path"), ("image", "path"), ("audio", "source")] {
+                let Some(media) = params.get_mut(object).and_then(Value::as_object_mut) else {
+                    continue;
+                };
+                relativize_parameter(media, key, &directory);
+            }
+        }
+        let Some(effects) = clip.get_mut("effects").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for effect in effects {
+            let key = match effect.get("id").and_then(Value::as_str) {
+                Some("video" | "image") => "path",
+                Some("audio") => "source",
+                _ => continue,
+            };
+            if let Some(params) = effect.get_mut("params").and_then(Value::as_object_mut) {
+                relativize_parameter(params, key, &directory);
+            }
+        }
+    }
+}
+
+fn relativize_parameter(params: &mut Map<String, Value>, key: &str, directory: &Path) {
+    let Some(Value::String(path)) = params.get(key) else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    let absolute = Path::new(path);
+    if !absolute.is_absolute() {
+        return;
+    }
+    let Ok(absolute) = std::path::absolute(absolute) else {
+        return;
+    };
+    let Ok(relative) = absolute.strip_prefix(directory) else {
+        return;
+    };
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if !relative.is_empty() {
+        params.insert(key.to_owned(), Value::String(relative));
     }
 }
 
@@ -381,5 +482,80 @@ mod tests {
         assert_eq!(unsaved.path, None);
         assert!(unsaved.dirty);
         fs::remove_file(snapshot_path).expect("recovery snapshot removes");
+    }
+
+    #[test]
+    fn saving_stores_media_inside_the_project_directory_as_a_relative_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let media_directory = directory.path().join("media");
+        fs::create_dir(&media_directory).unwrap();
+        let video = media_directory.join("clip.mp4");
+        let audio = media_directory.join("music.wav");
+        fs::write(&video, b"video").unwrap();
+        fs::write(&audio, b"audio").unwrap();
+        let outside = std::env::temp_dir().join("freya-nle-shared-footage.mp4");
+
+        let mut project = ProjectSession::blank();
+        let mut document = project.state.snapshot_json().expect("snapshot serializes");
+        let clips = document["clips"]
+            .as_array_mut()
+            .expect("a project snapshot has a clip list");
+        clips.push(serde_json::json!({
+            "id": 1,
+            "sceneId": 1,
+            "type": "video",
+            "start": 0,
+            "duration": 100,
+            "layer": 0,
+            "effects": [
+                {"enabled": true, "id": "video", "params": {"path": video.to_string_lossy()}},
+                {"enabled": true, "id": "audio", "params": {"source": audio.to_string_lossy()}}
+            ]
+        }));
+        clips.push(serde_json::json!({
+            "id": 2,
+            "sceneId": 1,
+            "type": "video",
+            "start": 120,
+            "duration": 100,
+            "layer": 1,
+            "effects": [
+                {"enabled": true, "id": "video", "params": {"path": outside.to_string_lossy()}}
+            ]
+        }));
+        project =
+            ProjectSession::from_json(&serde_json::to_vec(&document).expect("document serializes"))
+                .expect("the media project opens");
+        let target = directory.path().join("project.freya");
+        project.path = Some(target.clone());
+        project.save().expect("project saves");
+
+        let saved: Value = serde_json::from_slice(&fs::read(&target).expect("saved project reads"))
+            .expect("saved project parses");
+        assert_eq!(
+            saved["clips"][0]["effects"][0]["params"]["path"],
+            Value::String("media/clip.mp4".to_owned())
+        );
+        assert_eq!(
+            saved["clips"][0]["effects"][1]["params"]["source"],
+            Value::String("media/music.wav".to_owned())
+        );
+        assert_eq!(
+            saved["clips"][1]["effects"][0]["params"]["path"],
+            Value::String(outside.to_string_lossy().into_owned())
+        );
+    }
+
+    #[test]
+    fn documents_over_the_size_limit_are_refused_before_they_are_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("project.freya");
+        fs::write(&path, b"12345").unwrap();
+        let error = read_document(&path, 4).expect_err("an oversized document is refused");
+        assert!(error.contains("maximum allowed size"), "{error}");
+        assert_eq!(
+            read_document(&path, 5).expect("a document at the limit reads"),
+            b"12345"
+        );
     }
 }

@@ -95,7 +95,7 @@ fn public_api_plans_stable_multi_effect_reordering() {
 
 #[test]
 fn public_api_owns_effect_metadata_and_preset_documents() {
-    let metadata = parse_effect_metadata(include_bytes!("../../../ui/qml/effects/blur.json"))
+    let metadata = parse_effect_metadata(include_bytes!("../../../catalog/effects/blur.json"))
         .expect("built-in effect metadata parses");
     assert_eq!(metadata.id, "blur");
     assert_eq!(metadata.kind, "effect");

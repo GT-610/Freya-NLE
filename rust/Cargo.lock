@@ -1762,7 +1762,6 @@ dependencies = [
  "freya-nle-preview",
  "pollster",
  "rfd",
- "roxmltree 0.21.1",
  "serde_json",
  "slint",
  "slint-build",

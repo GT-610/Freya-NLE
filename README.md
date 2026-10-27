@@ -19,7 +19,7 @@
 > each identifier became.
 
 > [!IMPORTANT]
-> Freya NLE is a fork of [taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl) that continues the **Qt Quick + QRhi + ECS** development path after the upstream project was rebuilt with **Rust + Slint + wgpu**. The frontend has since migrated the same way: **Rust + Slint + wgpu is the default build and the release build**, while the legacy Qt frontend remains available via `python3 BUILD.py --frontend qt` as a behavior reference only. See [About the project](https://aviqtl.gt610.dpdns.org/guide/start-here/about) for the full story.
+> Freya NLE is a fork of [taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl) that continues the **Qt Quick + QRhi + ECS** development path after the upstream project was rebuilt with **Rust + Slint + wgpu**. The frontend has since migrated the same way, and the Qt frontend was retired in 0.8: **Rust + Slint + wgpu is the only build**. See [About the project](https://aviqtl.gt610.dpdns.org/guide/start-here/about) for the full story.
 
 ## What is Freya NLE?
 
@@ -71,12 +71,11 @@ Freya NLE stands on the shoulders of many wonderful projects.
 | AviUtl | Non-free | Respected origin |
 | AviQtl | AGPLv3 | Original Qt Quick project; `aviqtl` branch of the upstream |
 | NeoUtl | AGPLv3 | New Rust + Slint + wgpu version by the original author |
-| Freya NLE | AGPLv3 | This project — migrating from Qt Quick + QRhi + ECS to Rust + Slint + wgpu |
+| Freya NLE | AGPLv3 | This project — Rust + Slint + wgpu, grown out of a Qt Quick + QRhi + ECS codebase |
 | Carla | GPLv2+ | Audio effect host (VST3/LV2 etc.) |
 | FFmpeg | GPLv2+ | Video/audio decoding & encoding |
-| LuaJIT | MIT | Script engine of the legacy Qt frontend |
-| Qt | GPLv3 | UI/UX framework for the legacy frontend |
-| Slint | GPLv3 | UI framework for the default frontend |
+| luna-core | MIT OR Apache-2.0 | Lua 5.1 virtual machine for plugins |
+| Slint | GPLv3 | UI framework |
 | Zrythm | AGPLv3 | Reference for audio plugin implementation |
 | Remix Icon | Remix Icon License | Symbol icons |
 

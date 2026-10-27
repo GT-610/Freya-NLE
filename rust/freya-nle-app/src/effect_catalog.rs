@@ -1,7 +1,9 @@
 use crate::file_io::read_bounded;
 use crate::settings::package_paths;
 use freya_nle_core::api::{EffectDocument, EffectMetadata, parse_effect_metadata};
-use freya_nle_render::{NativeRenderDefinition, validate_native_shader};
+use freya_nle_render::{
+    NativeEffectMode, NativeRenderDefinition, validate_native_shader, validate_native_shader_source,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -256,12 +258,20 @@ fn load_native_definition(
     }
     let shader_source =
         String::from_utf8(read_bounded(&shader_path, MAX_NATIVE_SHADER_BYTES).ok()?).ok()?;
-    validate_native_shader(&shader_source).ok()?;
+    let mode = match runtime.workgroup {
+        Some(workgroup) => NativeEffectMode::Compute {
+            workgroup,
+            dispatch: runtime.dispatch.max(1),
+        },
+        None => NativeEffectMode::Fragment,
+    };
+    validate_native_shader(&shader_source, mode).ok()?;
     Some(NativeRenderDefinition {
         id: metadata.id.clone(),
         kind: metadata.kind.clone(),
         uniforms: runtime.uniforms.clone(),
         shader_source: Arc::from(shader_source),
+        mode,
     })
 }
 
@@ -285,7 +295,7 @@ pub(crate) fn validate_native_package_directory(
                     .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
             })
             .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
-        validate_native_shader(&source).map_err(|error| {
+        validate_native_shader_source(&source).map_err(|error| {
             format!(
                 "Native package contains invalid WGSL shader at {}: {error}",
                 path.display()
@@ -307,16 +317,30 @@ pub(crate) fn validate_native_package_directory(
         let bytes = read_bounded(&path, MAX_EFFECT_DEFINITION_BYTES)
             .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
         let document = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
-        let declares_render_entry = document
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|document| {
-                document.contains_key("runtime")
-                    || document
-                        .get("kind")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|kind| matches!(kind, "effect" | "object"))
-            });
+        let document = document.as_ref().and_then(serde_json::Value::as_object);
+        // A definition that names a QML component is a legacy Qt entry. The
+        // Slint edition cannot run QML, so it is reported by name instead of
+        // landing in the catalog as an entry that never renders.
+        if document
+            .and_then(|document| document.get("qml"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|qml| !qml.is_empty())
+        {
+            let id = document
+                .and_then(|document| document.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("package entry");
+            return Err(format!(
+                "Native package entry {id} declares a QML component and does not declare aviqtl-wgsl-v1."
+            ));
+        }
+        let declares_render_entry = document.is_some_and(|document| {
+            document.contains_key("runtime")
+                || document
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| matches!(kind, "effect" | "object"))
+        });
         let Some(entry) = parse_effect_metadata(&bytes) else {
             if declares_render_entry {
                 return Err(format!(
@@ -569,6 +593,77 @@ fn aviqtl_effect(
     }
 
     #[test]
+    fn native_compute_package_loads_with_its_dispatch_shape() {
+        let root = temporary_directory();
+        let package = root.join("org.example.compute");
+        let definitions = package.join("definitions");
+        let shaders = definitions.join("shaders");
+        fs::create_dir_all(&shaders).expect("package directories create");
+        fs::write(
+            shaders.join("tint.wgsl"),
+            r#"
+@compute @workgroup_size(16, 8, 1)
+fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let coord = vec2<i32>(id.xy);
+    let amount = aviqtl_parameter(0u).x;
+    aviqtl_write(coord, mix(aviqtl_pixel(coord), vec4<f32>(1.0), amount));
+}
+"#,
+        )
+        .expect("shader writes");
+        let metadata = |workgroup: [u32; 2]| {
+            serde_json::to_vec(&json!({
+                "id": "effect.compute",
+                "name": "Compute",
+                "version": "1.0.0",
+                "kind": "effect",
+                "categories": ["Native"],
+                "params": {"amount": 0.5},
+                "ui": {"controls": []},
+                "runtime": {
+                    "engine": "aviqtl-wgsl-v1",
+                    "shader": "shaders/tint.wgsl",
+                    "mode": "compute",
+                    "workgroup": workgroup,
+                    "uniforms": ["amount"]
+                }
+            }))
+            .expect("metadata serializes")
+        };
+        fs::write(definitions.join("main.json"), metadata([16, 8])).expect("metadata writes");
+
+        assert!(
+            validate_native_package_directory(&package, "org.example.compute", "effect").is_ok()
+        );
+        let (catalog, _) =
+            EffectCatalog::load_from_roots(vec![root.clone()], vec![(root.clone(), "effect")]);
+        let definition = catalog
+            .native_definitions()
+            .into_iter()
+            .find(|definition| definition.id == "effect.compute")
+            .expect("compute effect loads");
+        assert_eq!(
+            definition.mode,
+            freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [16, 8],
+                dispatch: 1,
+            }
+        );
+
+        // The metadata dispatch shape must match the shader declaration, both at
+        // installation and when the catalog loads.
+        fs::write(definitions.join("main.json"), metadata([8, 8])).expect("metadata replaces");
+        assert!(
+            validate_native_package_directory(&package, "org.example.compute", "effect").is_err()
+        );
+        let (mismatched, _) =
+            EffectCatalog::load_from_roots(vec![root.clone()], vec![(root.clone(), "effect")]);
+        assert!(mismatched.native_definitions().is_empty());
+
+        fs::remove_dir_all(root).expect("temporary package removes");
+    }
+
+    #[test]
     fn native_package_validation_rejects_unreferenced_invalid_and_oversized_shaders() {
         let root = temporary_directory();
         let package = root.join("org.example.native");
@@ -639,6 +734,16 @@ fn aviqtl_effect(
 
         validate_native_package_directory(&package, "com.aviqtl.objects.weather", "object")
             .expect("weather object package is valid");
+    }
+
+    #[test]
+    fn repository_compute_effects_satisfy_the_native_package_contract() {
+        let package = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("effect-packages/compute-effects");
+
+        validate_native_package_directory(&package, "com.aviqtl.effects.compute", "effect")
+            .expect("compute effect package is valid");
     }
 
     #[test]

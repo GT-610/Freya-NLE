@@ -202,9 +202,6 @@ jobs:
           if (-not (Test-Path -LiteralPath "build\AviQtl.exe")) {
             throw "Packaged AviQtl.exe is missing"
           }
-          if ((Get-ChildItem -LiteralPath build -Filter "Qt6*.dll" -File).Count -ne 0) {
-            throw "Qt runtime DLLs must not be present in the Slint package"
-          }
           if ((Get-ChildItem -LiteralPath build -Filter "avcodec*.dll" -File).Count -eq 0) {
             throw "FFmpeg runtime DLLs are missing"
           }

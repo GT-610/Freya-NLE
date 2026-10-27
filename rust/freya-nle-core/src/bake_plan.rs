@@ -1,17 +1,12 @@
-use crate::abi::{
-    AviQtlAudioBakeInput, AviQtlAudioBakeOutput, AviQtlEffectParamEntry, AviQtlRenderBakeInput,
-    AviQtlRenderBakeOutput, AviQtlSceneBakeCounts, STATUS_BUFFER_TOO_SMALL,
-    STATUS_INVALID_ARGUMENT, STATUS_INVALID_JSON, STATUS_OK, STATUS_OVERLAPPING_BUFFERS,
-    ranges_overlap, slice_is_valid,
-};
+use crate::expression;
 use crate::keyframe_document::{evaluate_resolved_track, parse_hex_color, resolve_track};
 use crate::policy::{PlaybackMode, playback_mode, resolve_video_time};
 use crate::project::{
     AudioPluginDocument, ClipDocument, EffectDocument, ExtraFields, ProjectDocument,
 };
 use crate::timeline::{bake_audio, bake_render};
-use serde::Deserialize;
-use serde_json::{Map, Value};
+use crate::types::{AudioBakeInput, AudioBakeOutput, RenderBakeInput};
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
@@ -19,8 +14,6 @@ use std::fmt::{Display, Formatter};
 
 const FRAME_BUCKET_SIZE: i32 = 120;
 const DEFAULT_SPEED_PERCENT: f32 = 100.0;
-const PARAM_TYPE_FLOAT: u8 = 0;
-const PARAM_TYPE_COLOR: u8 = 4;
 
 /// Error returned when a scene render plan cannot be built from a project snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,11 +50,7 @@ impl SceneRenderPlan {
 
     /// Evaluates active render and audio layers at an absolute scene frame.
     pub fn evaluate(&mut self, current_frame: i32) -> SceneFramePlan {
-        self.plan.compute_frame(EvaluationKey {
-            current_frame,
-            full_bake: false,
-            prefetch_frames: 0,
-        })
+        self.plan.compute_frame(EvaluationKey { current_frame })
     }
 
     /// Returns the number of effects cached by this plan.
@@ -399,20 +388,29 @@ pub struct EvaluatedAudioPlugin {
     pub extra: ExtraFields,
 }
 
+#[cfg(test)]
+use serde::Deserialize;
+#[cfg(test)]
+use serde_json::Map;
+
+#[cfg(test)]
 fn default_max_clip_id() -> i32 {
     4096
 }
 
+#[cfg(test)]
 fn default_scene_height() -> i32 {
     1080
 }
 
+#[cfg(test)]
 fn default_enabled() -> bool {
     true
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(test)]
 struct SceneInput {
     fps: f64,
     #[serde(default = "default_scene_height")]
@@ -425,6 +423,7 @@ struct SceneInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(test)]
 struct ClipInput {
     id: i32,
     #[serde(default)]
@@ -443,6 +442,7 @@ struct ClipInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(test)]
 struct EffectInput {
     #[serde(default)]
     id: String,
@@ -458,6 +458,7 @@ struct EffectInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(test)]
 struct KeyframeInput {
     #[serde(default)]
     frame: i32,
@@ -475,18 +476,22 @@ struct KeyframeInput {
     bzy2: f64,
 }
 
+#[cfg(test)]
 fn default_interpolation() -> String {
     "linear".to_owned()
 }
 
+#[cfg(test)]
 fn default_bzx1() -> f64 {
     0.33
 }
 
+#[cfg(test)]
 fn default_bzx2() -> f64 {
     0.66
 }
 
+#[cfg(test)]
 fn default_bzy2() -> f64 {
     1.0
 }
@@ -537,6 +542,7 @@ fn point_value(point: &Value) -> Option<&Value> {
     point.as_object().and_then(|point| point.get("value"))
 }
 
+#[cfg(test)]
 fn keyframe_point(keyframe: KeyframeInput) -> Value {
     let mut point = Map::new();
     point.insert("frame".to_owned(), Value::from(keyframe.frame));
@@ -571,6 +577,7 @@ struct ResolvedTrack {
 }
 
 impl ResolvedTrack {
+    #[cfg(test)]
     fn new(keyframes: Vec<KeyframeInput>, fallback: Value, duration: i32) -> Self {
         let mut start = Map::new();
         start.insert("frame".to_owned(), Value::from(0));
@@ -618,6 +625,7 @@ struct CachedEffect {
     id: String,
     enabled: bool,
     known: bool,
+    fps: f64,
     params: BTreeMap<String, Value>,
     extra: ExtraFields,
     tracks: BTreeMap<String, ResolvedTrack>,
@@ -628,7 +636,8 @@ struct CachedEffect {
 }
 
 impl CachedEffect {
-    fn new(input: EffectInput, duration: i32) -> Self {
+    #[cfg(test)]
+    fn new(input: EffectInput, duration: i32, fps: f64) -> Self {
         let mut all_keys: BTreeSet<String> = input.params.keys().cloned().collect();
         all_keys.insert("time".to_owned());
         let mut tracks = BTreeMap::new();
@@ -642,6 +651,7 @@ impl CachedEffect {
             id: input.id,
             enabled: input.enabled,
             known: input.known,
+            fps,
             params: input.params,
             extra: ExtraFields::new(),
             tracks,
@@ -652,7 +662,7 @@ impl CachedEffect {
         }
     }
 
-    fn from_document(effect: &EffectDocument, duration: i32) -> Self {
+    fn from_document(effect: &EffectDocument, duration: i32, fps: f64) -> Self {
         let params = effect
             .params
             .iter()
@@ -676,6 +686,7 @@ impl CachedEffect {
             id: effect.id.clone(),
             enabled: effect.enabled,
             known: true,
+            fps,
             params,
             extra: effect.extra.clone(),
             tracks,
@@ -686,7 +697,7 @@ impl CachedEffect {
         }
     }
 
-    fn from_audio_plugin(plugin: &AudioPluginDocument, duration: i32) -> Self {
+    fn from_audio_plugin(plugin: &AudioPluginDocument, duration: i32, fps: f64) -> Self {
         let params = plugin
             .params
             .iter()
@@ -709,6 +720,7 @@ impl CachedEffect {
             id: plugin.id.clone(),
             enabled: plugin.enabled,
             known: true,
+            fps,
             params,
             extra: plugin.extra.clone(),
             tracks,
@@ -719,7 +731,7 @@ impl CachedEffect {
         }
     }
 
-    fn prepare_numeric(&mut self, frame: i32, counts: &mut AviQtlSceneBakeCounts) {
+    fn prepare_numeric(&mut self, frame: i32) {
         if self.numeric_track_count == 0 || self.last_numeric_frame == Some(frame) {
             return;
         }
@@ -732,23 +744,43 @@ impl CachedEffect {
             self.numeric_values.insert(name.clone(), value);
         }
         self.last_numeric_frame = Some(frame);
-        counts.numeric_batch_calls = counts.numeric_batch_calls.saturating_add(1);
-        counts.numeric_track_count = counts
-            .numeric_track_count
-            .saturating_add(self.numeric_track_count as u64);
     }
 
     fn value(&self, name: &str, frame: i32) -> Value {
         if name == "time" {
             return Value::from(frame);
         }
-        if let Some(value) = self.numeric_values.get(name) {
-            return Value::from(*value);
+        let base = if let Some(value) = self.numeric_values.get(name) {
+            Value::from(*value)
+        } else if let Some(track) = self.tracks.get(name) {
+            track.evaluate(frame)
+        } else {
+            self.params.get(name).cloned().unwrap_or(Value::Null)
+        };
+        self.expression_value(name, frame, base)
+    }
+
+    /// Applies an AviUtl `=expression` stored for `name` on top of the keyframe
+    /// value, which is what ExEdit exposes to the expression as `value`.
+    fn expression_value(&self, name: &str, frame: i32, base: Value) -> Value {
+        let Some(Value::String(expression)) = self.params.get(name) else {
+            return base;
+        };
+        if !expression::is_expression(expression) {
+            return base;
         }
-        if let Some(track) = self.tracks.get(name) {
-            return track.evaluate(frame);
+        let current = numeric_value(&base).unwrap_or(0.0);
+        let time_seconds = if self.fps > 0.0 {
+            f64::from(frame) / self.fps
+        } else {
+            0.0
+        };
+        match expression::evaluate(&expression[1..], time_seconds, 0, current) {
+            Some(value) => Value::from(value),
+            // A broken expression keeps the literal fallback rather than
+            // dropping the parameter to zero.
+            None => base,
         }
-        self.params.get(name).cloned().unwrap_or(Value::Null)
     }
 
     fn float(&self, name: &str, frame: i32) -> f32 {
@@ -760,6 +792,14 @@ impl CachedEffect {
             return fallback;
         }
         self.float(name, frame)
+    }
+
+    /// Resolves a boolean parameter, which an expression can also produce.
+    fn flag_or(&self, name: &str, fallback: bool, frame: i32) -> bool {
+        if !self.params.contains_key(name) && !self.tracks.contains_key(name) {
+            return fallback;
+        }
+        qt_bool(Some(&self.value(name, frame)), fallback)
     }
 }
 
@@ -790,11 +830,12 @@ struct EvaluatedGroupControl {
 }
 
 impl CachedClip {
-    fn new(input: ClipInput) -> Self {
+    #[cfg(test)]
+    fn new(input: ClipInput, fps: f64) -> Self {
         let effects = input
             .effects
             .into_iter()
-            .map(|effect| CachedEffect::new(effect, input.duration_frames))
+            .map(|effect| CachedEffect::new(effect, input.duration_frames, fps))
             .collect();
         Self {
             clip_id: input.id,
@@ -811,16 +852,16 @@ impl CachedClip {
         }
     }
 
-    fn from_document(clip: &ClipDocument) -> Self {
+    fn from_document(clip: &ClipDocument, fps: f64) -> Self {
         let audio_plugins = clip
             .audio_plugins
             .iter()
-            .map(|plugin| CachedEffect::from_audio_plugin(plugin, clip.duration))
+            .map(|plugin| CachedEffect::from_audio_plugin(plugin, clip.duration, fps))
             .collect();
         let effects = clip
             .effects
             .iter()
-            .map(|effect| CachedEffect::from_document(effect, clip.duration))
+            .map(|effect| CachedEffect::from_document(effect, clip.duration, fps))
             .collect();
         Self {
             clip_id: clip.id,
@@ -839,23 +880,6 @@ impl CachedClip {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EvaluationKey {
     current_frame: i32,
-    full_bake: bool,
-    prefetch_frames: i32,
-}
-
-struct BakeEvaluation {
-    key: EvaluationKey,
-    renders: Vec<AviQtlRenderBakeOutput>,
-    audio: Vec<AviQtlAudioBakeOutput>,
-    params: Vec<AviQtlEffectParamEntry>,
-    counts: AviQtlSceneBakeCounts,
-    frame: Option<SceneFramePlan>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EvaluationOutput {
-    Abi,
-    TypedFrame,
 }
 
 struct BakePlan {
@@ -865,27 +889,24 @@ struct BakePlan {
     scene_durations: HashMap<i32, i32>,
     time_buckets: HashMap<i32, Vec<usize>>,
     effect_count: usize,
-    pending: Option<BakeEvaluation>,
 }
 
 impl BakePlan {
+    #[cfg(test)]
     fn parse(input: &[u8]) -> Result<Self, ()> {
         let input: SceneInput = serde_json::from_slice(input).map_err(|_| ())?;
         if input.max_clip_id <= 0 {
             return Err(());
         }
+        let fps = input.fps;
+        let max_clip_id = input.max_clip_id;
         let clips = input
             .clips
             .into_iter()
-            .filter(|clip| clip.id >= 0 && clip.id < input.max_clip_id)
-            .map(CachedClip::new)
+            .filter(|clip| clip.id >= 0 && clip.id < max_clip_id)
+            .map(|clip| CachedClip::new(clip, fps))
             .collect();
-        Ok(Self::from_clips(
-            input.fps,
-            input.height,
-            clips,
-            HashMap::new(),
-        ))
+        Ok(Self::from_clips(fps, input.height, clips, HashMap::new()))
     }
 
     fn from_document(
@@ -901,7 +922,7 @@ impl BakePlan {
             .clips
             .iter()
             .filter(|clip| clip.scene_id == scene_id)
-            .map(CachedClip::from_document)
+            .map(|clip| CachedClip::from_document(clip, scene.fps))
             .collect();
         let scene_durations = document
             .scenes
@@ -938,21 +959,16 @@ impl BakePlan {
             scene_durations,
             time_buckets,
             effect_count,
-            pending: None,
         }
     }
 
-    fn selected_clips(&self, key: EvaluationKey) -> (Vec<usize>, u64) {
-        if key.full_bake {
-            return ((0..self.clips.len()).collect(), self.clips.len() as u64);
-        }
-        let range_start = key.current_frame.saturating_sub(key.prefetch_frames);
-        let range_end = key.current_frame.saturating_add(key.prefetch_frames);
+    fn selected_clips(&self, key: EvaluationKey) -> Vec<usize> {
+        let range_start = key.current_frame;
+        let range_end = key.current_frame;
         let first_bucket = range_start / FRAME_BUCKET_SIZE;
         let last_bucket = range_end / FRAME_BUCKET_SIZE;
         let mut seen = HashSet::new();
         let mut selected = Vec::new();
-        let mut visited = 0_u64;
         for bucket in first_bucket..=last_bucket {
             let Some(indices) = self.time_buckets.get(&bucket) else {
                 continue;
@@ -962,36 +978,20 @@ impl BakePlan {
                 if !seen.insert(clip.clip_id) {
                     continue;
                 }
-                visited = visited.saturating_add(1);
                 if clip.start_frame <= range_end && clip.end_frame >= range_start {
                     selected.push(index);
                 }
             }
         }
-        (selected, visited)
-    }
-
-    fn compute(&mut self, key: EvaluationKey) -> BakeEvaluation {
-        self.compute_output(key, EvaluationOutput::Abi)
+        selected
     }
 
     fn compute_frame(&mut self, key: EvaluationKey) -> SceneFramePlan {
-        self.compute_output(key, EvaluationOutput::TypedFrame)
-            .frame
-            .expect("typed frame evaluation always produces a frame plan")
+        self.compute_output(key)
     }
 
-    fn compute_output(&mut self, key: EvaluationKey, output: EvaluationOutput) -> BakeEvaluation {
-        let capture_abi = output == EvaluationOutput::Abi;
-        let capture_frame = output == EvaluationOutput::TypedFrame;
-        let (selected, clips_visited) = self.selected_clips(key);
-        let mut counts = AviQtlSceneBakeCounts {
-            clips_visited,
-            ..AviQtlSceneBakeCounts::default()
-        };
-        let mut renders = Vec::with_capacity(selected.len());
-        let mut audio = Vec::new();
-        let mut params = Vec::new();
+    fn compute_output(&mut self, key: EvaluationKey) -> SceneFramePlan {
+        let selected = self.selected_clips(key);
         let mut frame_layers = Vec::new();
         let mut frame_audio = Vec::new();
 
@@ -999,10 +999,10 @@ impl BakePlan {
             let clip = &mut self.clips[index];
             let relative_frame = key.current_frame.saturating_sub(clip.start_frame).max(0);
             for effect in &mut clip.effects {
-                effect.prepare_numeric(relative_frame, &mut counts);
+                effect.prepare_numeric(relative_frame);
             }
             for plugin in &mut clip.audio_plugins {
-                plugin.prepare_numeric(relative_frame, &mut counts);
+                plugin.prepare_numeric(relative_frame);
             }
         }
         let mut group_controls = selected
@@ -1029,13 +1029,10 @@ impl BakePlan {
 
         for index in selected {
             let clip = &mut self.clips[index];
-            counts.selected_effect_count = counts
-                .selected_effect_count
-                .saturating_add(clip.effects.len() as u64);
             let relative_frame = key.current_frame.saturating_sub(clip.start_frame).max(0);
 
             if clip.clip_type == "audio" || clip.clip_type == "video" {
-                let mut input = AviQtlAudioBakeInput {
+                let mut input = AudioBakeInput {
                     clip_id: clip.clip_id,
                     start_frame: clip.start_frame,
                     duration_frames: clip.duration_frames,
@@ -1079,40 +1076,24 @@ impl BakePlan {
                     input.pan = effect.float_or("pan", 0.0, relative_frame);
                     input.fade_in_seconds = effect.float_or("fadeIn", 0.0, relative_frame);
                     input.fade_out_seconds = effect.float_or("fadeOut", 0.0, relative_frame);
-                    input.mute = u32::from(qt_bool(effect.params.get("mute"), false));
-                    input.solo = u32::from(qt_bool(effect.params.get("solo"), false));
-                    input.limiter = u32::from(qt_bool(effect.params.get("limiter"), true));
+                    input.mute = u32::from(effect.flag_or("mute", false, relative_frame));
+                    input.solo = u32::from(effect.flag_or("solo", false, relative_frame));
+                    input.limiter = u32::from(effect.flag_or("limiter", true, relative_frame));
                 }
                 let mut output = bake_audio(input);
                 // Scene projection needs a stable entity key even when the legacy single-clip
                 // kernel returns its invalid-fps sentinel payload.
                 output.clip_id = clip.clip_id;
-                if capture_frame
-                    && clip.start_frame <= key.current_frame
-                    && key.current_frame < clip.end_frame
-                {
+                if clip.start_frame <= key.current_frame && key.current_frame < clip.end_frame {
                     frame_audio.push(audio_layer_plan(
                         output,
                         audio_source_path(&clip.clip_type, &clip.effects, relative_frame),
                         evaluated_audio_plugins(&clip.audio_plugins, relative_frame),
                     ));
                 }
-                if capture_abi {
-                    audio.push(output);
-                }
             }
 
-            let effect_start_index = params.len() as u32;
-            let mut render_input = AviQtlRenderBakeInput {
-                clip_id: clip.clip_id,
-                layer: clip.layer,
-                current_frame: key.current_frame,
-                start_frame: clip.start_frame,
-                duration_frames: clip.duration_frames,
-                clip_by_upper_object: u32::from(clip.clip_by_upper_object),
-                effect_count: clip.effects.len() as u16,
-                reserved: 0,
-                effect_start_index,
+            let mut render_input = RenderBakeInput {
                 has_transform: 0,
                 x: 0.0,
                 y: 0.0,
@@ -1123,7 +1104,7 @@ impl BakePlan {
                 scale: 100.0,
                 opacity: 1.0,
             };
-            let mut evaluated_effects = capture_frame.then(Vec::new);
+            let mut evaluated_effects = Vec::new();
 
             for (effect_index, effect) in clip.effects.iter().enumerate() {
                 if !effect.enabled || !effect.known {
@@ -1144,38 +1125,18 @@ impl BakePlan {
                     render_input.scale = effect.float_or("scale", 100.0, relative_frame);
                     render_input.opacity = effect.float_or("opacity", 1.0, relative_frame);
                 }
-                let mut evaluated_params = capture_frame.then(BTreeMap::new);
+                let mut evaluated_params = BTreeMap::new();
                 for name in &effect.all_keys {
-                    let evaluated = effect.value(name, relative_frame);
-                    if capture_abi {
-                        params.push(pack_parameter(
-                            clip.clip_id,
-                            effect_index as u8,
-                            name,
-                            &evaluated,
-                        ));
-                    }
-                    if let Some(evaluated_params) = &mut evaluated_params {
-                        evaluated_params.insert(name.clone(), evaluated);
-                    }
+                    evaluated_params.insert(name.clone(), effect.value(name, relative_frame));
                 }
-                if let (Some(evaluated_effects), Some(evaluated_params)) =
-                    (&mut evaluated_effects, evaluated_params)
-                {
-                    evaluated_effects.push(EvaluatedEffect {
-                        effect_index,
-                        id: effect.id.clone(),
-                        params: evaluated_params,
-                    });
-                }
+                evaluated_effects.push(EvaluatedEffect {
+                    effect_index,
+                    id: effect.id.clone(),
+                    params: evaluated_params,
+                });
             }
             let render = bake_render(render_input);
-            if capture_frame
-                && clip.start_frame <= key.current_frame
-                && key.current_frame < clip.end_frame
-            {
-                let evaluated_effects =
-                    evaluated_effects.expect("typed evaluation collects effect parameters");
+            if clip.start_frame <= key.current_frame && key.current_frame < clip.end_frame {
                 let mut transform = EvaluatedTransform {
                     x: render.x,
                     y: render.y,
@@ -1229,26 +1190,13 @@ impl BakePlan {
                     nested_scene,
                 });
             }
-            if capture_abi {
-                renders.push(render);
-            }
         }
 
-        counts.render_count = renders.len();
-        counts.audio_count = audio.len();
-        counts.param_count = params.len();
-        BakeEvaluation {
-            key,
-            renders,
-            audio,
-            params,
-            counts,
-            frame: capture_frame.then_some(SceneFramePlan {
-                frame: key.current_frame,
-                layers: frame_layers,
-                audio: frame_audio,
-                camera,
-            }),
+        SceneFramePlan {
+            frame: key.current_frame,
+            layers: frame_layers,
+            audio: frame_audio,
+            camera,
         }
     }
 }
@@ -1855,7 +1803,7 @@ fn evaluated_audio_plugins(
 }
 
 fn audio_layer_plan(
-    output: AviQtlAudioBakeOutput,
+    output: AudioBakeOutput,
     source_path: Option<String>,
     plugins: Vec<EvaluatedAudioPlugin>,
 ) -> AudioLayerPlan {
@@ -1878,299 +1826,6 @@ fn audio_layer_plan(
         direct_mode: output.direct_mode != 0,
         plugins,
     }
-}
-
-fn pack_parameter(
-    clip_id: i32,
-    effect_index: u8,
-    name: &str,
-    evaluated: &Value,
-) -> AviQtlEffectParamEntry {
-    let mut entry = AviQtlEffectParamEntry {
-        clip_id: clip_id as u32,
-        effect_index,
-        ..AviQtlEffectParamEntry::default()
-    };
-    let bytes = name.as_bytes();
-    let mut copy_length = bytes.len().min(entry.param_name.len() - 1);
-    while copy_length > 0 && !name.is_char_boundary(copy_length) {
-        copy_length -= 1;
-    }
-    entry.param_name[..copy_length].copy_from_slice(&bytes[..copy_length]);
-
-    if let Some(color) = payload(evaluated).as_str().and_then(parse_hex_color) {
-        entry.param_type = PARAM_TYPE_COLOR;
-        entry.value = [
-            f32::from(color[1]) / 255.0,
-            f32::from(color[2]) / 255.0,
-            f32::from(color[3]) / 255.0,
-            f32::from(color[0]) / 255.0,
-        ];
-    } else {
-        entry.param_type = PARAM_TYPE_FLOAT;
-        entry.value[0] = qt_double(Some(evaluated)) as f32;
-    }
-    entry
-}
-
-pub struct AviQtlTimelineBakePlan {
-    plan: BakePlan,
-}
-
-fn parse_plan(input: *const u8, input_length: usize) -> Result<BakePlan, u32> {
-    if !slice_is_valid(input, input_length) {
-        return Err(STATUS_INVALID_ARGUMENT);
-    }
-    let input = if input_length == 0 {
-        &[]
-    } else {
-        // SAFETY: The readable byte range was validated by the caller-facing function.
-        unsafe { std::slice::from_raw_parts(input, input_length) }
-    };
-    BakePlan::parse(input).map_err(|()| STATUS_INVALID_JSON)
-}
-
-/// Creates an opaque scene bake plan from a JSON snapshot.
-///
-/// # Safety
-///
-/// `input` must be readable for `input_length` bytes and `output_handle` writable for one pointer.
-/// Their ranges must not overlap.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_plan_create(
-    input: *const u8,
-    input_length: usize,
-    output_handle: *mut *mut AviQtlTimelineBakePlan,
-) -> u32 {
-    if !slice_is_valid(input, input_length) || !slice_is_valid(output_handle, 1) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    match ranges_overlap(input, input_length, output_handle, 1) {
-        Some(true) => return STATUS_OVERLAPPING_BUFFERS,
-        Some(false) => {}
-        None => return STATUS_INVALID_ARGUMENT,
-    }
-    let plan = match parse_plan(input, input_length) {
-        Ok(plan) => plan,
-        Err(status) => return status,
-    };
-    let handle = Box::into_raw(Box::new(AviQtlTimelineBakePlan { plan }));
-    // SAFETY: The output pointer was validated and is disjoint from the input range.
-    unsafe { output_handle.write(handle) };
-    STATUS_OK
-}
-
-/// Destroys an opaque scene bake plan. A null handle is accepted.
-///
-/// # Safety
-///
-/// A non-null handle must have been returned by `aviqtl_timeline_bake_plan_create`, must not have
-/// been destroyed already, and must not be used after this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_plan_destroy(handle: *mut AviQtlTimelineBakePlan) {
-    if !handle.is_null() {
-        // SAFETY: The caller owns this unique allocation under the contract above.
-        drop(unsafe { Box::from_raw(handle) });
-    }
-}
-
-/// Replaces the contents of an existing scene bake plan from a JSON snapshot.
-///
-/// # Safety
-///
-/// `handle` must be a live unique plan and `input` readable for `input_length` bytes. The input
-/// range must not overlap the plan allocation.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_plan_reset(
-    handle: *mut AviQtlTimelineBakePlan,
-    input: *const u8,
-    input_length: usize,
-) -> u32 {
-    if !slice_is_valid(handle, 1) || !slice_is_valid(input, input_length) {
-        return STATUS_INVALID_ARGUMENT;
-    }
-    match ranges_overlap(handle, 1, input, input_length) {
-        Some(true) => return STATUS_OVERLAPPING_BUFFERS,
-        Some(false) => {}
-        None => return STATUS_INVALID_ARGUMENT,
-    }
-    let plan = match parse_plan(input, input_length) {
-        Ok(plan) => plan,
-        Err(status) => return status,
-    };
-    // SAFETY: The handle was validated, is uniquely borrowed by the caller, and input parsing is
-    // complete before mutation.
-    unsafe { (*handle).plan = plan };
-    STATUS_OK
-}
-
-/// Returns the number of cached effects in a scene plan, or zero for a null/misaligned handle.
-///
-/// # Safety
-///
-/// A non-null handle must reference a live plan for the duration of the call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_plan_effect_count(
-    handle: *mut AviQtlTimelineBakePlan,
-) -> usize {
-    if !slice_is_valid(handle, 1) {
-        return 0;
-    }
-    // SAFETY: The handle was validated and the caller keeps it alive.
-    unsafe { (*handle).plan.effect_count }
-}
-
-struct OutputRanges {
-    handle: *mut AviQtlTimelineBakePlan,
-    render_output: *mut AviQtlRenderBakeOutput,
-    render_capacity: usize,
-    audio_output: *mut AviQtlAudioBakeOutput,
-    audio_capacity: usize,
-    param_output: *mut AviQtlEffectParamEntry,
-    param_capacity: usize,
-    counts: *mut AviQtlSceneBakeCounts,
-}
-
-fn output_ranges_are_valid(ranges: OutputRanges) -> Result<(), u32> {
-    if !slice_is_valid(ranges.handle, 1)
-        || !slice_is_valid(ranges.render_output, ranges.render_capacity)
-        || !slice_is_valid(ranges.audio_output, ranges.audio_capacity)
-        || !slice_is_valid(ranges.param_output, ranges.param_capacity)
-        || !slice_is_valid(ranges.counts, 1)
-    {
-        return Err(STATUS_INVALID_ARGUMENT);
-    }
-    let overlaps = [
-        ranges_overlap(
-            ranges.handle,
-            1,
-            ranges.render_output,
-            ranges.render_capacity,
-        ),
-        ranges_overlap(ranges.handle, 1, ranges.audio_output, ranges.audio_capacity),
-        ranges_overlap(ranges.handle, 1, ranges.param_output, ranges.param_capacity),
-        ranges_overlap(ranges.handle, 1, ranges.counts, 1),
-        ranges_overlap(
-            ranges.render_output,
-            ranges.render_capacity,
-            ranges.audio_output,
-            ranges.audio_capacity,
-        ),
-        ranges_overlap(
-            ranges.render_output,
-            ranges.render_capacity,
-            ranges.param_output,
-            ranges.param_capacity,
-        ),
-        ranges_overlap(
-            ranges.render_output,
-            ranges.render_capacity,
-            ranges.counts,
-            1,
-        ),
-        ranges_overlap(
-            ranges.audio_output,
-            ranges.audio_capacity,
-            ranges.param_output,
-            ranges.param_capacity,
-        ),
-        ranges_overlap(ranges.audio_output, ranges.audio_capacity, ranges.counts, 1),
-        ranges_overlap(ranges.param_output, ranges.param_capacity, ranges.counts, 1),
-    ];
-    if overlaps.iter().any(Option::is_none) {
-        return Err(STATUS_INVALID_ARGUMENT);
-    }
-    if overlaps.into_iter().flatten().any(|overlap| overlap) {
-        return Err(STATUS_OVERLAPPING_BUFFERS);
-    }
-    Ok(())
-}
-
-/// Evaluates a scene plan into caller-owned POD buffers.
-///
-/// # Safety
-///
-/// `handle` must be a live unique plan. Every non-empty output range must be writable and all
-/// output ranges, the counts value, and the plan allocation must be mutually disjoint. Null array
-/// pointers are accepted only with zero capacity. Required counts are always reported after valid
-/// arguments; insufficient capacity never writes a partial array.
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn aviqtl_timeline_bake_plan_evaluate(
-    handle: *mut AviQtlTimelineBakePlan,
-    current_frame: i32,
-    full_bake: u32,
-    prefetch_frames: i32,
-    render_output: *mut AviQtlRenderBakeOutput,
-    render_capacity: usize,
-    audio_output: *mut AviQtlAudioBakeOutput,
-    audio_capacity: usize,
-    param_output: *mut AviQtlEffectParamEntry,
-    param_capacity: usize,
-    counts: *mut AviQtlSceneBakeCounts,
-) -> u32 {
-    if let Err(status) = output_ranges_are_valid(OutputRanges {
-        handle,
-        render_output,
-        render_capacity,
-        audio_output,
-        audio_capacity,
-        param_output,
-        param_capacity,
-        counts,
-    }) {
-        return status;
-    }
-    let key = EvaluationKey {
-        current_frame,
-        full_bake: full_bake != 0,
-        prefetch_frames: prefetch_frames.max(0),
-    };
-    // SAFETY: The handle was validated and is uniquely owned for this call.
-    let plan = unsafe { &mut (*handle).plan };
-    if plan
-        .pending
-        .as_ref()
-        .is_none_or(|evaluation| evaluation.key != key)
-    {
-        plan.pending = Some(plan.compute(key));
-    }
-    let evaluation = plan
-        .pending
-        .as_ref()
-        .expect("pending evaluation was populated");
-    // SAFETY: The counts output was validated and is disjoint from every array.
-    unsafe { counts.write(evaluation.counts) };
-    if render_capacity < evaluation.renders.len()
-        || audio_capacity < evaluation.audio.len()
-        || param_capacity < evaluation.params.len()
-    {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    if !evaluation.renders.is_empty() {
-        // SAFETY: Capacity, alignment, validity, and disjointness were checked above.
-        unsafe {
-            std::slice::from_raw_parts_mut(render_output, render_capacity)
-                [..evaluation.renders.len()]
-                .copy_from_slice(&evaluation.renders)
-        };
-    }
-    if !evaluation.audio.is_empty() {
-        // SAFETY: Capacity, alignment, validity, and disjointness were checked above.
-        unsafe {
-            std::slice::from_raw_parts_mut(audio_output, audio_capacity)[..evaluation.audio.len()]
-                .copy_from_slice(&evaluation.audio)
-        };
-    }
-    if !evaluation.params.is_empty() {
-        // SAFETY: Capacity, alignment, validity, and disjointness were checked above.
-        unsafe {
-            std::slice::from_raw_parts_mut(param_output, param_capacity)[..evaluation.params.len()]
-                .copy_from_slice(&evaluation.params)
-        };
-    }
-    plan.pending = None;
-    STATUS_OK
 }
 
 #[cfg(test)]
@@ -2214,34 +1869,82 @@ mod tests {
     fn builds_scene_outputs_and_reuses_numeric_frame_cache() {
         let mut plan = BakePlan::parse(&scene_json()).expect("valid plan");
         assert_eq!(plan.effect_count, 2);
-        let key = EvaluationKey {
-            current_frame: 60,
-            full_bake: true,
-            prefetch_frames: 30,
-        };
-        let first = plan.compute(key);
-        assert_eq!(first.renders.len(), 1);
+        let key = EvaluationKey { current_frame: 60 };
+        let first = plan.compute_frame(key);
+        assert_eq!(first.layers.len(), 1);
         assert_eq!(first.audio.len(), 1);
-        assert_eq!(first.renders[0].x, 50.0);
-        assert_eq!(first.renders[0].scale_x, 1.25);
+        assert_eq!(first.layers[0].transform.x, 50.0);
+        assert_eq!(first.layers[0].transform.scale_percent, 125.0);
         assert_eq!(first.audio[0].direct_time, 3.0);
         assert_eq!(first.audio[0].volume, 0.5);
-        assert_eq!(first.counts.numeric_batch_calls, 1);
-        assert_eq!(first.counts.numeric_track_count, 1);
-        let tint = first
-            .params
+        let transform = first.layers[0]
+            .effects
             .iter()
-            .find(|entry| entry.param_name.starts_with(b"tint"))
-            .expect("tint parameter");
-        assert_eq!(tint.param_type, PARAM_TYPE_COLOR);
-        assert_eq!(
-            tint.value,
-            [64.0 / 255.0, 32.0 / 255.0, 16.0 / 255.0, 128.0 / 255.0]
-        );
+            .find(|effect| effect.id == "transform")
+            .expect("transform effect");
+        assert_eq!(transform.params["tint"], json!("#80402010"));
 
-        let repeated = plan.compute(key);
-        assert_eq!(repeated.counts.numeric_batch_calls, 0);
-        assert_eq!(repeated.counts.numeric_track_count, 0);
+        let repeated = plan.compute_frame(key);
+        assert_eq!(repeated.layers.len(), 1);
+        assert_eq!(repeated.layers[0].transform.x, 50.0);
+    }
+
+    #[test]
+    fn expression_parameters_are_evaluated_per_frame_with_time_and_keyframe_value() {
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 1,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 120,
+                "type": "video",
+                "effects": [{
+                    "id": "transform",
+                    "enabled": true,
+                    "known": true,
+                    "params": {"x": "=time*10", "y": "=value+2", "scale": 100.0},
+                    "keyframes": {"y": [
+                        {"frame": 0, "value": 0.0, "interp": "linear"},
+                        {"frame": 120, "value": 120.0, "interp": "linear"}
+                    ]}
+                }]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute_frame(EvaluationKey { current_frame: 60 });
+        // `time` is seconds from the object start and `value` is the keyframe result:
+        // at frame 60 of a 60 fps scene, x = 1.0 * 10 and y = 60 + 2.
+        assert_eq!(output.layers[0].transform.x, 10.0);
+        assert_eq!(output.layers[0].transform.y, 62.0);
+        // A broken expression keeps the keyframe value instead of dropping the parameter.
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 2,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 60,
+                "type": "text",
+                "effects": [{
+                    "id": "transform",
+                    "enabled": true,
+                    "known": true,
+                    "params": {"x": "=1 +", "scale": 100.0},
+                    "keyframes": {"x": [
+                        {"frame": 0, "value": 7.0, "interp": "linear"},
+                        {"frame": 60, "value": 7.0, "interp": "linear"}
+                    ]}
+                }]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute_frame(EvaluationKey { current_frame: 30 });
+        assert_eq!(output.layers[0].transform.x, 7.0);
     }
 
     #[test]
@@ -2271,17 +1974,15 @@ mod tests {
         }))
         .expect("serialize sparse transform fixture");
         let mut plan = BakePlan::parse(&bytes).expect("valid plan");
-        let output = plan.compute(EvaluationKey {
-            current_frame: 30,
-            full_bake: true,
-            prefetch_frames: 0,
-        });
-        let render = output.renders.first().expect("the clip renders");
-        assert_eq!(render.x, 5.0);
-        assert_eq!(render.scale_x, 1.0, "a missing scale is 100 %, not 0 %");
-        assert_eq!(render.scale_y, 1.0);
-        assert_eq!(render.opacity, 1.0, "a missing opacity is opaque");
-        assert_eq!(render.rotation_x, 0.0);
+        let output = plan.compute_frame(EvaluationKey { current_frame: 30 });
+        let layer = output.layers.first().expect("the clip renders");
+        assert_eq!(layer.transform.x, 5.0);
+        assert_eq!(
+            layer.transform.scale_percent, 100.0,
+            "a missing scale is 100 %, not 0 %"
+        );
+        assert_eq!(layer.transform.opacity, 1.0, "a missing opacity is opaque");
+        assert_eq!(layer.transform.rotation_x, 0.0);
     }
 
     #[test]
@@ -2383,11 +2084,7 @@ mod tests {
         }))
         .expect("serialize custom-object fixture");
         let mut plan = BakePlan::parse(&input).expect("valid custom-object plan");
-        let frame = plan.compute_frame(EvaluationKey {
-            current_frame: 30,
-            full_bake: false,
-            prefetch_frames: 0,
-        });
+        let frame = plan.compute_frame(EvaluationKey { current_frame: 30 });
 
         let counter = frame
             .layers
@@ -2476,11 +2173,7 @@ mod tests {
         let input = serde_json::to_vec(&json!({"fps": 60.0, "clips": clips}))
             .expect("serialize Canvas-object fixture");
         let mut plan = BakePlan::parse(&input).expect("valid Canvas-object plan");
-        let frame = plan.compute_frame(EvaluationKey {
-            current_frame: 10,
-            full_bake: false,
-            prefetch_frames: 0,
-        });
+        let frame = plan.compute_frame(EvaluationKey { current_frame: 10 });
         assert_eq!(frame.layers.len(), 5);
 
         let procedural = |clip_id| {
@@ -2575,11 +2268,7 @@ mod tests {
         }))
         .expect("serialize group-control fixture");
         let mut plan = BakePlan::parse(&input).expect("valid group-control plan");
-        let frame = plan.compute_frame(EvaluationKey {
-            current_frame: 0,
-            full_bake: false,
-            prefetch_frames: 0,
-        });
+        let frame = plan.compute_frame(EvaluationKey { current_frame: 0 });
         let controlled = frame
             .layers
             .iter()
@@ -2632,11 +2321,7 @@ mod tests {
             .expect("serialize camera-control fixture");
         let mut plan = BakePlan::parse(&input).expect("valid camera-control plan");
         let camera = plan
-            .compute_frame(EvaluationKey {
-                current_frame: 0,
-                full_bake: false,
-                prefetch_frames: 0,
-            })
+            .compute_frame(EvaluationKey { current_frame: 0 })
             .camera
             .expect("active camera control");
         assert_eq!((camera.position_x, camera.position_y), (10.0, -20.0));
@@ -2673,11 +2358,7 @@ mod tests {
         .expect("serialize legacy camera fixture");
         let mut plan = BakePlan::parse(&input).expect("valid legacy camera plan");
         let camera = plan
-            .compute_frame(EvaluationKey {
-                current_frame: 0,
-                full_bake: false,
-                prefetch_frames: 0,
-            })
+            .compute_frame(EvaluationKey { current_frame: 0 })
             .camera
             .expect("legacy camera control");
         assert_eq!((camera.position_x, camera.position_y), (10.0, -20.0));
@@ -2696,170 +2377,10 @@ mod tests {
         }))
         .expect("serialize bucket fixture");
         let mut plan = BakePlan::parse(&input).expect("valid plan");
-        let result = plan.compute(EvaluationKey {
+        let result = plan.compute_frame(EvaluationKey {
             current_frame: 500 * 240 + 5,
-            full_bake: false,
-            prefetch_frames: 10,
         });
-        assert_eq!(result.counts.clips_visited, 1);
-        assert_eq!(result.renders.len(), 1);
-        assert_eq!(result.renders[0].clip_id, 500);
-    }
-
-    #[test]
-    fn parameter_names_are_truncated_on_utf8_boundaries() {
-        let entry = pack_parameter(1, 2, "参数参数参数参数参数参数", &Value::from(3.0));
-        let length = entry
-            .param_name
-            .iter()
-            .position(|byte| *byte == 0)
-            .expect("parameter name remains terminated");
-        assert!(length <= 19);
-        assert!(std::str::from_utf8(&entry.param_name[..length]).is_ok());
-        assert_eq!(entry.value[0], 3.0);
-    }
-
-    #[test]
-    fn ffi_capacity_query_does_not_partially_write_outputs() {
-        let input = scene_json();
-        let mut handle = std::ptr::null_mut();
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_plan_create(input.as_ptr(), input.len(), &mut handle) },
-            STATUS_OK
-        );
-        assert!(!handle.is_null());
-        assert_eq!(unsafe { aviqtl_timeline_bake_plan_effect_count(handle) }, 2);
-
-        let mut counts = AviQtlSceneBakeCounts::default();
-        assert_eq!(
-            unsafe {
-                aviqtl_timeline_bake_plan_evaluate(
-                    handle,
-                    60,
-                    1,
-                    30,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null_mut(),
-                    0,
-                    &mut counts,
-                )
-            },
-            STATUS_BUFFER_TOO_SMALL
-        );
-        assert_eq!(counts.render_count, 1);
-        assert_eq!(counts.audio_count, 1);
-        assert!(counts.param_count > 1);
-
-        let sentinel = AviQtlEffectParamEntry {
-            clip_id: u32::MAX,
-            ..AviQtlEffectParamEntry::default()
-        };
-        let render_sentinel = AviQtlRenderBakeOutput {
-            clip_id: -77,
-            ..AviQtlRenderBakeOutput::default()
-        };
-        let audio_sentinel = AviQtlAudioBakeOutput {
-            clip_id: -88,
-            ..AviQtlAudioBakeOutput::default()
-        };
-        let mut renders = vec![render_sentinel; counts.render_count];
-        let mut audio = vec![audio_sentinel; counts.audio_count];
-        let mut params = vec![sentinel; counts.param_count - 1];
-        assert_eq!(
-            unsafe {
-                aviqtl_timeline_bake_plan_evaluate(
-                    handle,
-                    60,
-                    1,
-                    30,
-                    renders.as_mut_ptr(),
-                    renders.len(),
-                    audio.as_mut_ptr(),
-                    audio.len(),
-                    params.as_mut_ptr(),
-                    params.len(),
-                    &mut counts,
-                )
-            },
-            STATUS_BUFFER_TOO_SMALL
-        );
-        assert!(renders.iter().all(|entry| entry.clip_id == -77));
-        assert!(audio.iter().all(|entry| entry.clip_id == -88));
-        assert!(params.iter().all(|entry| entry.clip_id == u32::MAX));
-
-        params.resize(counts.param_count, AviQtlEffectParamEntry::default());
-        assert_eq!(
-            unsafe {
-                aviqtl_timeline_bake_plan_evaluate(
-                    handle,
-                    60,
-                    1,
-                    30,
-                    renders.as_mut_ptr(),
-                    renders.len(),
-                    audio.as_mut_ptr(),
-                    audio.len(),
-                    params.as_mut_ptr(),
-                    params.len(),
-                    &mut counts,
-                )
-            },
-            STATUS_OK
-        );
-        assert_eq!(renders[0].clip_id, 7);
-        assert_eq!(audio[0].clip_id, 7);
-        unsafe { aviqtl_timeline_bake_plan_destroy(handle) };
-    }
-
-    #[test]
-    fn reset_rejects_invalid_json_without_replacing_the_plan() {
-        let input = scene_json();
-        let mut handle = std::ptr::null_mut();
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_plan_create(input.as_ptr(), input.len(), &mut handle) },
-            STATUS_OK
-        );
-        let invalid = b"{";
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_plan_reset(handle, invalid.as_ptr(), invalid.len()) },
-            STATUS_INVALID_JSON
-        );
-        assert_eq!(unsafe { aviqtl_timeline_bake_plan_effect_count(handle) }, 2);
-        unsafe { aviqtl_timeline_bake_plan_destroy(handle) };
-    }
-
-    #[test]
-    fn ffi_rejects_overlapping_output_ranges() {
-        let input = scene_json();
-        let mut handle = std::ptr::null_mut();
-        assert_eq!(
-            unsafe { aviqtl_timeline_bake_plan_create(input.as_ptr(), input.len(), &mut handle) },
-            STATUS_OK
-        );
-        let mut storage = std::mem::MaybeUninit::<AviQtlRenderBakeOutput>::uninit();
-        let render = storage.as_mut_ptr();
-        let counts = render.cast::<AviQtlSceneBakeCounts>();
-        assert_eq!(
-            unsafe {
-                aviqtl_timeline_bake_plan_evaluate(
-                    handle,
-                    60,
-                    1,
-                    30,
-                    render,
-                    1,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null_mut(),
-                    0,
-                    counts,
-                )
-            },
-            STATUS_OVERLAPPING_BUFFERS
-        );
-        unsafe { aviqtl_timeline_bake_plan_destroy(handle) };
+        assert_eq!(result.layers.len(), 1);
+        assert_eq!(result.layers[0].clip_id, 500);
     }
 }

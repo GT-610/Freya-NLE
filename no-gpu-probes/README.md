@@ -67,7 +67,7 @@ behavior of comparable applications rather than an internal guess:
   https://docs.kdenlive.org/getting_started/installation.html). That works because Kdenlive
   limits GPU use to optional render profiles. AviQtl's preview, export, and MSAA compositor are
   all GPU-only, so a CPU path would be a second implementation of the renderer whose output could
-  diverge from the Qt baseline the project uses for acceptance.
+  diverge from the behavior baseline the project uses for acceptance.
 
 `renderer-software` remains available in the pinned Slint 1.17.1 and the probes keep that
 layer documented, but the application does not expose it, because selecting it still leaves the

@@ -21,6 +21,36 @@ All notable changes to Freya NLE are documented in this file.
   empty launcher. `--help` prints the options and `--version` prints the version
   instead of both being rejected as unknown arguments
 
+- Native effect packages can run as compute shaders. A package declares
+  `"mode": "compute"` and a `workgroup` tile in its `aviqtl-wgsl-v1` runtime, then
+  provides one `@compute @workgroup_size(x, y, 1) fn aviqtl_main` entry point; the
+  host binds the layer texture, the parameter block and an `rgba8unorm` output
+  storage texture and dispatches one pass per effect. `"dispatch": n` (1–8)
+  chains the shader over its own output with `aviqtl_pass()` for separable
+  effects, and `aviqtl_texel(uv)` samples through the host's filtered sampler
+  while `aviqtl_original_texel(uv)` reads the layer before the effect chain ran
+  and `aviqtl_background_texel(uv)` reads the composition of the layers below.
+  Effect passes now record just before their layer is composited, so the
+  background input is the current accumulation rather than an empty target.
+  Installation rejects a tile that does not match the shader, and the package
+  README documents the helpers. Binding an arbitrary named layer remains open
+- AviUtl-style expression parameters work again. A parameter stored as a string
+  beginning with `=` is evaluated as Lua for each frame with `time`, `index`, and
+  the keyframe `value` in scope, in the preview, the export, and the audio plan
+  alike. A broken expression keeps the keyframe value instead of zeroing the
+  parameter
+- macOS exports can use the Apple VideoToolbox encoders (`h264_videotoolbox`,
+  `hevc_videotoolbox`) when the linked FFmpeg provides them. A hardware encoder
+  that cannot open still falls back to `libx264`/`libx265`/`libaom-av1`, so the
+  export completes either way
+- Lua plugins keep the conveniences they had under the Qt frontend: LuaJIT's
+  signed `bit` library (`tobit`, `bswap`, and `tohex` included), the flat
+  `aviqtl_*` function spellings next to the `aviqtl.*` tables, and `print`
+- Saving a project stores media that lives inside the project directory as a
+  project-relative path, so a project and its footage move together. Loading a
+  project or recovery snapshot refuses documents over 256 MiB before reading
+  them, matching the bound the Qt frontend applied
+
 ### Changed
 - The project is called Freya NLE. Crate names, the binary, the macOS bundle
   identifier, the user data directory, and the window titles follow the new
@@ -33,7 +63,47 @@ All notable changes to Freya NLE are documented in this file.
   fragment format marker is now `freya.fragment`. A fragment saved before the
   rename is rewritten in the current format the next time it is saved
 
+### Removed
+- The Qt Quick frontend is gone. `ui/`, `core/`, `engine/`, `scripting/`, the
+  Qt test suite, `CMakeLists.txt`, `check.py`, and the Qt CI job left in one
+  change, so `python3 BUILD.py` no longer takes `--frontend` or `--qt-dir` and
+  there is no CMake build to configure. Everything the Slint frontend read from
+  those directories now lives in workspace-owned paths: the 61 built-in effect
+  and object definitions are in `catalog/`, the icon font is in `assets/`, and
+  the effect-name translations are in `i18n/effect-metadata.json`. QML
+  effect and object packages were already rejected at installation; the QML
+  example packages and the Qt Linguist `.ts` sources went with the frontend
+- The C ABI is gone. The Qt frontend was its only consumer, so all 141 exports were
+  retired module by module: the `policy` surface (media timing, permission tables,
+  package and recovery validation), the `script`, `preset`, `recovery` and `project`
+  document parsers, the easing entry points, the timeline bake and edit helpers, the
+  timeline state handle, the timeline domain rules, export, audio and bake-plan
+  planning, the keyframe-document and numeric-keyframe evaluators, the plugin and
+  package document dispatchers, the settings, permission and package state handles,
+  and the effect, script-plugin and package catalog registries that existed only for
+  Qt. `rust_core_abi.hpp`, `tests/check_rust_abi.py`, its contract test, the CI step
+  and the `staticlib` crate type left with them. The pure-Rust functions behind the
+  wrappers still back the app and the tests, and the plain data they shared now lives
+  in `freya-nle-core`'s `types` module with Rust names instead of the old fixed-layout
+  `AviQtl*` structs
+
 ### Fixed
+- A macOS release no longer fails at the archive step: packaging writes
+  `Freya NLE.app` and archiving now publishes the same bundle instead of looking
+  for the pre-rename `AviQtl.app`
+- An effect that exists in the catalog but has no preview renderer, and a clip
+  whose object type is not in the loaded catalog, are reported once in the
+  preview log instead of being dropped without a word, so a broken or
+  half-installed package is visible
+- Justified text is justified: `Text.AlignJustify` distributes the leftover
+  width over the word gaps of every line except the last one instead of drawing
+  the paragraph left-aligned
+- The object-settings validation errors for integers, numbers, and non-text
+  controls follow the interface language instead of always speaking Japanese
+- The application calls itself Freya NLE in the `--version` output, the usage
+  text, the missing-GPU message, the error-dialog title, the update notice, and
+  the About window, which now opens the project page it displays instead of the
+  upstream Qt project's page
 - An object whose `transform` effect omits a parameter - `scale`, `opacity`, a
   rotation - keeps AviUtl's value for it instead of falling to zero. A transform
   that carried only its offsets used to draw the object at scale 0, so a project

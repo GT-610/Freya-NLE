@@ -1583,7 +1583,7 @@ pub(super) fn install_callbacks(
         }
     });
     about.on_open_project_page(move || {
-        if let Err(error) = webbrowser::open("https://codeberg.org/taisho-guy/AviQtl") {
+        if let Err(error) = webbrowser::open("https://github.com/GT-610/freya-nle") {
             show_error_dialog(&format!("Failed to open the project page: {error}"));
         }
     });

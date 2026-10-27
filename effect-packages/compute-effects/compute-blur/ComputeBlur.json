@@ -1,0 +1,34 @@
+{
+  "id": "compute_blur",
+  "name": "Compute Blur",
+  "params": {
+    "radius": 4.0
+  },
+  "ui": {
+    "controls": [
+      {
+        "type": "slider",
+        "param": "radius",
+        "label": "Radius",
+        "min": 1.0,
+        "max": 12.0,
+        "step": 1.0
+      }
+    ]
+  },
+  "version": "1.0.0",
+  "kind": "effect",
+  "categories": [
+    "Blur"
+  ],
+  "runtime": {
+    "engine": "aviqtl-wgsl-v1",
+    "shader": "ComputeBlur.wgsl",
+    "mode": "compute",
+    "workgroup": [8, 8],
+    "dispatch": 2,
+    "uniforms": [
+      "radius"
+    ]
+  }
+}

@@ -9,7 +9,7 @@ use freya_nle_render::{
     BlendMode, LayerCrop, LayerTransform, NativeRenderDefinition, VisualEffect,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,13 @@ pub struct PreviewPlanner {
     plans: BTreeMap<i32, SceneRenderPlan>,
     project_directory: Option<PathBuf>,
     native_definitions: BTreeMap<String, NativeRenderDefinition>,
+    /// Object ids the catalog knows about. Empty when the planner has no
+    /// catalog, in which case object diagnostics stay silent.
+    known_objects: BTreeSet<String>,
+    /// Effect ids already reported as having no renderer, so a malformed
+    /// package does not print a warning on every frame.
+    warned_effects: BTreeSet<String>,
+    warned_objects: BTreeSet<String>,
 }
 
 impl PreviewPlanner {
@@ -31,7 +38,14 @@ impl PreviewPlanner {
             plans: build_render_plans(document),
             project_directory: project_path.and_then(Path::parent).map(Path::to_path_buf),
             native_definitions: BTreeMap::new(),
+            known_objects: BTreeSet::new(),
+            warned_effects: BTreeSet::new(),
+            warned_objects: BTreeSet::new(),
         }
+    }
+
+    pub fn set_known_objects(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.known_objects = ids.into_iter().collect();
     }
 
     pub fn set_native_definitions(
@@ -115,13 +129,40 @@ impl PreviewPlanner {
             let pivot_y = effect_number(&layer, "transform", "cy");
             let pivot_z = effect_number(&layer, "transform", "cz");
             let backface_visible = effect_bool_or(&layer, "transform", "backfaceVisible", true);
+            if !self.known_objects.is_empty()
+                && !self.known_objects.contains(&layer.clip_type)
+                && !matches!(
+                    layer.clip_type.as_str(),
+                    "audio" | "camera" | "camera_control" | "GroupControl" | "frame_buffer"
+                )
+                && self.warned_objects.insert(layer.clip_type.clone())
+            {
+                warnings.push(format!(
+                    "object {} is not in the catalog and will not draw",
+                    layer.clip_type
+                ));
+            }
+            let mut unrouted = Vec::new();
             let effects = layer_visual_effects(
                 &layer.effects,
                 layer.relative_frame,
                 layer.duration_frames,
                 fps,
                 &self.native_definitions,
+                &mut unrouted,
             );
+            for id in unrouted {
+                // A clip's own object entry carries the clip type as its effect
+                // id and is drawn by the object plan, not by this pass.
+                if id == layer.clip_type {
+                    continue;
+                }
+                if self.warned_effects.insert(id.clone()) {
+                    warnings.push(format!(
+                        "effect {id} has no preview renderer and will not draw"
+                    ));
+                }
+            }
             let (content, content_opacity) = if layer.clip_type == "frame_buffer" {
                 let capture_key =
                     auxiliary_scene_instance_key(instance_key, layer.clip_id, "frame-buffer");
@@ -417,6 +458,7 @@ fn layer_visual_effects(
     duration_frames: i32,
     fps: f64,
     native_definitions: &BTreeMap<String, NativeRenderDefinition>,
+    unrouted: &mut Vec<String>,
 ) -> Vec<VisualEffect> {
     effects
         .iter()
@@ -435,6 +477,7 @@ fn layer_visual_effects(
                 Some(VisualEffect::Native {
                     package_id: definition.id.clone(),
                     shader_source: definition.shader_source.clone(),
+                    mode: definition.mode,
                     parameters: Box::new(parameters),
                     time_seconds: relative_frame as f32 / fps.max(1.0) as f32,
                 })
@@ -787,10 +830,20 @@ fn layer_visual_effects(
             // texture, so ComputeRenderNode displays its unchanged input fallback. Actual layer
             // and frame-buffer blending is handled by the compositor instead.
             "blend_layer" => None,
-            _ => None,
+            id => {
+                if !DEFERRED_EFFECT_IDS.contains(&id) {
+                    unrouted.push(id.to_owned());
+                }
+                None
+            }
         })
         .collect()
 }
+
+/// Effects whose behavior belongs to the compositor (transform, crop, blending)
+/// instead of the per-layer visual-effect pass, so they never report as
+/// unrouted.
+const DEFERRED_EFFECT_IDS: [&str; 3] = ["blend_layer", "clipping", "transform"];
 
 fn native_parameter(effect: &EvaluatedEffect, name: &str) -> [f32; 4] {
     let Some(value) = evaluated_effect_value(effect, name).map(value_payload) else {
@@ -885,7 +938,7 @@ mod tests {
             .snapshot()
     }
 
-    fn qt_catalog_entries(directory: &str) -> Vec<(String, BTreeMap<String, Value>)> {
+    fn catalog_entries(directory: &str) -> Vec<(String, BTreeMap<String, Value>)> {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(directory);
@@ -920,8 +973,83 @@ mod tests {
     }
 
     #[test]
-    fn every_qt_effect_catalog_entry_has_an_explicit_preview_route() {
-        let entries = qt_catalog_entries("ui/qml/effects");
+    fn an_object_type_missing_from_the_catalog_is_reported_once() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+            "clips": [{
+                "id": 10,
+                "sceneId": 1,
+                "type": "ghost_object",
+                "start": 0,
+                "duration": 60,
+                "layer": 1,
+                "effects": [{"id": "ghost_object", "params": {}}]
+            }]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        planner.set_known_objects(["rect".to_owned(), "text".to_owned()]);
+        let planned = planner.build(&document, 1, 0).expect("scene plans");
+        assert!(
+            planned
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("ghost_object")
+                    && warning.contains("not in the catalog")),
+            "{:?}",
+            planned.warnings
+        );
+
+        // Without a catalog the planner cannot tell a missing object from an
+        // unloaded one, so it stays quiet.
+        let mut bare = PreviewPlanner::new(&document, None);
+        let planned = bare.build(&document, 1, 0).expect("scene plans");
+        assert!(planned.warnings.is_empty(), "{:?}", planned.warnings);
+    }
+
+    #[test]
+    fn an_effect_without_a_renderer_is_reported_instead_of_dropped_silently() {
+        let mut unrouted = Vec::new();
+        let effects = layer_visual_effects(
+            &[EvaluatedEffect {
+                effect_index: 0,
+                id: "not.a.real.effect".to_owned(),
+                params: BTreeMap::new(),
+            }],
+            0,
+            60,
+            60.0,
+            &BTreeMap::new(),
+            &mut unrouted,
+        );
+        assert!(effects.is_empty());
+        assert_eq!(unrouted, vec!["not.a.real.effect".to_owned()]);
+
+        // Transform, crop, and blending belong to the compositor, not this pass.
+        let mut deferred = Vec::new();
+        layer_visual_effects(
+            &["transform", "clipping", "blend_layer"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, id)| EvaluatedEffect {
+                    effect_index: index,
+                    id: id.to_owned(),
+                    params: BTreeMap::new(),
+                })
+                .collect::<Vec<_>>(),
+            0,
+            60,
+            60.0,
+            &BTreeMap::new(),
+            &mut deferred,
+        );
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
+    fn every_effect_catalog_entry_has_an_explicit_preview_route() {
+        let entries = catalog_entries("catalog/effects");
         assert_eq!(
             entries.len(),
             44,
@@ -940,6 +1068,7 @@ mod tests {
                 120,
                 60.0,
                 &BTreeMap::new(),
+                &mut Vec::new(),
             );
             if special_routes.contains(id.as_str()) {
                 assert!(
@@ -1034,6 +1163,7 @@ mod tests {
             .map(str::to_owned)
             .collect(),
             shader_source: std::sync::Arc::from("fn aviqtl_effect() {}"),
+            mode: freya_nle_render::NativeEffectMode::Fragment,
         }]);
 
         let planned = planner
@@ -1089,6 +1219,7 @@ mod tests {
             kind: "effect".to_owned(),
             uniforms: vec!["enabled".to_owned()],
             shader_source: std::sync::Arc::from("fn aviqtl_effect() {}"),
+            mode: freya_nle_render::NativeEffectMode::Fragment,
         }]);
 
         let planned = planner
@@ -1117,8 +1248,65 @@ mod tests {
     }
 
     #[test]
-    fn every_qt_object_catalog_entry_reaches_its_production_render_route() {
-        let entries = qt_catalog_entries("ui/qml/objects");
+    fn compute_native_definitions_keep_their_dispatch_shape() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 320, "height": 180, "fps": 25.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 100, "width": 320, "height": 180, "fps": 25.0}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "rect",
+                "start": 0,
+                "duration": 100,
+                "layer": 0,
+                "effects": [
+                    {"id": "rect", "name": "Rectangle", "enabled": true, "params": {}},
+                    {"id": "effect.compute", "name": "Compute", "enabled": true, "params": {"amount": 0.5}}
+                ]
+            }]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        planner.set_native_definitions([NativeRenderDefinition {
+            id: "effect.compute".to_owned(),
+            kind: "effect".to_owned(),
+            uniforms: vec!["amount".to_owned()],
+            shader_source: std::sync::Arc::from(
+                "@compute @workgroup_size(16, 8, 1) fn aviqtl_main() {}",
+            ),
+            mode: freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [16, 8],
+                dispatch: 1,
+            },
+        }]);
+
+        let planned = planner
+            .build(&document, 1, 25)
+            .expect("compute effect plans");
+        let native = planned.scene.layers[0]
+            .effects
+            .iter()
+            .find(|effect| matches!(effect, VisualEffect::Native { .. }))
+            .expect("compute effect is attached");
+        let VisualEffect::Native {
+            mode, parameters, ..
+        } = native
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            *mode,
+            freya_nle_render::NativeEffectMode::Compute {
+                workgroup: [16, 8],
+                dispatch: 1,
+            }
+        );
+        assert_eq!(parameters[0], [0.5, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn every_object_catalog_entry_reaches_its_production_render_route() {
+        let entries = catalog_entries("catalog/objects");
         assert_eq!(
             entries.len(),
             17,

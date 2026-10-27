@@ -1,26 +1,7 @@
-use crate::abi::{slice_is_valid, utf8};
-
 const DEFAULT_SPEED: f64 = 100.0;
 
 const AUDIO_DURATION_PARAMETERS: [&str; 5] =
     ["source", "startTime", "speed", "playMode", "linkedVideo"];
-
-const AUDIO_WAVEFORM_PARAMETERS: [&str; 14] = [
-    "source",
-    "linkedVideo",
-    "playMode",
-    "startTime",
-    "speed",
-    "directTime",
-    "volume",
-    "masterVolume",
-    "pan",
-    "fadeIn",
-    "fadeOut",
-    "mute",
-    "solo",
-    "limiter",
-];
 
 pub(crate) const PERMISSION_NAMES: [&str; 13] = [
     "transport.control",
@@ -119,24 +100,6 @@ pub(crate) fn audio_parameter_affects_duration(value: &str) -> bool {
     AUDIO_DURATION_PARAMETERS.contains(&value)
 }
 
-fn audio_parameter_affects_waveform(value: &str) -> bool {
-    AUDIO_WAVEFORM_PARAMETERS.contains(&value)
-}
-
-fn resolve_audio_time(
-    relative_time: f64,
-    direct_mode: bool,
-    direct_time: f64,
-    start_time: f64,
-    speed: f64,
-) -> f64 {
-    if direct_mode {
-        direct_time
-    } else {
-        relative_time * (speed / DEFAULT_SPEED) + start_time
-    }
-}
-
 pub(crate) fn resolve_video_time(
     relative_frame: i32,
     source_fps: f64,
@@ -154,97 +117,6 @@ pub(crate) fn resolve_video_time(
     let start_seconds = start_frame / source_fps;
     let relative_time = f64::from(relative_frame) / source_fps;
     start_seconds + relative_time * (speed / DEFAULT_SPEED)
-}
-
-fn max_video_duration_frames(
-    total_frame_count: i32,
-    source_fps: f64,
-    speed: f64,
-    start_frame: f64,
-    project_fps: i32,
-) -> i32 {
-    if total_frame_count <= 0
-        || !speed.is_finite()
-        || speed <= 0.0
-        || !source_fps.is_finite()
-        || source_fps <= 0.0
-        || !start_frame.is_finite()
-        || project_fps <= 0
-    {
-        return 0;
-    }
-    let start_seconds = start_frame / source_fps;
-    let remaining_seconds = f64::from(total_frame_count) / source_fps - start_seconds;
-    if remaining_seconds <= 0.0 {
-        return 0;
-    }
-    let frames = remaining_seconds / (speed / DEFAULT_SPEED) * f64::from(project_fps);
-    if !frames.is_finite() || frames <= 0.0 {
-        0
-    } else {
-        frames.min(f64::from(i32::MAX)) as i32
-    }
-}
-
-fn clamp_video_duration_frames(
-    requested_duration: i32,
-    total_frame_count: i32,
-    source_fps: f64,
-    direct_mode: bool,
-    start_frame: f64,
-    speed: f64,
-    project_fps: i32,
-) -> i32 {
-    if total_frame_count <= 0 || !source_fps.is_finite() || source_fps <= 0.0 || project_fps <= 0 {
-        return requested_duration;
-    }
-    let maximum = if direct_mode {
-        f64::from(total_frame_count) / source_fps * f64::from(project_fps)
-    } else if speed.is_finite() && speed > 0.0 && start_frame.is_finite() {
-        let remaining = f64::from(total_frame_count) / source_fps - start_frame / source_fps;
-        if remaining <= 0.0 {
-            return requested_duration;
-        }
-        remaining / (speed / DEFAULT_SPEED) * f64::from(project_fps)
-    } else {
-        return requested_duration;
-    };
-    let maximum = maximum.clamp(0.0, f64::from(i32::MAX)) as i32;
-    if maximum > 0 && requested_duration > maximum {
-        maximum
-    } else {
-        requested_duration
-    }
-}
-
-fn clamp_audio_duration_frames(
-    requested_duration: i32,
-    total_seconds: f64,
-    direct_mode: bool,
-    start_time: f64,
-    speed: f64,
-    project_fps: i32,
-) -> i32 {
-    if !total_seconds.is_finite() || total_seconds <= 0.0 || project_fps <= 0 {
-        return requested_duration;
-    }
-    let maximum = if direct_mode {
-        total_seconds * f64::from(project_fps)
-    } else if speed.is_finite() && speed > 0.0 && start_time.is_finite() {
-        let remaining = total_seconds - start_time;
-        if remaining <= 0.0 {
-            return requested_duration;
-        }
-        remaining / (speed / DEFAULT_SPEED) * f64::from(project_fps)
-    } else {
-        return requested_duration;
-    };
-    let maximum = maximum.clamp(0.0, f64::from(i32::MAX)) as i32;
-    if maximum > 0 && requested_duration > maximum {
-        maximum
-    } else {
-        requested_duration
-    }
 }
 
 pub(crate) fn audio_duration_frames(
@@ -336,15 +208,6 @@ fn windows_file_component_is_safe(value: &str) -> bool {
     })
 }
 
-fn package_type(value: &str) -> i32 {
-    match value {
-        "mod" => 0,
-        "effect" => 1,
-        "object" => 2,
-        _ => -1,
-    }
-}
-
 pub(crate) fn safe_archive_path(value: &str) -> bool {
     let has_drive_prefix = value.as_bytes().get(1) == Some(&b':')
         && value
@@ -413,211 +276,6 @@ pub(crate) fn valid_recovery_snapshot_name(id: &str, file_name: &str) -> bool {
     valid_recovery_id(generation)
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_playback_mode(value: *const u8, value_length: usize) -> i32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    unsafe { utf8(value, value_length) }
-        .and_then(playback_mode)
-        .map_or(-1, |mode| mode as i32)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_is_video_file(value: *const u8, value_length: usize) -> u32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    u32::from(unsafe { utf8(value, value_length) }.is_some_and(is_video_file))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_audio_parameter_affects_duration(
-    value: *const u8,
-    value_length: usize,
-) -> u32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    u32::from(unsafe { utf8(value, value_length) }.is_some_and(audio_parameter_affects_duration))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_audio_parameter_affects_waveform(
-    value: *const u8,
-    value_length: usize,
-) -> u32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    u32::from(unsafe { utf8(value, value_length) }.is_some_and(audio_parameter_affects_waveform))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_resolve_audio_time(
-    relative_time: f64,
-    direct_mode: u32,
-    direct_time: f64,
-    start_time: f64,
-    speed: f64,
-) -> f64 {
-    resolve_audio_time(
-        relative_time,
-        direct_mode != 0,
-        direct_time,
-        start_time,
-        speed,
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_resolve_video_time(
-    relative_frame: i32,
-    source_fps: f64,
-    direct_mode: u32,
-    direct_frame: f64,
-    start_frame: f64,
-    speed: f64,
-) -> f64 {
-    resolve_video_time(
-        relative_frame,
-        source_fps,
-        direct_mode != 0,
-        direct_frame,
-        start_frame,
-        speed,
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_max_video_duration_frames(
-    total_frame_count: i32,
-    source_fps: f64,
-    speed: f64,
-    start_frame: f64,
-    project_fps: i32,
-) -> i32 {
-    max_video_duration_frames(
-        total_frame_count,
-        source_fps,
-        speed,
-        start_frame,
-        project_fps,
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_clamp_video_duration_frames(
-    requested_duration: i32,
-    total_frame_count: i32,
-    source_fps: f64,
-    direct_mode: u32,
-    start_frame: f64,
-    speed: f64,
-    project_fps: i32,
-) -> i32 {
-    clamp_video_duration_frames(
-        requested_duration,
-        total_frame_count,
-        source_fps,
-        direct_mode != 0,
-        start_frame,
-        speed,
-        project_fps,
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_media_clamp_audio_duration_frames(
-    requested_duration: i32,
-    total_seconds: f64,
-    direct_mode: u32,
-    start_time: f64,
-    speed: f64,
-    project_fps: i32,
-) -> i32 {
-    clamp_audio_duration_frames(
-        requested_duration,
-        total_seconds,
-        direct_mode != 0,
-        start_time,
-        speed,
-        project_fps,
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_permission_from_name(value: *const u8, value_length: usize) -> i32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    unsafe { utf8(value, value_length) }.map_or(-1, permission_from_name)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_permission_for_api(value: *const u8, value_length: usize) -> i32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    unsafe { utf8(value, value_length) }.map_or(-1, permission_for_api)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_permission_count() -> i32 {
-    PERMISSION_NAMES.len() as i32
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aviqtl_permission_name(
-    permission: i32,
-    output_length: *mut usize,
-) -> *const u8 {
-    if !slice_is_valid(output_length, 1) {
-        return std::ptr::null();
-    }
-    let Some(name) = usize::try_from(permission)
-        .ok()
-        .and_then(|permission| PERMISSION_NAMES.get(permission))
-    else {
-        // SAFETY: The output was validated above.
-        unsafe { output_length.write(0) };
-        return std::ptr::null();
-    };
-    // SAFETY: The output was validated above. The returned string has static lifetime.
-    unsafe { output_length.write(name.len()) };
-    name.as_ptr()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_package_id_is_valid(value: *const u8, value_length: usize) -> u32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    u32::from(unsafe { utf8(value, value_length) }.is_some_and(valid_package_id))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_package_type(value: *const u8, value_length: usize) -> i32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    unsafe { utf8(value, value_length) }.map_or(-1, package_type)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_package_archive_path_is_safe(
-    value: *const u8,
-    value_length: usize,
-) -> u32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    u32::from(unsafe { utf8(value, value_length) }.is_some_and(safe_archive_path))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_recovery_id_is_valid(value: *const u8, value_length: usize) -> u32 {
-    // SAFETY: The helper validates the pointer/length pair before borrowing it.
-    u32::from(unsafe { utf8(value, value_length) }.is_some_and(valid_recovery_id))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aviqtl_recovery_snapshot_name_is_valid(
-    id: *const u8,
-    id_length: usize,
-    file_name: *const u8,
-    file_name_length: usize,
-) -> u32 {
-    // SAFETY: Both helpers validate their pointer/length pairs before borrowing them.
-    u32::from(
-        unsafe { utf8(id, id_length) }
-            .zip(unsafe { utf8(file_name, file_name_length) })
-            .is_some_and(|(id, file_name)| valid_recovery_snapshot_name(id, file_name)),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -683,27 +341,7 @@ mod tests {
         assert!(!is_video_file("clip.mp4.bak"));
         assert!(audio_parameter_affects_duration("startTime"));
         assert!(!audio_parameter_affects_duration("volume"));
-        assert!(audio_parameter_affects_waveform("volume"));
-        assert!(!audio_parameter_affects_waveform("unrelated"));
-        assert_eq!(resolve_audio_time(2.0, false, 0.0, 1.0, 200.0), 5.0);
         assert_eq!(resolve_video_time(30, 30.0, false, 0.0, 60.0, 100.0), 3.0);
-        assert_eq!(max_video_duration_frames(100, 30.0, 100.0, 30.0, 30), 70);
-        assert_eq!(
-            clamp_video_duration_frames(200, 100, 25.0, true, 0.0, 100.0, 50),
-            200
-        );
-        assert_eq!(
-            clamp_video_duration_frames(200, 100, 25.0, false, 25.0, 100.0, 50),
-            150
-        );
-        assert_eq!(
-            clamp_audio_duration_frames(500, 10.0, true, 0.0, 100.0, 30),
-            300
-        );
-        assert_eq!(
-            clamp_audio_duration_frames(500, 10.0, false, 2.0, 200.0, 30),
-            120
-        );
         assert_eq!(audio_duration_frames(10.01, true, 0.0, 100.0, 30.0), 301);
         assert_eq!(audio_duration_frames(10.0, false, 2.0, 200.0, 30.0), 120);
         assert_eq!(audio_duration_frames(10.0, false, f64::NAN, 100.0, 30.0), 0);
@@ -725,8 +363,6 @@ mod tests {
     fn package_policy_rejects_escape_paths_and_invalid_ids() {
         assert!(valid_package_id("org.aviqtl.example-1"));
         assert!(!valid_package_id("../example"));
-        assert_eq!(package_type("effect"), 1);
-        assert_eq!(package_type("unsupported"), -1);
         assert!(safe_archive_path("wrapper/../effect/main.qml"));
         assert!(!safe_archive_path("../effect/main.qml"));
         assert!(!safe_archive_path("effect\\main.qml"));
