@@ -131,6 +131,14 @@ documented the behavior is in git history.
    completes. What is left of Qt's path is the explicit `AVHWDeviceContext` /
    `hw_frames_ctx` setup: hardware-frame decoding, and a hardware upload path for
    VAAPI/QSV instead of the software fallback.
+
+   Blocking constraint: `freya-nle-media/Cargo.toml` sets `unsafe_code = "forbid"`,
+   like the other application crates. `ffmpeg-the-third` does not expose device
+   creation, `get_format` negotiation or `av_hwframe_transfer_data`, so a hardware
+   decoder needs a small unsafe FFI module in that crate. The design is understood
+   (create a VideoToolbox/VAAPI device, prefer its pixel format during decode,
+   transfer frames to system memory before the scaler), but relaxing a crate-level
+   safety policy is a project decision rather than a missing implementation.
 2. **Compute-shader effects, partly carried over.** Qt's `ComputeEffect` exposed
    work-group sizes and extra input textures (`core/src/compute_effect.cpp:54,94,189`) and
    10 shipped `.comp` shaders used them. Native packages can now declare
