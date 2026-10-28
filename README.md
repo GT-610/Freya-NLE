@@ -19,7 +19,7 @@
 > each identifier became.
 
 > [!IMPORTANT]
-> Freya NLE is a fork of [taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl) that continues the **Qt Quick + QRhi + ECS** development path after the upstream project was rebuilt with **Rust + Slint + wgpu**. The frontend has since migrated the same way, and the Qt frontend was retired in 0.8: **Rust + Slint + wgpu is the only build**. See [About the project](https://aviqtl.gt610.dpdns.org/guide/start-here/about) for the full story.
+> Freya NLE is a fork of [TeamNeoUtl/NeoUtl](https://codeberg.org/TeamNeoUtl/NeoUtl) that began on the **Qt Quick + QRhi + ECS** development path. The upstream NeoUtl project was rebuilt with **Rust + egui + wgpu**; Freya NLE later retired its Qt frontend in 0.8 and migrated to **Rust + Slint + wgpu**, its only build. See [About the project](https://aviqtl.gt610.dpdns.org/guide/start-here/about) for the full story.
 
 ## What is Freya NLE?
 
@@ -70,7 +70,7 @@ Freya NLE stands on the shoulders of many wonderful projects.
 | :--- | :--- | :--- |
 | AviUtl | Non-free | Respected origin |
 | AviQtl | AGPLv3 | Original Qt Quick project; `aviqtl` branch of the upstream |
-| NeoUtl | AGPLv3 | New Rust + Slint + wgpu version by the original author |
+| NeoUtl | AGPLv3 | New Rust + egui + wgpu version by the original author |
 | Freya NLE | AGPLv3 | This project — Rust + Slint + wgpu, grown out of a Qt Quick + QRhi + ECS codebase |
 | Carla | GPLv2+ | Audio effect host (VST3/LV2 etc.) |
 | FFmpeg | GPLv2+ | Video/audio decoding & encoding |

@@ -17,7 +17,7 @@
 > Freya NLEは0.8までAviQtl-Plusという名前でした。古いリンクはリダイレクトされ、`.aviqtl`プロジェクトと`.aviqtlfrag`フラグメントは引き続き開けます。各識別子の変更はCHANGELOGに記録しています。
 
 > [!IMPORTANT]
-> Freya NLEは[taisho-guy/NeoUtl](https://codeberg.org/taisho-guy/NeoUtl)のforkであり、上流プロジェクトが**Rust + Slint + wgpu**で再構築された後も**Qt Quick + QRhi + ECS**の開発路線を継続しています。その後フロントエンドも同じ方向へ移行し、0.8でQtフロントエンドを廃止しました。**現在のビルドはRust + Slint + wgpuのみです**。詳しい経緯は[プロジェクトについて](https://aviqtl.gt610.dpdns.org/guide/start-here/about)をご覧ください。
+> Freya NLEは[TeamNeoUtl/NeoUtl](https://codeberg.org/TeamNeoUtl/NeoUtl)のforkであり、上流プロジェクトが**Rust + egui + wgpu**で再構築された後も**Qt Quick + QRhi + ECS**の開発路線を継続しています。その後フロントエンドは **Slint** へ移行し、0.8でQtフロントエンドを廃止しました。**現在のビルドはRust + Slint + wgpuのみです**。詳しい経緯は[プロジェクトについて](https://aviqtl.gt610.dpdns.org/guide/start-here/about)をご覧ください。
 
 ## [Freya NLE](https://github.com/GT-610/freya-nle)とは
 
@@ -63,7 +63,7 @@ Freya NLEは、多くの素晴らしいプロジェクトの上に成り立っ�
 | :--- | :--- | :--- |
 | AviUtl | 非自由 | リスペクト元 |
 | AviQtl | AGPLv3 | 元のQt Quick版プロジェクト；上流の`aviqtl`ブランチ |
-| NeoUtl | AGPLv3 | 原作者によるRust + Slint + wgpu版 |
+| NeoUtl | AGPLv3 | 原作者によるRust + egui + wgpu版 |
 | Freya NLE | AGPLv3 | このプロジェクト — Qt Quick + QRhi + ECS から生まれた Rust + Slint + wgpu 版 |
 | Carla | GPLv2+ | 音声エフェクト（VST3/LV2等）のホスト |
 | FFmpeg | GPLv2+ | 動画・音声のデコード / エンコード |
