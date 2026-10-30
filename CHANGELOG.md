@@ -62,6 +62,11 @@ All notable changes to Freya NLE are documented in this file.
 - Projects are saved as `.freya` and fragments as `.freyafrag`, and the
   fragment format marker is now `freya.fragment`. A fragment saved before the
   rename is rewritten in the current format the next time it is saved
+- The icon and splash screen carry the new name. The filmstrip, the chamfered
+  plate and the pixel spark are kept from the old mark, the plus sign is now an
+  **F** because "Plus" no longer describes the project, and the palette is a
+  light blue (`#8AD2F2`) instead of green. The wordmark is set in Space Grotesk
+  at a 7.5° oblique and is outlined, so no font is needed to render it
 
 ### Removed
 - The Qt Quick frontend is gone. `ui/`, `core/`, `engine/`, `scripting/`, the
