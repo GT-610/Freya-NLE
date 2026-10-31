@@ -173,7 +173,7 @@ class TestBuildScript(unittest.TestCase):
             self.assertEqual(builder.macos_app_bundle().name, "Freya NLE.app")
             commands = []
             builder.run_cmd = lambda command, **_kwargs: commands.append(command)
-            builder.create_zip("AviQtl-macOS-Xcode-test")
+            builder.create_zip("Freya-NLE-macOS-Xcode-test")
             self.assertEqual(len(commands), 1)
             archived, _destination = commands[0][-2:]
             self.assertEqual(Path(archived), builder.macos_app_bundle())

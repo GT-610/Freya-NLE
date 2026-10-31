@@ -23,16 +23,16 @@ jobs:
           - platform: linux
             runs_on: ubuntu-latest
             container: archlinux:latest
-            artifact_name: AviQtl-Arch-Linux-x86_64
-            artifact_path: dist/AviQtl-Arch-Linux-x86_64.zip
+            artifact_name: Freya-NLE-Arch-Linux-x86_64
+            artifact_path: dist/Freya-NLE-Arch-Linux-x86_64.zip
           - platform: macos
             runs_on: macos-14
-            artifact_name: AviQtl-macOS
-            artifact_path: dist/AviQtl-macOS-Xcode-*.zip
+            artifact_name: Freya-NLE-macOS
+            artifact_path: dist/Freya-NLE-macOS-Xcode-*.zip
           - platform: windows
             runs_on: windows-latest
-            artifact_name: AviQtl-MSVC-Windows-x86_64
-            artifact_path: dist/AviQtl-MSVC-x86_64.zip
+            artifact_name: Freya-NLE-MSVC-Windows-x86_64
+            artifact_path: dist/Freya-NLE-MSVC-x86_64.zip
     runs-on: ${{ matrix.runs_on }}
     container: ${{ matrix.container }}
     steps:
@@ -244,7 +244,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: AviQtl-*
+          pattern: Freya-NLE-*
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:

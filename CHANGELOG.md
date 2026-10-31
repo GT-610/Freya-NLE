@@ -4,6 +4,8 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0-rc.2] - 2026-10-30
+
 ### Added
 - The batch 4 editing model now has its interface. The timeline carries a docked
   **Media Library** with source in/out points, flat groups, search, insert, and

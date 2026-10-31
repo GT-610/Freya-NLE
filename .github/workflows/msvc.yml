@@ -210,6 +210,6 @@ jobs:
               throw "Packaged resource directory is missing: $directory"
             }
           }
-          if (-not (Test-Path -LiteralPath "dist\AviQtl-MSVC-x86_64.zip")) {
+          if (-not (Test-Path -LiteralPath "dist\Freya-NLE-MSVC-x86_64.zip")) {
             throw "MSVC package archive was not created"
           }
