@@ -260,7 +260,7 @@ class PlatformBuilder:
         self.logger.log(f"Archive: {self.config.dist_dir / (archive_name + '.zip')}")
 
     def get_archive_name(self) -> str:
-        return "AviQtl-Archive"
+        return "Freya-NLE-Archive"
 
     def create_zip(self, archive_name: str):
         archive_path = self.config.dist_dir / f"{archive_name}.zip"
@@ -363,7 +363,7 @@ class ArchBuilder(LinuxBuilderBase):
         self.run_cmd(["sudo", "pacman", "-Syu", "--needed", "--noconfirm", *dependencies])
 
     def get_archive_name(self) -> str:
-        return "AviQtl-Arch-Linux-x86_64"
+        return "Freya-NLE-Arch-Linux-x86_64"
 
 
 class WindowsDependencyMixin:
@@ -467,7 +467,7 @@ class Msys2Builder(WindowsDependencyMixin, PlatformBuilder):
         self.logger.log(f"Executable: {destination}")
 
     def get_archive_name(self) -> str:
-        return "AviQtl-MSYS2-UCRT64-x86_64"
+        return "Freya-NLE-MSYS2-UCRT64-x86_64"
 
 
 class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
@@ -748,7 +748,7 @@ class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
         self.logger.log(f"Executable: {destination}")
 
     def get_archive_name(self) -> str:
-        return "AviQtl-MSVC-x86_64"
+        return "Freya-NLE-MSVC-x86_64"
 
 
 class XcodeBuilder(PlatformBuilder):
@@ -851,7 +851,7 @@ class XcodeBuilder(PlatformBuilder):
         self.logger.log(f"App bundle: {app}")
 
     def get_archive_name(self) -> str:
-        return f"AviQtl-macOS-Xcode-{normalize_macos_architecture(platform.machine())}"
+        return f"Freya-NLE-macOS-Xcode-{normalize_macos_architecture(platform.machine())}"
 
     def create_zip(self, archive_name: str):
         archive_path = self.config.dist_dir / f"{archive_name}.zip"
