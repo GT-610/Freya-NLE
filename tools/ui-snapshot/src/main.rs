@@ -181,6 +181,20 @@ fn output_dir() -> std::path::PathBuf {
         Err(error) => panic!("cannot inspect {}: {error}", dir.display()),
     }
     std::fs::create_dir_all(&dir).expect("create the snapshot output directory");
+    // The checkout belongs to the user running the tool, so its owner is the
+    // reference the output directory must match.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let owner = std::fs::metadata(checkout).expect("read the crate manifest").uid();
+        let actual = std::fs::metadata(&dir).expect("read the output directory").uid();
+        assert!(
+            actual == owner,
+            "{} is owned by uid {actual}, not by the user running the tool ({owner})",
+            dir.display()
+        );
+    }
     // Writing proves the directory is ours to use before a frame is written.
     let probe = dir.join(".probe");
     std::fs::write(&probe, b"").expect("write probe into the snapshot directory");
