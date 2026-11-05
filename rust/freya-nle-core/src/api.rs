@@ -43,9 +43,10 @@ pub use crate::preset::{
     EffectPreset, PresetError, build_effect_preset, parse_effect_preset, preset_name_is_safe,
 };
 pub use crate::project::{
-    AudioPluginDocument, ClipDocument, EffectDocument, ExtraFields, MAX_MARK_NOTE_CHARS,
+    AudioPluginDocument, ClipDocument, EffectDocument, ExtraFields, LayerSettingDocument,
+    MAX_LAYER_NAME_CHARS, MAX_LAYER_OFFSET, MAX_LAYER_VOLUME_PERCENT, MAX_MARK_NOTE_CHARS,
     MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, ProjectDocument, ProjectSettings, SceneDocument,
-    SceneMark,
+    SceneMark, normalize_hex_color,
 };
 pub use crate::recovery::{
     RecoveryInspection, RecoveryMetadata, build_recovery_metadata, inspect_recovery_metadata,

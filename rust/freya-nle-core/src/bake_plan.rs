@@ -2,7 +2,8 @@ use crate::expression;
 use crate::keyframe_document::{evaluate_resolved_track, parse_hex_color, resolve_track};
 use crate::policy::{PlaybackMode, playback_mode, resolve_video_time};
 use crate::project::{
-    AudioPluginDocument, ClipDocument, EffectDocument, ExtraFields, ProjectDocument,
+    AudioPluginDocument, ClipDocument, EffectDocument, ExtraFields, LayerSettingDocument,
+    ProjectDocument,
 };
 use crate::timeline::{bake_audio, bake_render};
 use crate::types::{AudioBakeInput, AudioBakeOutput, RenderBakeInput};
@@ -887,8 +888,42 @@ struct BakePlan {
     scene_height: i32,
     clips: Vec<CachedClip>,
     scene_durations: HashMap<i32, i32>,
+    layer_settings: BTreeMap<i32, LayerSetting>,
     time_buckets: HashMap<i32, Vec<usize>>,
     effect_count: usize,
+}
+
+/// A layer setting reduced to what the frame evaluator needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LayerSetting {
+    x: f32,
+    y: f32,
+    z: f32,
+    /// Linear multiplier derived from the stored percentage.
+    volume: f32,
+}
+
+impl LayerSetting {
+    fn from_document(setting: &LayerSettingDocument) -> Self {
+        // A non-finite value cannot come from a normalized document, but the
+        // evaluator also runs against documents built in tests: an unusable
+        // volume falls back to unity instead of muting the layer.
+        let volume = if setting.volume_percent.is_finite() {
+            (setting.volume_percent / 100.0) as f32
+        } else {
+            1.0
+        };
+        Self {
+            x: finite_f32(setting.x),
+            y: finite_f32(setting.y),
+            z: finite_f32(setting.z),
+            volume,
+        }
+    }
+}
+
+fn finite_f32(value: f64) -> f32 {
+    if value.is_finite() { value as f32 } else { 0.0 }
 }
 
 impl BakePlan {
@@ -906,7 +941,13 @@ impl BakePlan {
             .filter(|clip| clip.id >= 0 && clip.id < max_clip_id)
             .map(|clip| CachedClip::new(clip, fps))
             .collect();
-        Ok(Self::from_clips(fps, input.height, clips, HashMap::new()))
+        Ok(Self::from_clips(
+            fps,
+            input.height,
+            clips,
+            HashMap::new(),
+            BTreeMap::new(),
+        ))
     }
 
     fn from_document(
@@ -929,11 +970,17 @@ impl BakePlan {
             .iter()
             .map(|scene| (scene.id, scene.duration))
             .collect();
+        let layer_settings = scene
+            .layer_settings
+            .iter()
+            .map(|setting| (setting.layer, LayerSetting::from_document(setting)))
+            .collect();
         Ok(Self::from_clips(
             scene.fps,
             scene.height,
             clips,
             scene_durations,
+            layer_settings,
         ))
     }
 
@@ -942,6 +989,7 @@ impl BakePlan {
         scene_height: i32,
         clips: Vec<CachedClip>,
         scene_durations: HashMap<i32, i32>,
+        layer_settings: BTreeMap<i32, LayerSetting>,
     ) -> Self {
         let mut time_buckets: HashMap<i32, Vec<usize>> = HashMap::new();
         let effect_count = clips.iter().map(|clip| clip.effects.len()).sum();
@@ -957,6 +1005,7 @@ impl BakePlan {
             scene_height,
             clips,
             scene_durations,
+            layer_settings,
             time_buckets,
             effect_count,
         }
@@ -1026,6 +1075,28 @@ impl BakePlan {
             })
             .min_by_key(|(layer, _)| *layer)
             .map(|(_, camera)| camera);
+        // AviUtl2's layer settings skip objects a camera control has taken over,
+        // so the range each active camera covers is computed once per frame.
+        let camera_targets = selected
+            .iter()
+            .filter_map(|&index| {
+                let clip = &self.clips[index];
+                if !(clip.start_frame <= key.current_frame && key.current_frame < clip.end_frame)
+                    || !matches!(clip.clip_type.as_str(), "camera_control" | "camera")
+                {
+                    return None;
+                }
+                let relative_frame = key.current_frame.saturating_sub(clip.start_frame).max(0);
+                let effect = clip.effects.iter().find(|effect| {
+                    effect.enabled && matches!(effect.id.as_str(), "camera_control" | "camera")
+                })?;
+                let layer_count = effect
+                    .float_or("layerCount", 1.0, relative_frame)
+                    .round()
+                    .max(1.0) as i32;
+                Some((clip.layer, layer_count))
+            })
+            .min_by_key(|(layer, _)| *layer);
 
         for index in selected {
             let clip = &mut self.clips[index];
@@ -1084,6 +1155,14 @@ impl BakePlan {
                 // Scene projection needs a stable entity key even when the legacy single-clip
                 // kernel returns its invalid-fps sentinel payload.
                 output.clip_id = clip.clip_id;
+                if !camera_covers(camera_targets, clip.layer)
+                    && let Some(setting) = self.layer_settings.get(&clip.layer)
+                {
+                    // The layer volume multiplies the object volume; keep the
+                    // result non-negative even when a hand-built document has a
+                    // value the normalizer would have clamped.
+                    output.volume = (output.volume * setting.volume).max(0.0);
+                }
                 if clip.start_frame <= key.current_frame && key.current_frame < clip.end_frame {
                     frame_audio.push(audio_layer_plan(
                         output,
@@ -1148,6 +1227,16 @@ impl BakePlan {
                     opacity: render.opacity,
                 };
                 apply_group_controls(&mut transform, clip.layer, &group_controls);
+                if !camera_covers(camera_targets, clip.layer)
+                    && !is_control_object(&clip.clip_type)
+                    && let Some(setting) = self.layer_settings.get(&clip.layer)
+                {
+                    // Layer offsets are a screen-space nudge added after the
+                    // object's own transform and any group control around it.
+                    transform.x += setting.x;
+                    transform.y += setting.y;
+                    transform.z += setting.z;
+                }
                 let media = media_playback_plan(
                     &clip.clip_type,
                     relative_frame,
@@ -1605,6 +1694,22 @@ fn evaluated_camera_control(
     })
 }
 
+/// Whether a camera control's target range contains a layer.
+fn camera_covers(camera: Option<(i32, i32)>, layer: i32) -> bool {
+    camera.is_some_and(|(camera_layer, layer_count)| {
+        layer > camera_layer && layer <= camera_layer.saturating_add(layer_count)
+    })
+}
+
+/// Control objects keep their own coordinates; AviUtl2's layer settings only
+/// move media objects.
+fn is_control_object(clip_type: &str) -> bool {
+    matches!(
+        clip_type,
+        "camera" | "camera_control" | "GroupControl" | "frame_buffer"
+    )
+}
+
 fn apply_group_controls(
     transform: &mut EvaluatedTransform,
     layer: i32,
@@ -1983,6 +2088,93 @@ mod tests {
         );
         assert_eq!(layer.transform.opacity, 1.0, "a missing opacity is opaque");
         assert_eq!(layer.transform.rotation_x, 0.0);
+    }
+
+    #[test]
+    fn layer_settings_move_media_scale_audio_and_leave_camera_targets_alone() {
+        let input = json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+            "scenes": [{
+                "id": 1,
+                "name": "Scene",
+                "duration": 120,
+                "layerSettings": [
+                    {"layer": 1, "x": 10.0, "y": -5.0, "z": 2.0, "volumePercent": 50},
+                    {"layer": 2, "x": 50.0},
+                    {"layer": 3, "x": 100.0}
+                ]
+            }],
+            "clips": [
+                {"id": 1, "sceneId": 1, "type": "rect", "start": 0, "duration": 60,
+                 "layer": 1, "params": {}, "audioPlugins": [],
+                 "effects": [{
+                    "id": "transform", "name": "Transform", "enabled": true,
+                    "params": {"x": 5.0, "y": 1.0, "z": 0.0}
+                 }]},
+                {"id": 2, "sceneId": 1, "type": "audio", "start": 0, "duration": 60,
+                 "layer": 1, "params": {}, "audioPlugins": [],
+                 "effects": [{
+                    "id": "audio", "name": "Audio", "enabled": true,
+                    "params": {"path": "tone.wav", "volume": 2.0}
+                 }]},
+                {"id": 3, "sceneId": 1, "type": "rect", "start": 0, "duration": 60,
+                 "layer": 3, "params": {}, "audioPlugins": [],
+                 "effects": [{
+                    "id": "transform", "name": "Transform", "enabled": true,
+                    "params": {"x": 0.0}
+                 }]},
+                {"id": 4, "sceneId": 1, "type": "camera_control", "start": 0,
+                 "duration": 60, "layer": 2, "params": {}, "audioPlugins": [],
+                 "effects": [{
+                    "id": "camera_control", "name": "Camera Control", "enabled": true,
+                    "params": {"layerCount": 1, "fov": 30.0}
+                 }]}
+            ]
+        });
+        let bytes = serde_json::to_vec(&input).expect("serialize project fixture");
+        let document = crate::project::parse_project_document(&bytes).expect("project parses");
+        let mut plan = SceneRenderPlan::from_document(&document, 1).expect("scene plan builds");
+        let frame = plan.evaluate(10);
+
+        let media = frame
+            .layers
+            .iter()
+            .find(|layer| layer.clip_id == 1)
+            .expect("media layer renders");
+        // The object's own transform plus the layer's screen-space offset.
+        assert_eq!(
+            (media.transform.x, media.transform.y, media.transform.z),
+            (15.0, -4.0, 2.0)
+        );
+
+        let audio = frame
+            .audio
+            .iter()
+            .find(|audio| audio.clip_id == 2)
+            .expect("audio layer renders");
+        assert_eq!(audio.volume, 1.0, "2.0 object volume x 50 % layer volume");
+
+        let camera_target = frame
+            .layers
+            .iter()
+            .find(|layer| layer.clip_id == 3)
+            .expect("camera target renders");
+        assert_eq!(
+            camera_target.transform.x, 0.0,
+            "a camera target keeps its own coordinates"
+        );
+
+        let camera = frame
+            .layers
+            .iter()
+            .find(|layer| layer.clip_id == 4)
+            .expect("camera control renders");
+        assert_eq!(
+            camera.transform.x, 0.0,
+            "control objects are never moved by layer settings"
+        );
+        assert!(frame.camera.is_some(), "the camera still reaches the scene");
     }
 
     #[test]

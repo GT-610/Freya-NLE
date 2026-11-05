@@ -1,3 +1,4 @@
+use crate::keyframe_document::parse_hex_color;
 use crate::policy::canonical_playback_mode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
@@ -21,6 +22,14 @@ const MAX_MAGNETIC_SNAP_RANGE: i32 = 100;
 /// Longest note a frame mark may carry, counted in characters so a note made of
 /// multi-byte text cannot exceed it by accident.
 pub const MAX_MARK_NOTE_CHARS: usize = 512;
+/// Longest name a layer setting may carry, counted the same way.
+pub const MAX_LAYER_NAME_CHARS: usize = 64;
+/// Largest per-layer coordinate offset, in pixels. AviUtl2's layer settings are
+/// free numeric fields; the bound only keeps a malformed document from
+/// producing coordinates a float cannot render.
+pub const MAX_LAYER_OFFSET: f64 = 100_000.0;
+/// Largest per-layer volume multiplier, as a percentage.
+pub const MAX_LAYER_VOLUME_PERCENT: f64 = 500.0;
 pub const MAX_TIMELINE_LAYERS: i32 = 512;
 pub const MAX_TIMELINE_LAYER: i32 = MAX_TIMELINE_LAYERS - 1;
 
@@ -86,8 +95,41 @@ pub struct SceneDocument {
     /// marks existed; the normalizer sorts and de-duplicates whatever is read.
     #[serde(default)]
     pub marks: Vec<SceneMark>,
+    /// Per-layer names, colours and offsets. Only layers that differ from the
+    /// defaults need an entry, so an untouched scene stores nothing here.
+    #[serde(rename = "layerSettings", default)]
+    pub layer_settings: Vec<LayerSettingDocument>,
     #[serde(flatten)]
     pub extra: ExtraFields,
+}
+
+/// One layer's identity and offset, matching AviUtl2's レイヤー設定 surface.
+///
+/// The offsets apply to every media object on the layer; control objects keep
+/// their own coordinates. The volume multiplies the audio volume of every media
+/// object on the layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerSettingDocument {
+    pub layer: i32,
+    #[serde(default)]
+    pub name: String,
+    /// `#rrggbb` or `#aarrggbb`, or empty for the editor's default background.
+    #[serde(default)]
+    pub background: String,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub z: f64,
+    #[serde(rename = "volumePercent", default = "default_layer_volume_percent")]
+    pub volume_percent: f64,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
+fn default_layer_volume_percent() -> f64 {
+    100.0
 }
 
 /// One frame mark: a frame number and the note the user attached to it.
@@ -277,6 +319,93 @@ fn normalize_marks(value: Option<&Value>) -> Value {
     Value::Array(marks)
 }
 
+/// Canonical `#rrggbb`/`#aarrggbb` for a colour a document field accepts, or
+/// `None` when the text is not one of those forms.
+///
+/// Layer backgrounds use this so the stored value and the interface agree on
+/// what a valid colour looks like; the colour pickers in the settings dialog
+/// reuse it.
+pub fn normalize_hex_color(value: &str) -> Option<String> {
+    let [alpha, red, green, blue] = parse_hex_color(value.trim())?;
+    Some(if alpha == 255 {
+        format!("#{red:02x}{green:02x}{blue:02x}")
+    } else {
+        format!("#{alpha:02x}{red:02x}{green:02x}{blue:02x}")
+    })
+}
+
+fn normalize_layer_background(value: &str) -> String {
+    normalize_hex_color(value).unwrap_or_default()
+}
+
+fn normalize_layer_settings(value: Option<&Value>) -> Value {
+    let mut layers = array(value)
+        .into_iter()
+        .filter_map(|setting| {
+            let setting = object(Some(&setting));
+            let layer = integer(setting.get("layer"), -1);
+            if !(0..=MAX_TIMELINE_LAYER).contains(&layer) {
+                return None;
+            }
+            Some((layer, setting))
+        })
+        .collect::<Vec<_>>();
+    // Stable sort keeps the first entry when a document repeats a layer.
+    layers.sort_by_key(|(layer, _)| *layer);
+    let mut seen = BTreeSet::new();
+    let layers = layers
+        .into_iter()
+        .filter_map(|(layer, mut setting)| {
+            if !seen.insert(layer) {
+                return None;
+            }
+            let name = string(setting.get("name"), "");
+            let name = name
+                .trim()
+                .chars()
+                .take(MAX_LAYER_NAME_CHARS)
+                .collect::<String>();
+            let background = normalize_layer_background(&string(setting.get("background"), ""));
+            let offset = |key: &str| {
+                floating(setting.get(key), 0.0).clamp(-MAX_LAYER_OFFSET, MAX_LAYER_OFFSET)
+            };
+            let x = offset("x");
+            let y = offset("y");
+            let z = offset("z");
+            let volume_percent =
+                floating(setting.get("volumePercent"), default_layer_volume_percent())
+                    .clamp(0.0, MAX_LAYER_VOLUME_PERCENT);
+            // An entry that says nothing keeps the file small; one that carries
+            // extension fields is kept so a plug-in's data survives a save.
+            let extension = setting.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "layer" | "name" | "background" | "x" | "y" | "z" | "volumePercent"
+                )
+            });
+            if name.is_empty()
+                && background.is_empty()
+                && x == 0.0
+                && y == 0.0
+                && z == 0.0
+                && volume_percent == default_layer_volume_percent()
+                && !extension
+            {
+                return None;
+            }
+            set_integer(&mut setting, "layer", layer);
+            set_string(&mut setting, "name", name);
+            set_string(&mut setting, "background", background);
+            set_floating(&mut setting, "x", x);
+            set_floating(&mut setting, "y", y);
+            set_floating(&mut setting, "z", z);
+            set_floating(&mut setting, "volumePercent", volume_percent);
+            Some(Value::Object(setting))
+        })
+        .collect::<Vec<_>>();
+    Value::Array(layers)
+}
+
 fn normalize_settings(root: &mut Map<String, Value>) -> (i32, i32, f64, i32) {
     let mut settings = object(root.get("settings"));
     let width = bounded_positive(
@@ -431,6 +560,13 @@ fn normalize_scenes(
             // none, and a document that round-trips through an older build must not
             // lose marks just because its version number stayed low.
             scene.insert("marks".to_owned(), normalize_marks(scene.get("marks")));
+            // Layer settings follow the same rule: read from every version and
+            // normalized into an explicit array so the typed document always has
+            // a valid list.
+            scene.insert(
+                "layerSettings".to_owned(),
+                normalize_layer_settings(scene.get("layerSettings")),
+            );
             Value::Object(scene)
         })
         .collect();
@@ -692,6 +828,74 @@ mod tests {
         assert!(document.scenes[0].marks.is_empty());
         let normalized = normalize(std::str::from_utf8(input).expect("utf-8 fixture"));
         assert_eq!(normalized["scenes"][0]["marks"], serde_json::json!([]));
+        assert_eq!(
+            normalized["scenes"][0]["layerSettings"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn normalizes_layer_settings_by_sorting_clamping_and_dropping_defaults() {
+        let input = r##"{
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+            "scenes": [{
+                "id": 1,
+                "layerSettings": [
+                    {"layer": 3, "name": "  Titles  ", "background": "#AABBCC",
+                     "x": 12.5, "y": -4.0, "z": 0.0, "volumePercent": 50,
+                     "layerExtension": "kept"},
+                    {"layer": 1, "name": "", "background": "not-a-colour",
+                     "x": 1.0, "y": 0.0, "z": 0.0, "volumePercent": 100},
+                    {"layer": 3, "name": "duplicate layer is dropped"},
+                    {"layer": -1, "name": "negative layers are dropped"},
+                    {"layer": 700, "name": "beyond the timeline"},
+                    {"layer": 5, "name": "", "x": 0.0, "y": 0.0,
+                     "z": 0.0, "volumePercent": 100, "background": ""}
+                ]
+            }],
+            "clips": []
+        }"##;
+        let normalized = normalize(input);
+        let layers = normalized["scenes"][0]["layerSettings"]
+            .as_array()
+            .expect("layer settings array");
+        // Layer 1 keeps its non-default x, layer 3 is first (so keeps its name),
+        // layer 5 is entirely default and disappears.
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0]["layer"], 1);
+        assert_eq!(layers[0]["background"], "", "an invalid colour is cleared");
+        assert_eq!(layers[1]["layer"], 3);
+        assert_eq!(layers[1]["name"], "Titles");
+        assert_eq!(layers[1]["background"], "#aabbcc");
+        assert_eq!(layers[1]["volumePercent"], 50.0);
+        assert_eq!(layers[1]["layerExtension"], "kept");
+    }
+
+    #[test]
+    fn layer_settings_clamp_out_of_range_values() {
+        let input = r#"{
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+            "scenes": [{
+                "id": 1,
+                "layerSettings": [
+                    {"layer": 0, "x": 999999.0, "y": -999999.0, "z": 200000.0,
+                     "volumePercent": 900},
+                    {"layer": 2, "x": 1.0, "y": 2.0, "z": 3.0, "volumePercent": -20}
+                ]
+            }],
+            "clips": []
+        }"#;
+        let normalized = normalize(input);
+        let layers = normalized["scenes"][0]["layerSettings"]
+            .as_array()
+            .expect("layer settings array");
+        assert_eq!(layers[0]["x"], MAX_LAYER_OFFSET);
+        assert_eq!(layers[0]["y"], -MAX_LAYER_OFFSET);
+        assert_eq!(layers[0]["z"], MAX_LAYER_OFFSET);
+        assert_eq!(layers[0]["volumePercent"], MAX_LAYER_VOLUME_PERCENT);
+        assert_eq!(layers[1]["volumePercent"], 0.0);
     }
 
     #[test]

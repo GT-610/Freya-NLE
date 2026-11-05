@@ -375,6 +375,7 @@ mod tests {
             enable_snap: true,
             magnetic_snap_range: 10,
             marks: Vec::new(),
+            layer_settings: Vec::new(),
             extra: Default::default(),
         }
     }

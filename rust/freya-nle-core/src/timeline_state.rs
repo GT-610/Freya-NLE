@@ -1,10 +1,13 @@
-use crate::keyframe_document::{move_track, remove_track, set_track, split_track, sync_track};
+use crate::keyframe_document::{
+    move_track, parse_hex_color, remove_track, set_track, split_track, sync_track,
+};
 use crate::policy::{
     PlaybackMode, audio_duration_frames, audio_parameter_affects_duration, is_video_file,
     playback_mode,
 };
 use crate::project::{
     AudioPluginDocument, ClipDocument, DEFAULT_FPS, EffectDocument, ExtraFields,
+    LayerSettingDocument, MAX_LAYER_NAME_CHARS, MAX_LAYER_OFFSET, MAX_LAYER_VOLUME_PERCENT,
     MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, ProjectDocument, ProjectError, ProjectSettings,
     SceneDocument, SceneMark,
 };
@@ -236,18 +239,26 @@ impl TimelineState {
                 }
                 let mut after = before.clone();
                 after.marks = marks;
-                Ok(replacement_transaction(
-                    PatchOperation::ReplaceScene {
-                        index,
-                        before: before.clone(),
-                        after: after.clone(),
-                    },
-                    PatchOperation::ReplaceScene {
-                        index,
-                        before: after,
-                        after: before,
-                    },
-                ))
+                Ok(replace_scene_transaction(index, before, after))
+            }
+            EditRequest::SetSceneLayerSettings { scene_id, layers } => {
+                if !valid_layer_settings(&layers) {
+                    return Err(StateError::InvalidArgument);
+                }
+                let index = self
+                    .document
+                    .scenes
+                    .iter()
+                    .position(|item| item.id == scene_id)
+                    .ok_or(StateError::InvalidArgument)?;
+                let before = self.document.scenes[index].clone();
+                if before.layer_settings == layers {
+                    // No change means no patch, so a no-op never reaches the history stack.
+                    return Err(StateError::InvalidArgument);
+                }
+                let mut after = before.clone();
+                after.layer_settings = layers;
+                Ok(replace_scene_transaction(index, before, after))
             }
             EditRequest::InsertClip { index, clip } => {
                 if self.document.clips.iter().any(|item| item.id == clip.id)
@@ -1039,6 +1050,13 @@ pub enum EditRequest {
         scene_id: i32,
         marks: Vec<SceneMark>,
     },
+    /// Replaces one scene's per-layer settings. Layers must be non-negative and
+    /// strictly ascending; an identical list is rejected so a no-op never enters
+    /// history.
+    SetSceneLayerSettings {
+        scene_id: i32,
+        layers: Vec<LayerSettingDocument>,
+    },
     InsertClip {
         #[serde(default)]
         index: Option<usize>,
@@ -1330,6 +1348,29 @@ fn compact_clip_replacements(operations: Vec<PatchOperation>) -> Vec<PatchOperat
 
 fn replacement_transaction(forward: PatchOperation, inverse: PatchOperation) -> Transaction {
     transaction(vec![forward], vec![inverse])
+}
+
+/// One scene replaced by an edited copy of itself, reversible as one step.
+///
+/// Marks and layer settings both edit a single field of a scene; sharing this
+/// keeps their preconditions (index, before, after) in one place.
+fn replace_scene_transaction(
+    index: usize,
+    before: SceneDocument,
+    after: SceneDocument,
+) -> Transaction {
+    replacement_transaction(
+        PatchOperation::ReplaceScene {
+            index,
+            before: before.clone(),
+            after: after.clone(),
+        },
+        PatchOperation::ReplaceScene {
+            index,
+            before: after,
+            after: before,
+        },
+    )
 }
 
 /// Plans a scene and clip replacement while preserving the current version, settings, and extras.
@@ -1859,6 +1900,33 @@ fn valid_scene_marks(marks: &[SceneMark]) -> bool {
     })
 }
 
+/// Layer settings must name real layers in ascending order; the normalizer
+/// already sorts them, so a document built in code has to match that shape.
+fn valid_layer_settings(settings: &[LayerSettingDocument]) -> bool {
+    let mut previous: Option<i32> = None;
+    settings.iter().all(|setting| {
+        if !(0..=MAX_TIMELINE_LAYER).contains(&setting.layer)
+            || setting.name.chars().count() > MAX_LAYER_NAME_CHARS
+            || (!setting.background.is_empty() && parse_hex_color(&setting.background).is_none())
+            || !setting.x.is_finite()
+            || !setting.y.is_finite()
+            || !setting.z.is_finite()
+            || setting.x.abs() > MAX_LAYER_OFFSET
+            || setting.y.abs() > MAX_LAYER_OFFSET
+            || setting.z.abs() > MAX_LAYER_OFFSET
+            || !setting.volume_percent.is_finite()
+            || !(0.0..=MAX_LAYER_VOLUME_PERCENT).contains(&setting.volume_percent)
+        {
+            return false;
+        }
+        if previous.is_some_and(|layer| setting.layer <= layer) {
+            return false;
+        }
+        previous = Some(setting.layer);
+        true
+    })
+}
+
 fn validate_document(document: &ProjectDocument) -> Result<(), StateError> {
     let settings = &document.settings;
     if !(1..=32_768).contains(&settings.width)
@@ -1872,7 +1940,10 @@ fn validate_document(document: &ProjectDocument) -> Result<(), StateError> {
     }
     let mut scene_ids = BTreeSet::new();
     if document.scenes.iter().any(|scene| {
-        scene.id < 0 || !scene_ids.insert(scene.id) || !valid_scene_marks(&scene.marks)
+        scene.id < 0
+            || !scene_ids.insert(scene.id)
+            || !valid_scene_marks(&scene.marks)
+            || !valid_layer_settings(&scene.layer_settings)
     }) {
         return Err(StateError::InvalidArgument);
     }
@@ -2231,6 +2302,102 @@ mod tests {
         assert_eq!(state.document, before);
     }
 
+    fn layer_setting(layer: i32, name: &str) -> LayerSettingDocument {
+        LayerSettingDocument {
+            layer,
+            name: name.to_owned(),
+            background: String::new(),
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            volume_percent: 100.0,
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn scene_layer_settings_replace_as_one_reversible_patch() {
+        let mut before = document();
+        before.scenes[0]
+            .extra
+            .insert("sceneExtension".to_owned(), json!({"token": 1}));
+        let mut state = TimelineState::new(before.clone(), 2, 1).expect("valid state");
+        let mut title = layer_setting(2, "Titles");
+        title.x = 12.0;
+        title.volume_percent = 50.0;
+        let layers = vec![layer_setting(0, "Background"), title];
+
+        let transaction = state
+            .plan(EditRequest::SetSceneLayerSettings {
+                scene_id: 0,
+                layers: layers.clone(),
+            })
+            .expect("layer settings plan");
+        state
+            .apply_patch(&transaction.forward)
+            .expect("layer settings apply");
+        assert_eq!(state.document.scenes[0].layer_settings, layers);
+        // Only the settings changed; marks, name and extras survive.
+        assert_eq!(state.document.scenes[0].marks, before.scenes[0].marks);
+        assert_eq!(state.document.scenes[0].name, before.scenes[0].name);
+        assert_eq!(
+            state.document.scenes[0].extra["sceneExtension"],
+            json!({"token": 1})
+        );
+
+        state
+            .apply_patch(&transaction.inverse)
+            .expect("layer settings reverse");
+        assert_eq!(state.document, before);
+    }
+
+    #[test]
+    fn scene_layer_settings_reject_out_of_order_and_out_of_range_values() {
+        let state = TimelineState::new(document(), 2, 1).expect("valid state");
+        let invalid = [
+            vec![layer_setting(2, ""), layer_setting(2, "duplicate")],
+            vec![layer_setting(4, ""), layer_setting(1, "descending")],
+            vec![layer_setting(-1, "negative")],
+            vec![layer_setting(MAX_TIMELINE_LAYER + 1, "beyond the timeline")],
+        ];
+        for layers in invalid {
+            assert!(
+                state
+                    .plan(EditRequest::SetSceneLayerSettings {
+                        scene_id: 0,
+                        layers
+                    })
+                    .is_err(),
+                "an unordered or out-of-range layer list must be refused"
+            );
+        }
+        let mut too_wide = layer_setting(0, "");
+        too_wide.x = MAX_LAYER_OFFSET + 1.0;
+        let mut too_loud = layer_setting(1, "");
+        too_loud.volume_percent = MAX_LAYER_VOLUME_PERCENT + 1.0;
+        let mut bad_color = layer_setting(2, "");
+        bad_color.background = "#12".to_owned();
+        for setting in [too_wide, too_loud, bad_color] {
+            assert!(
+                state
+                    .plan(EditRequest::SetSceneLayerSettings {
+                        scene_id: 0,
+                        layers: vec![setting],
+                    })
+                    .is_err()
+            );
+        }
+        assert!(
+            state
+                .plan(EditRequest::SetSceneLayerSettings {
+                    scene_id: 0,
+                    layers: Vec::new(),
+                })
+                .is_err(),
+            "an empty list on an empty scene is a no-op"
+        );
+    }
+
     #[test]
     fn scene_marks_reject_invalid_unchanged_and_unknown_scene_lists() {
         let state = TimelineState::new(document(), 2, 1).expect("valid state");
@@ -2269,6 +2436,16 @@ mod tests {
     fn document_validation_rejects_out_of_order_marks() {
         let mut document = document();
         document.scenes[0].marks = vec![mark(4, ""), mark(2, "")];
+        assert_eq!(
+            TimelineState::new(document, 2, 1).err(),
+            Some(StateError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn document_validation_rejects_out_of_order_layer_settings() {
+        let mut document = document();
+        document.scenes[0].layer_settings = vec![layer_setting(3, ""), layer_setting(1, "")];
         assert_eq!(
             TimelineState::new(document, 2, 1).err(),
             Some(StateError::InvalidArgument)

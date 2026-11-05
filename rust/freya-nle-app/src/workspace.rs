@@ -15,12 +15,13 @@ use crate::timeline_interaction::{TimelineDragRequest, plan_timeline_drag};
 use crate::transport::Transport;
 use freya_nle_core::api::{
     ClipDocument, ClipGeometryUpdate, EffectDocument, EffectInsertion, EffectMetadata,
-    EffectPreset, MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, MidpointOperation,
-    ProjectDocument, ProjectSettings, SceneDocument, SceneMark, TimelineCommand,
+    EffectPreset, LayerSettingDocument, MAX_LAYER_NAME_CHARS, MAX_LAYER_OFFSET,
+    MAX_LAYER_VOLUME_PERCENT, MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS,
+    MidpointOperation, ProjectDocument, ProjectSettings, SceneDocument, SceneMark, TimelineCommand,
     TimelineTransaction, TrimEdge, clipboard_duration, evaluate_keyframe_track,
-    find_vacant_scene_frame, inspect_keyframe_track, plan_clip_delta_move, plan_clip_ripple_trim,
-    plan_clip_roll, plan_clip_slide, plan_clip_slip, plan_clipboard_paste, plan_effect_reorder,
-    plan_scene_layer_insertion, plan_scene_layer_shift, snap_scene_frame,
+    find_vacant_scene_frame, inspect_keyframe_track, normalize_hex_color, plan_clip_delta_move,
+    plan_clip_ripple_trim, plan_clip_roll, plan_clip_slide, plan_clip_slip, plan_clipboard_paste,
+    plan_effect_reorder, plan_scene_layer_insertion, plan_scene_layer_shift, snap_scene_frame,
     timeline_duration as core_timeline_duration,
 };
 use serde_json::{Map, Value, json};
@@ -130,6 +131,33 @@ pub struct SceneSettingsInput {
     pub grid_subdivision: i32,
     pub enable_snap: bool,
     pub magnetic_snap_range: i32,
+}
+
+/// One layer's editable settings, as the layer-settings dialog fields them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerSettingsInput {
+    pub layer: i32,
+    pub name: String,
+    pub background: String,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub volume_percent: f64,
+}
+
+impl LayerSettingsInput {
+    /// The values AviUtl2 shows for a layer that has no settings entry.
+    pub fn defaults(layer: i32) -> Self {
+        Self {
+            layer,
+            name: String::new(),
+            background: String::new(),
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            volume_percent: 100.0,
+        }
+    }
 }
 
 /// Framework-neutral state and commands for one open project workspace.
@@ -1891,6 +1919,7 @@ impl WorkspaceModel {
             enable_snap: true,
             magnetic_snap_range: 10,
             marks: Vec::new(),
+            layer_settings: Vec::new(),
             extra: BTreeMap::new(),
         };
         if !self.execute(TimelineCommand::InsertScene { index: None, scene }) {
@@ -2135,6 +2164,134 @@ impl WorkspaceModel {
             return false;
         };
         self.seek(frame);
+        true
+    }
+
+    /// Layer settings that differ from the defaults in the edited scene.
+    pub fn layer_settings(&self) -> Vec<LayerSettingsInput> {
+        self.selected_scene_document()
+            .map(|scene| {
+                scene
+                    .layer_settings
+                    .iter()
+                    .map(layer_settings_input)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Edited values for one layer, using the defaults when it has no entry.
+    pub fn layer_settings_for(&self, layer: i32) -> LayerSettingsInput {
+        self.selected_scene_document()
+            .and_then(|scene| {
+                scene
+                    .layer_settings
+                    .iter()
+                    .find(|setting| setting.layer == layer)
+            })
+            .map(layer_settings_input)
+            .unwrap_or_else(|| LayerSettingsInput::defaults(layer))
+    }
+
+    /// Applies one layer's settings as one undo step.
+    ///
+    /// Numeric values outside the document's bounds are folded into them rather
+    /// than rejected, because they come from spin boxes; only a colour that is
+    /// not `#RRGGBB`/`#AARRGGBB` refuses the edit. Setting a layer back to its
+    /// defaults removes its entry instead of storing a redundant one.
+    pub fn update_layer_settings(&mut self, input: LayerSettingsInput) -> bool {
+        if !(0..=MAX_TIMELINE_LAYER).contains(&input.layer) {
+            self.set_status(status_message!(
+                "Layer {} is outside the timeline",
+                "图层 {} 超出时间线范围",
+                "レイヤー {} はタイムラインの範囲外です",
+                input.layer
+            ));
+            return false;
+        }
+        let background = input.background.trim();
+        let background = if background.is_empty() {
+            String::new()
+        } else {
+            let Some(background) = normalize_hex_color(background) else {
+                self.set_status(status_message!(
+                    "“{}” is not a colour like #RRGGBB",
+                    "“{}” 不是 #RRGGBB 形式的颜色",
+                    "“{}” は #RRGGBB 形式の色ではありません",
+                    background
+                ));
+                return false;
+            };
+            background
+        };
+        let setting = LayerSettingDocument {
+            layer: input.layer,
+            name: input
+                .name
+                .trim()
+                .chars()
+                .take(MAX_LAYER_NAME_CHARS)
+                .collect(),
+            background,
+            x: clamp_layer_offset(input.x),
+            y: clamp_layer_offset(input.y),
+            z: clamp_layer_offset(input.z),
+            volume_percent: clamp_layer_volume(input.volume_percent),
+            extra: BTreeMap::new(),
+        };
+        let default = LayerSettingDocument {
+            layer: input.layer,
+            name: String::new(),
+            background: String::new(),
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            volume_percent: 100.0,
+            extra: BTreeMap::new(),
+        };
+        let scene_id = self.selected_scene;
+        let Some(existing) = self
+            .project
+            .document
+            .scenes
+            .iter()
+            .find(|scene| scene.id == scene_id)
+            .map(|scene| scene.layer_settings.clone())
+        else {
+            self.set_status(status_message!(
+                "Scene #{scene_id} does not exist",
+                "场景 #{scene_id} 不存在",
+                "シーン #{scene_id} は存在しません"
+            ));
+            return false;
+        };
+        let mut layers = existing.clone();
+        let position = layers.iter().position(|layer| layer.layer == input.layer);
+        let redundant = setting == default;
+        match (position, redundant) {
+            (Some(index), true) => {
+                layers.remove(index);
+            }
+            (Some(index), false) => layers[index] = setting,
+            (None, true) => return true,
+            (None, false) => {
+                layers.push(setting);
+                layers.sort_by_key(|layer| layer.layer);
+            }
+        }
+        if layers == existing {
+            return true;
+        }
+        if !self.execute(TimelineCommand::SetSceneLayerSettings { scene_id, layers }) {
+            return false;
+        }
+        let layer = input.layer;
+        self.set_status(status_message!(
+            "Updated the settings for layer {}",
+            "已更新图层 {} 的设置",
+            "レイヤー {} の設定を更新しました",
+            layer
+        ));
         true
     }
 
@@ -4989,6 +5146,36 @@ fn bounded_f64(value: f64, minimum: f64, maximum: f64, fallback: f64) -> f64 {
     }
 }
 
+/// Layer offsets are free numbers in the document; a spin box that arrives with
+/// a non-finite value falls back to no offset.
+fn clamp_layer_offset(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-MAX_LAYER_OFFSET, MAX_LAYER_OFFSET)
+    } else {
+        0.0
+    }
+}
+
+fn clamp_layer_volume(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, MAX_LAYER_VOLUME_PERCENT)
+    } else {
+        100.0
+    }
+}
+
+fn layer_settings_input(setting: &LayerSettingDocument) -> LayerSettingsInput {
+    LayerSettingsInput {
+        layer: setting.layer,
+        name: setting.name.clone(),
+        background: setting.background.clone(),
+        x: setting.x,
+        y: setting.y,
+        z: setting.z,
+        volume_percent: setting.volume_percent,
+    }
+}
+
 fn bounded_positive_i32(value: i32, maximum: i32, fallback: i32) -> i32 {
     if value <= 0 || value > maximum {
         fallback
@@ -5224,6 +5411,77 @@ mod tests {
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].frame, 12);
         assert_eq!(marks[0].note, "keep me");
+    }
+
+    #[test]
+    fn layer_settings_update_one_layer_and_undo() {
+        let mut workspace = workspace();
+        assert!(workspace.layer_settings().is_empty());
+        assert_eq!(
+            workspace.layer_settings_for(2),
+            LayerSettingsInput::defaults(2)
+        );
+
+        let input = LayerSettingsInput {
+            layer: 2,
+            name: " Titles ".to_owned(),
+            background: "#AABBCC".to_owned(),
+            x: 10.0,
+            y: -4.0,
+            z: 2.0,
+            volume_percent: 50.0,
+        };
+        assert!(workspace.update_layer_settings(input));
+        let saved = workspace.layer_settings_for(2);
+        assert_eq!(saved.name, "Titles");
+        assert_eq!(saved.background, "#aabbcc");
+        assert_eq!((saved.x, saved.y, saved.z), (10.0, -4.0, 2.0));
+        assert_eq!(saved.volume_percent, 50.0);
+
+        let mut other = LayerSettingsInput::defaults(0);
+        other.name = "Background".to_owned();
+        assert!(workspace.update_layer_settings(other));
+        assert_eq!(workspace.layer_settings().len(), 2);
+
+        // Each edit is one step: undo removes only the second layer's entry.
+        assert!(workspace.undo());
+        assert_eq!(workspace.layer_settings().len(), 1);
+        assert_eq!(workspace.layer_settings()[0].layer, 2);
+
+        // Setting a layer back to its defaults removes the entry.
+        assert!(workspace.update_layer_settings(LayerSettingsInput::defaults(2)));
+        assert!(workspace.layer_settings().is_empty());
+    }
+
+    #[test]
+    fn layer_settings_reject_a_bad_colour_and_clamp_numbers() {
+        let mut workspace = workspace();
+        let mut bad = LayerSettingsInput::defaults(1);
+        bad.background = "blue".to_owned();
+        assert!(!workspace.update_layer_settings(bad));
+        assert!(workspace.layer_settings().is_empty());
+
+        let mut extreme = LayerSettingsInput::defaults(1);
+        extreme.x = 1.0e9;
+        extreme.z = f64::NAN;
+        extreme.volume_percent = 900.0;
+        assert!(workspace.update_layer_settings(extreme));
+        let saved = workspace.layer_settings_for(1);
+        assert_eq!(saved.x, MAX_LAYER_OFFSET);
+        assert_eq!(saved.z, 0.0, "a non-finite offset falls back to none");
+        assert_eq!(saved.volume_percent, MAX_LAYER_VOLUME_PERCENT);
+    }
+
+    #[test]
+    fn layer_settings_are_scoped_to_the_scene() {
+        let mut workspace = workspace();
+        let mut input = LayerSettingsInput::defaults(0);
+        input.name = "Scene one".to_owned();
+        assert!(workspace.update_layer_settings(input));
+        workspace.switch_scene(2);
+        assert!(workspace.layer_settings().is_empty());
+        workspace.switch_scene(1);
+        assert_eq!(workspace.layer_settings()[0].name, "Scene one");
     }
 
     /// A minimal object file with one text object, enough to exercise the import path.

@@ -28,13 +28,13 @@ pub mod transport;
 pub mod workspace;
 
 pub use freya_nle_core::api::{
-    MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, ProjectDocument, TrimEdge, plan_clip_roll,
-    plan_clip_slide,
+    MAX_LAYER_OFFSET, MAX_LAYER_VOLUME_PERCENT, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS,
+    ProjectDocument, TrimEdge, plan_clip_roll, plan_clip_slide,
 };
 pub use lifecycle::{LifecycleStep, SaveDecision};
 pub use project_io::{PROJECT_EXTENSION, ProjectDefaults, ProjectSession};
 pub use recovery::RecoveryEntry;
-pub use workspace::{ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
+pub use workspace::{LayerSettingsInput, ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
 
 use lifecycle::{LifecycleContinuation, PendingLifecycle};
 use recovery::{
