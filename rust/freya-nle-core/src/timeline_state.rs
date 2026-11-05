@@ -1959,6 +1959,7 @@ fn validate_document(document: &ProjectDocument) -> Result<(), StateError> {
             || clip.start < 0
             || clip.duration < 1
             || !(0..=MAX_TIMELINE_LAYER).contains(&clip.layer)
+            || clip.group.is_some_and(|group| group < 0)
             || !scene_ids.contains(&clip.scene_id)
             || !clip_ids.insert(clip.id)
     }) {
@@ -2442,6 +2443,16 @@ mod tests {
     fn document_validation_rejects_out_of_order_marks() {
         let mut document = document();
         document.scenes[0].marks = vec![mark(4, ""), mark(2, "")];
+        assert_eq!(
+            TimelineState::new(document, 2, 1).err(),
+            Some(StateError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn document_validation_rejects_negative_clip_groups() {
+        let mut document = document();
+        document.clips[0].group = Some(-1);
         assert_eq!(
             TimelineState::new(document, 2, 1).err(),
             Some(StateError::InvalidArgument)

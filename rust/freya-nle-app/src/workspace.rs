@@ -108,6 +108,7 @@ pub struct TimelineClip {
     pub clip_by_upper_object: bool,
     pub selected: bool,
     pub primary: bool,
+    pub grouped: bool,
 }
 
 /// One object that is visible at the playhead, as AviUtl2's object list shows it.
@@ -385,6 +386,7 @@ impl WorkspaceModel {
                 clip_by_upper_object: clip.clip_by_upper_object,
                 selected: self.selection.is_visually_selected(clip.id),
                 primary: self.selection.primary() == Some(clip.id),
+                grouped: clip.group.is_some(),
             })
             .collect()
     }
@@ -2817,22 +2819,202 @@ impl WorkspaceModel {
 
     pub fn click_clip(&mut self, clip_id: i32, control: bool) {
         self.finish_continuous_edit();
-        self.selection.click_clip(clip_id, control);
+        self.select_clip_with_group(clip_id, control);
         self.reconcile_effect_selection();
     }
 
     pub fn prepare_clip_drag(&mut self, clip_id: i32, control: bool) {
         if !self.selection.is_selected(clip_id) {
-            self.selection.click_clip(clip_id, control);
+            self.select_clip_with_group(clip_id, control);
             self.reconcile_effect_selection();
         }
     }
 
     pub fn context_click_clip(&mut self, clip_id: i32) {
         if !self.selection.is_selected(clip_id) {
-            self.selection.click_clip(clip_id, false);
+            self.select_clip_with_group(clip_id, false);
         }
         self.reconcile_effect_selection();
+    }
+
+    /// Selects a clip together with every clip in its group, so a group is
+    /// always clicked as one unit.
+    fn select_clip_with_group(&mut self, clip_id: i32, control: bool) {
+        let members = self.group_members(clip_id);
+        if members.len() > 1 {
+            self.selection.click_ids(&members, control);
+        } else {
+            self.selection.click_clip(clip_id, control);
+        }
+    }
+
+    /// Clips in the edited scene that share a group with `clip_id`.
+    pub fn group_members(&self, clip_id: i32) -> Vec<i32> {
+        let Some(clip) = self
+            .project
+            .document
+            .clips
+            .iter()
+            .find(|clip| clip.id == clip_id && clip.scene_id == self.selected_scene)
+        else {
+            return vec![clip_id];
+        };
+        let Some(group) = clip.group else {
+            return vec![clip_id];
+        };
+        self.project
+            .document
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == self.selected_scene && clip.group == Some(group))
+            .map(|clip| clip.id)
+            .collect()
+    }
+
+    /// The current selection plus the members of any group it touches.
+    pub fn selection_with_groups(&self) -> Vec<i32> {
+        let mut ids = Vec::new();
+        for id in self.selection.ids() {
+            for member in self.group_members(*id) {
+                if !ids.contains(&member) {
+                    ids.push(member);
+                }
+            }
+        }
+        ids
+    }
+
+    pub fn selection_has_group(&self) -> bool {
+        self.selection.ids().iter().any(|id| {
+            self.project
+                .document
+                .clips
+                .iter()
+                .any(|clip| clip.id == *id && clip.group.is_some())
+        })
+    }
+
+    /// Groups the selected clips under a fresh project-wide id.
+    pub fn group_selected_clips(&mut self) -> bool {
+        let ids = self.selection.ids().to_vec();
+        if ids.len() < 2 {
+            self.set_status(status_message!(
+                "Select at least two objects to group",
+                "请至少选择两个对象再分组",
+                "グループ化するには 2 つ以上のオブジェクトを選択してください"
+            ));
+            return false;
+        }
+        let group = self.next_group_id();
+        let mut commands = Vec::new();
+        for id in &ids {
+            let Some(clip) = self
+                .project
+                .document
+                .clips
+                .iter()
+                .find(|clip| clip.id == *id && clip.scene_id == self.selected_scene)
+                .cloned()
+            else {
+                continue;
+            };
+            let mut after = clip;
+            after.group = Some(group);
+            commands.push(TimelineCommand::ReplaceClip {
+                clip_id: *id,
+                clip: after,
+            });
+        }
+        if commands.is_empty() {
+            return false;
+        }
+        let count = commands.len();
+        if !self.execute_batch(commands) {
+            return false;
+        }
+        self.set_status(status_message!(
+            "Grouped {count} objects",
+            "已将 {count} 个对象分组",
+            "{count} 個のオブジェクトをグループ化しました"
+        ));
+        true
+    }
+
+    /// Removes the selected clips from their groups.
+    pub fn ungroup_selected_clips(&mut self) -> bool {
+        let ids = self.selection.ids().to_vec();
+        let mut commands = Vec::new();
+        for id in &ids {
+            let Some(clip) = self
+                .project
+                .document
+                .clips
+                .iter()
+                .find(|clip| clip.id == *id && clip.scene_id == self.selected_scene)
+                .cloned()
+            else {
+                continue;
+            };
+            if clip.group.is_none() {
+                continue;
+            }
+            let mut after = clip;
+            after.group = None;
+            commands.push(TimelineCommand::ReplaceClip {
+                clip_id: *id,
+                clip: after,
+            });
+        }
+        if commands.is_empty() {
+            self.set_status(status_message!(
+                "The selection has no group to remove",
+                "所选对象没有可解除的分组",
+                "選択範囲に解除するグループがありません"
+            ));
+            return false;
+        }
+        let count = commands.len();
+        if !self.execute_batch(commands) {
+            return false;
+        }
+        self.set_status(status_message!(
+            "Ungrouped {count} objects",
+            "已解除 {count} 个对象的分组",
+            "{count} 個のオブジェクトのグループを解除しました"
+        ));
+        true
+    }
+
+    /// Gives every group in an imported block a fresh id, preserving which
+    /// imported clips shared a group.
+    fn remap_imported_groups(&self, clips: &mut [ClipDocument]) {
+        let mut next = self.next_group_id();
+        let mut map = std::collections::BTreeMap::new();
+        for clip in clips {
+            let Some(group) = clip.group else {
+                continue;
+            };
+            let mapped = *map.entry(group).or_insert_with(|| {
+                let id = next;
+                next = next.saturating_add(1);
+                id
+            });
+            clip.group = Some(mapped);
+        }
+    }
+
+    /// One past the largest group id in the project, so a new group never
+    /// inherits another group's members.
+    fn next_group_id(&self) -> i32 {
+        self.project
+            .document
+            .clips
+            .iter()
+            .filter_map(|clip| clip.group)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1)
     }
 
     pub fn toggle_clip_by_upper_object(&mut self, clip_id: i32) -> bool {
@@ -3516,6 +3698,8 @@ impl WorkspaceModel {
                 return None;
             }
         };
+        let mut next_group = self.next_group_id();
+        let mut group_map = std::collections::BTreeMap::new();
         let commands = self
             .clip_clipboard
             .iter()
@@ -3528,6 +3712,16 @@ impl WorkspaceModel {
                 clip.layer = geometry.layer;
                 clip.start = geometry.start;
                 clip.duration = geometry.duration;
+                // A pasted group keeps its shape but gets a fresh id: reusing
+                // the source id would merge it with the group it came from.
+                if let Some(group) = clip.group {
+                    let mapped = *group_map.entry(group).or_insert_with(|| {
+                        let id = next_group;
+                        next_group = next_group.saturating_add(1);
+                        id
+                    });
+                    clip.group = Some(mapped);
+                }
                 TimelineCommand::InsertClip { index: None, clip }
             })
             .collect();
@@ -3875,13 +4069,16 @@ impl WorkspaceModel {
                 return None;
             }
         };
-        let (clips, report) = crate::fragment::plan_import(
+        let (mut clips, report) = crate::fragment::plan_import(
             fragment,
             &scene,
             &self.project.document,
             ids[0],
             placement,
         );
+        // A fragment can carry grouped objects; fresh ids keep the pasted
+        // group separate from the group it was cut from.
+        self.remap_imported_groups(&mut clips);
         if let Some(layer) = crate::fragment::overlapping_layer(&clips) {
             // Clamping the fragment's layers onto this scene folds clips onto one another.
             // Importing that would put two objects on a layer and a frame, which the timeline
@@ -4477,7 +4674,7 @@ impl WorkspaceModel {
         plan_timeline_drag(
             &self.project.document,
             self.selected_scene,
-            self.selection.ids(),
+            &self.selection_with_groups(),
             request,
         )
     }
@@ -5219,6 +5416,7 @@ fn object_clip_from_metadata(
         duration,
         layer,
         clip_by_upper_object: false,
+        group: None,
         params: Map::new(),
         audio_plugins: Vec::new(),
         effects,
@@ -5485,6 +5683,7 @@ mod tests {
             duration: 10,
             layer: 0,
             clip_by_upper_object: false,
+            group: None,
             params: Map::new(),
             audio_plugins: Vec::new(),
             effects: effects
@@ -8048,6 +8247,108 @@ mod tests {
         assert_eq!(scene.effects[0].id, "transform");
         assert_eq!(scene.effects[1].id, "scene");
         assert_eq!(scene.effects[1].params["targetSceneId"], 2);
+    }
+
+    #[test]
+    fn grouping_selects_moves_and_ungroups_clips_together() {
+        let mut workspace = workspace();
+        workspace.click_clip(1, false);
+        workspace.click_clip(2, true);
+        assert_eq!(selected_ids(&workspace), [1, 2]);
+        assert!(workspace.group_selected_clips());
+        assert!(workspace.selection_has_group());
+        let group = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.id == 1)
+            .and_then(|clip| clip.group);
+        assert!(group.is_some());
+        assert_eq!(workspace.group_members(1), [1, 2]);
+
+        // Clicking any member selects the whole group.
+        workspace.click_clip(1, false);
+        assert_eq!(selected_ids(&workspace), [1, 2]);
+
+        // Dragging the anchor moves every member by the same delta.
+        let request = TimelineDragRequest {
+            anchor_clip_id: 1,
+            kind: TimelineDragKind::Move,
+            delta_pixels: (10.0, 0.0),
+            pixels_per_frame: 1.0,
+            layer_height: 30.0,
+            minimum_duration_frames: 1,
+            maximum_layers: 128,
+            ignore_snap: true,
+        };
+        assert!(workspace.drag_selected_clips(request));
+        let starts = workspace
+            .document()
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == 1)
+            .map(|clip| (clip.id, clip.start))
+            .collect::<Vec<_>>();
+        assert_eq!(starts, [(1, 10), (2, 40)]);
+
+        // The drag and the grouping are each one undo step.
+        assert!(workspace.undo());
+        assert!(workspace.undo());
+        assert!(
+            workspace
+                .document()
+                .clips
+                .iter()
+                .all(|clip| clip.group.is_none())
+        );
+
+        // Ungrouping clears the ids while keeping the selection.
+        assert!(workspace.group_selected_clips());
+        assert!(workspace.ungroup_selected_clips());
+        assert!(!workspace.selection_has_group());
+        assert!(
+            workspace
+                .document()
+                .clips
+                .iter()
+                .all(|clip| clip.group.is_none())
+        );
+    }
+
+    #[test]
+    fn pasting_grouped_clips_remaps_the_group_id() {
+        let mut workspace = workspace();
+        workspace.click_clip(1, false);
+        workspace.click_clip(2, true);
+        assert!(workspace.group_selected_clips());
+        let original_group = workspace.document().clips[0].group.expect("grouped");
+        assert!(workspace.copy_selected_clips());
+        workspace
+            .paste_clips_at(100, 0, 128)
+            .expect("the clipboard pastes");
+
+        let document = workspace.document();
+        let mut groups = document
+            .clips
+            .iter()
+            .filter_map(|clip| clip.group)
+            .collect::<Vec<_>>();
+        groups.sort_unstable();
+        groups.dedup();
+        assert_eq!(groups.len(), 2, "the pasted pair keeps one fresh group");
+        assert!(groups.contains(&original_group));
+        assert!(groups.iter().any(|group| *group != original_group));
+        let pasted_group = groups
+            .iter()
+            .find(|group| **group != original_group)
+            .copied();
+        let pasted_members = document
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == 1)
+            .filter(|clip| clip.group == pasted_group)
+            .count();
+        assert_eq!(pasted_members, 2);
     }
 
     #[test]

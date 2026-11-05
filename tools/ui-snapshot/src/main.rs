@@ -621,6 +621,7 @@ fn clip(
         clip_by_upper_object: false,
         selected: id == 1,
         primary: id == 1,
+        grouped: id == 2,
         midpoints: ModelRc::new(VecModel::<i32>::default()),
     }
 }

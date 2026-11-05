@@ -1513,3 +1513,9 @@ msgstr "按标签筛选场景"
 
 msgid "All labels"
 msgstr "所有标签"
+
+msgid "Group"
+msgstr "分组"
+
+msgid "Ungroup"
+msgstr "解除分组"

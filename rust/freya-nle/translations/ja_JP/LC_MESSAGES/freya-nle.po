@@ -1513,3 +1513,9 @@ msgstr "ラベルでシーンを絞り込む"
 
 msgid "All labels"
 msgstr "すべてのラベル"
+
+msgid "Group"
+msgstr "グループ化"
+
+msgid "Ungroup"
+msgstr "グループ解除"

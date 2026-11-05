@@ -93,6 +93,7 @@ export component TimelineWindow inherits Window {
     in property <int> playhead: 0;
     in property <int> selected-layer: 0;
     in property <int> selected-clip-count: 0;
+    in property <bool> selection-has-group: false;
     in-out property <float> pixels-per-frame: 1;
     in property <int> zoom-min: 10;
     in property <int> zoom-max: 400;
@@ -1830,6 +1831,17 @@ export component TimelineWindow inherits Window {
             if root.context-target-kind > 0 : MenuItem {
                 title: @tr("Duplicate");
                 activated => { root.activate-context-command("duplicate"); }
+            }
+            if root.context-target-kind > 0 : MenuSeparator { }
+            if root.context-target-kind > 0 : MenuItem {
+                title: @tr("Group");
+                enabled: root.selected-clip-count > 1;
+                activated => { root.activate-context-command("group"); }
+            }
+            if root.context-target-kind > 0 : MenuItem {
+                title: @tr("Ungroup");
+                enabled: root.selection-has-group;
+                activated => { root.activate-context-command("ungroup"); }
             }
             if root.context-target-kind > 0 : MenuSeparator { }
             if root.context-target-kind > 0 : MenuItem {

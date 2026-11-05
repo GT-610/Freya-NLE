@@ -163,6 +163,11 @@ pub struct ClipDocument {
     pub layer: i32,
     #[serde(rename = "clipByUpperObject")]
     pub clip_by_upper_object: bool,
+    /// Objects that share a group id move together, like AviUtl2's
+    /// `オブジェクトのグループ化`. The id is project-wide and a group is only
+    /// meaningful inside one scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<i32>,
     pub params: Map<String, Value>,
     #[serde(rename = "audioPlugins")]
     pub audio_plugins: Vec<AudioPluginDocument>,
@@ -702,6 +707,11 @@ fn normalize_clips(root: &mut Map<String, Value>) {
             let duration = integer(clip.get("duration"), 0);
             let layer = integer(clip.get("layer"), 0).clamp(0, MAX_TIMELINE_LAYER);
             let clip_by_upper_object = boolean(clip.get("clipByUpperObject"), false);
+            let group = clip
+                .get("group")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                .filter(|value| *value >= 0);
             set_integer(&mut clip, "id", id);
             set_integer(&mut clip, "sceneId", scene_id);
             set_string(&mut clip, "type", clip_type);
@@ -709,6 +719,12 @@ fn normalize_clips(root: &mut Map<String, Value>) {
             set_integer(&mut clip, "duration", duration);
             set_integer(&mut clip, "layer", layer);
             set_boolean(&mut clip, "clipByUpperObject", clip_by_upper_object);
+            match group {
+                Some(group) => set_integer(&mut clip, "group", group),
+                None => {
+                    clip.remove("group");
+                }
+            }
             clip.insert(
                 "params".to_owned(),
                 Value::Object(object(clip.get("params"))),
@@ -882,6 +898,27 @@ mod tests {
         assert_eq!(layers[1]["background"], "#aabbcc");
         assert_eq!(layers[1]["volumePercent"], 50.0);
         assert_eq!(layers[1]["layerExtension"], "kept");
+    }
+
+    #[test]
+    fn clip_groups_are_normalized_and_invalid_ids_are_dropped() {
+        let normalized = normalize(
+            r#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1}],
+                "clips": [
+                    {"id": 1, "sceneId": 1, "type": "video", "group": 7},
+                    {"id": 2, "sceneId": 1, "type": "video", "group": -2},
+                    {"id": 3, "sceneId": 1, "type": "video", "group": "nope"},
+                    {"id": 4, "sceneId": 1, "type": "video"}
+                ]
+            }"#,
+        );
+        assert_eq!(normalized["clips"][0]["group"], 7);
+        assert!(normalized["clips"][1].get("group").is_none());
+        assert!(normalized["clips"][2].get("group").is_none());
+        assert!(normalized["clips"][3].get("group").is_none());
     }
 
     #[test]

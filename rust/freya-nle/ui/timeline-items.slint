@@ -297,7 +297,11 @@ export component TimelineClipItem inherits Rectangle {
             padding-left: 7px;
             padding-right: 7px;
             Text {
-                text: root.clip-data.label;
+                // A grouped object carries a small mark so a group is visible
+                // without selecting it first.
+                text: root.clip-data.grouped
+                    ? "◎ " + root.clip-data.label
+                    : root.clip-data.label;
                 color: root.clip-data.dark-text ? black : white;
                 overflow: elide;
                 vertical-alignment: center;

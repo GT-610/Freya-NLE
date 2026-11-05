@@ -138,6 +138,7 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
                 clip_by_upper_object: clip.clip_by_upper_object,
                 selected: clip.selected,
                 primary: clip.primary,
+                grouped: clip.grouped,
                 midpoints: ModelRc::new(VecModel::from(workspace.clip_midpoints(clip.id))),
             }
         })
@@ -424,6 +425,7 @@ pub(super) fn sync_transport(
         .clamp(10.0, 400.0) as i32;
     main.set_playback_speed_percent(speed_percent);
     timeline.set_selected_clip_count(workspace.selected_clip_count() as i32);
+    timeline.set_selection_has_group(workspace.selection_has_group());
     main.set_playback_speed_multiplier(SharedString::from(speed_multiplier_text(speed_percent)));
     main.set_status_text(status_line(workspace.status(), workspace.status_message()));
     main.set_frame_counter_text(SharedString::from(frame_counter_text(

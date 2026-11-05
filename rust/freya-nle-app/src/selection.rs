@@ -59,6 +59,38 @@ impl ClipSelection {
         self.preview_ids.clear();
     }
 
+    /// Clicks a set of objects as one unit, for grouped clips.
+    ///
+    /// With Control the whole set toggles: adding it when any member is missing
+    /// and removing it when every member is already selected, so a group never
+    /// ends up half selected through a modifier click.
+    pub fn click_ids(&mut self, ids: &[i32], control: bool) {
+        let ids = unique_non_negative(ids.iter().copied());
+        if ids.is_empty() {
+            self.clear();
+            return;
+        }
+        if !control {
+            self.replace(ids);
+            return;
+        }
+        let all_selected = ids.iter().all(|id| self.ids.contains(id));
+        if all_selected {
+            self.ids.retain(|id| !ids.contains(id));
+            if self.primary.is_some_and(|primary| ids.contains(&primary)) {
+                self.primary = self.ids.last().copied();
+            }
+        } else {
+            for id in ids {
+                if !self.ids.contains(&id) {
+                    self.ids.push(id);
+                }
+            }
+            self.primary = self.ids.last().copied();
+        }
+        self.preview_ids.clear();
+    }
+
     pub fn click_clip(&mut self, clip_id: i32, control: bool) {
         if clip_id < 0 {
             self.clear();

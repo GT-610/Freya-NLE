@@ -2625,6 +2625,12 @@ pub(super) fn install_callbacks(
                 "clipping" => {
                     workspace.toggle_clip_by_upper_object(clip_id);
                 }
+                "group" => {
+                    workspace.group_selected_clips();
+                }
+                "ungroup" => {
+                    workspace.ungroup_selected_clips();
+                }
                 _ => {}
             }
         }

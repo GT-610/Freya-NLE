@@ -348,6 +348,7 @@ mod tests {
             duration,
             layer,
             clip_by_upper_object: false,
+            group: None,
             params: Map::new(),
             audio_plugins: Vec::new(),
             effects: Vec::new(),
