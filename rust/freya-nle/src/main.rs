@@ -269,10 +269,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     main.set_preview_image(preview_image);
     main.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     main.set_missing_media(ModelRc::new(VecModel::<MissingMediaData>::default()));
+    // The mark list is projected before a project opens (to clear it), so the
+    // models must exist from the start instead of being default-constructed by
+    // the property.
+    main.set_marks(ModelRc::new(VecModel::<TimelineMarkData>::default()));
     recovery.set_recoveries(ModelRc::new(VecModel::<RecoveryEntryData>::default()));
     timeline.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     timeline.set_scene_tabs(ModelRc::new(VecModel::<SceneTabData>::default()));
     timeline.set_clips(ModelRc::new(VecModel::<TimelineClipData>::default()));
+    timeline.set_marks(ModelRc::new(VecModel::<TimelineMarkData>::default()));
     timeline.set_layers(ModelRc::new(VecModel::<LayerData>::default()));
     timeline.set_media_entries(ModelRc::new(VecModel::<MediaBinEntryData>::default()));
     timeline.set_media_groups(ModelRc::new(VecModel::<MediaBinGroupData>::default()));
