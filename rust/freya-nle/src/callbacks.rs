@@ -2766,6 +2766,63 @@ pub(super) fn install_callbacks(
         sync_transport_weak(&playback_main, &playback_timeline, &playback_model);
     });
 
+    // The timeline's merged preview pane drives the same transport as the
+    // preview window. Forward the pane's callbacks to the commands that own
+    // them instead of duplicating seek/step/playback logic.
+    let pane_seek_target = main.as_weak();
+    timeline.on_seek(move |frame| {
+        if let Some(main) = pane_seek_target.upgrade() {
+            main.invoke_seek(frame);
+        }
+    });
+    let pane_previous_target = main.as_weak();
+    timeline.on_previous_frame(move || {
+        if let Some(main) = pane_previous_target.upgrade() {
+            main.invoke_previous_frame();
+        }
+    });
+    let pane_next_target = main.as_weak();
+    timeline.on_next_frame(move || {
+        if let Some(main) = pane_next_target.upgrade() {
+            main.invoke_next_frame();
+        }
+    });
+    let pane_playback_target = main.as_weak();
+    timeline.on_toggle_playback(move || {
+        if let Some(main) = pane_playback_target.upgrade() {
+            main.invoke_toggle_playback();
+        }
+    });
+
+    let preview_toggle_timeline = timeline.as_weak();
+    let preview_toggle_settings = settings.clone();
+    timeline.on_toggle_preview(move || {
+        let Some(timeline) = preview_toggle_timeline.upgrade() else {
+            return;
+        };
+        let visible = !timeline.get_preview_visible();
+        timeline.set_preview_visible(visible);
+        // The merged layout has a taller minimum; grow the window when the
+        // pane is switched on so its transport bar is not clipped.
+        if visible {
+            let window = timeline.window();
+            let logical = window.size().to_logical(window.scale_factor());
+            if logical.height < 640.0 {
+                window.set_size(slint::LogicalSize::new(logical.width, 720.0));
+            }
+        }
+        // The menu toggle is the quick path, so it writes the preference the
+        // settings dialog uses instead of keeping a session-only state.
+        let mut snapshot = preview_toggle_settings.borrow().snapshot();
+        snapshot.insert(
+            "timelinePreviewVisible".to_owned(),
+            serde_json::json!(visible),
+        );
+        if let Err(error) = preview_toggle_settings.borrow_mut().apply(snapshot) {
+            eprintln!("Could not save the timeline preview preference: {error}");
+        }
+    });
+
     // The timeline window carries the same menu bar as the preview window, because
     // macOS shows the menus of the focused window only; while the user edits on
     // the timeline, the 文件/编辑/设置/显示/工具 items used to be absent entirely.

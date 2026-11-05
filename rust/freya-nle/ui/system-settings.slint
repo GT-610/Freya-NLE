@@ -130,6 +130,7 @@ export component SystemSettingsWindow inherits Window {
     in-out property <int> bake-strategy-index: 0;
     in-out property <int> on-demand-prefetch-frames: 30;
     in-out property <bool> enable-timeline-skimming: true;
+    in-out property <bool> timeline-preview-visible: false;
     in-out property <int> timeline-track-height: 32;
     in-out property <int> timeline-header-height: 28;
     in-out property <bool> setting-dialog-sidebar-right: false;
@@ -392,6 +393,7 @@ export component SystemSettingsWindow inherits Window {
                         }
                         SystemSettingSpinRow { label: @tr("Track height"); value <=> root.timeline-track-height; minimum: 16; maximum: 100; }
                         SystemSettingSpinRow { label: @tr("Header height"); value <=> root.timeline-header-height; minimum: 16; maximum: 100; }
+                        CheckBox { text: @tr("Show the preview inside the timeline"); checked <=> root.timeline-preview-visible; }
                         CheckBox { text: @tr("Place settings sidebar on the right"); checked <=> root.setting-dialog-sidebar-right; }
                         SystemSettingSpinRow { label: @tr("Ruler height"); value <=> root.timeline-ruler-height; minimum: 16; maximum: 100; }
                         SystemSettingSpinRow { label: @tr("Maximum layer count"); value <=> root.timeline-max-layers; minimum: 1; maximum: 512; }

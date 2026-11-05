@@ -116,6 +116,7 @@ impl PreviewRuntime {
         &mut self,
         model: &ApplicationModel,
         main: &MainWindow,
+        timeline: Option<&TimelineWindow>,
         effect_catalog: &EffectCatalog,
     ) -> bool {
         let Some(project_instance_id) = model.current_project_instance_id() else {
@@ -191,7 +192,14 @@ impl PreviewRuntime {
         let target_replaced = self.surface.compose(&batch.scene, batch.generation);
         if target_replaced {
             match slint::Image::try_from(self.surface.texture().clone()) {
-                Ok(image) => main.set_preview_image(image),
+                Ok(image) => {
+                    main.set_preview_image(image.clone());
+                    // The timeline may host a merged preview pane; both
+                    // windows show the same composited frame.
+                    if let Some(timeline) = timeline {
+                        timeline.set_preview_image(image);
+                    }
+                }
                 Err(error) => eprintln!("Preview texture import failed: {error}"),
             }
         }

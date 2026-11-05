@@ -158,6 +158,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         WindowGeometry::new(100, 600, 1280, 300),
     );
     sync_timeline_zoom_settings(&timeline, &settings.borrow());
+    // The merged preview pane is a saved preference; apply it before the
+    // window is shown so the first frame already has its final layout.
+    timeline.set_preview_visible(
+        settings
+            .borrow()
+            .bool_value("timelinePreviewVisible", false),
+    );
     let object_settings = ObjectSettingsWindow::new()?;
     let easing = EasingConfigWindow::new()?;
     let project_settings = ProjectSettingsWindow::new()?;
@@ -709,12 +716,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .update(&window, &animation_model.borrow());
         }
         if let Some(main) = animation_main.upgrade() {
+            let timeline = animation_timeline.upgrade();
             let preview_updated = {
                 let model = animation_model.borrow();
                 let effect_catalog = animation_effect_catalog.borrow();
-                animation_preview
-                    .borrow_mut()
-                    .update(&model, &main, &effect_catalog)
+                animation_preview.borrow_mut().update(
+                    &model,
+                    &main,
+                    timeline.as_ref(),
+                    &effect_catalog,
+                )
             };
             if preview_updated {
                 animation_stats

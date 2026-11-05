@@ -1,9 +1,10 @@
 import { ProjectTabData, MissingMediaData } from "models.slint";
-import { Button, ScrollView, Slider, SpinBox } from "std-widgets.slint";
-import { FooterBar, TimeFormat } from "chrome.slint";
+import { Button, ScrollView } from "std-widgets.slint";
+import { FooterBar } from "chrome.slint";
 import { AppTheme } from "theme.slint";
 import { ProjectTab } from "timeline-items.slint";
-import { TabAddButton, TransportButton, StereoAudioMeter } from "widgets.slint";
+import { TabAddButton } from "widgets.slint";
+import { TransportBar } from "transport-bar.slint";
 
 export component MainWindow inherits Window {
     title: @tr("Freya NLE - Preview");
@@ -74,7 +75,7 @@ export component MainWindow inherits Window {
     callback keyboard-shortcut(string, bool, bool, bool, bool) -> bool;
     callback workspace-action(string);
     private property <keys> no-shortcut;
-    private property <bool> menu-accelerators-enabled: !speed-input.has-focus && !root.missing-media-dialog-visible;
+    private property <bool> menu-accelerators-enabled: !transport.speed-editing && !root.missing-media-dialog-visible;
 
     MenuBar {
         Menu {
@@ -202,103 +203,25 @@ export component MainWindow inherits Window {
                 height: 100%;
             }
         }
-            Rectangle {
-            height: AppTheme.player-control-height;
-            background: AppTheme.raised-background;
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
-                padding-top: 3px;
-                padding-bottom: 3px;
-                // 8px keeps the natural-width speed spin box clear of the right
-                // padding at the 640px default window width.
-                spacing: 8px;
-                // Time first, gauge second: the control bar reads left to right
-                // the way AviUtl2's player control bar does.
-                Text {
-                    text: TimeFormat.timecode(root.playhead-frame, root.frame-rate);
-                    color: AppTheme.timecode;
-                    font-family: "Monospace";
-                    font-size: 0.78rem;
-                    vertical-alignment: center;
-                    accessible-label: @tr("Playback position");
-                }
-                seek-slider := Slider {
-                    value: root.playhead;
-                    minimum: 0;
-                    maximum: root.duration;
-                    horizontal-stretch: 1;
-                    accessible-label: @tr("Seek Bar");
-                    accessible-description: @tr("Drag to change playback position on the timeline");
-                    changed => { root.seek(self.value); }
-                }
-                HorizontalLayout {
-                    min-width: 96px;
-                    max-width: 96px;
-                    horizontal-stretch: 0;
-                    spacing: 0px;
-                    TransportButton { symbol: "previous"; accessible-name: @tr("Back 1 Frame"); help-text: @tr("Move playback position 1 frame back"); clicked => { root.previous-frame(); } }
-                    TransportButton { symbol: root.playing ? "pause" : "play"; active: root.playing; accessible-name: root.playing ? @tr("Pause") : @tr("Play"); help-text: @tr("Start or pause playback"); clicked => { root.toggle-playback(); } }
-                    TransportButton { symbol: "next"; accessible-name: @tr("Forward 1 Frame"); help-text: @tr("Move playback position 1 frame forward"); clicked => { root.next-frame(); } }
-                }
-                StereoAudioMeter {
-                    // 58px keeps the transport row inside the 640px default
-                    // window even with a translated speed label.
-                    width: 58px;
-                    height: 28px;
-                    peak-left: root.audio-peak-left;
-                    peak-right: root.audio-peak-right;
-                    rms-left: root.audio-rms-left;
-                    rms-right: root.audio-rms-right;
-                }
-                Text {
-                    text: @tr("Audio unavailable");
-                    visible: root.audio-output-status != "";
-                    // A long device error must not push the speed control past
-                    // the right edge; the full text stays available to
-                    // assistive technology through the description.
-                    max-width: 120px;
-                    overflow: elide;
-                    color: AppTheme.danger;
-                    font-size: 0.72rem;
-                    vertical-alignment: center;
-                    accessible-description: root.audio-output-status;
-                }
-                HorizontalLayout {
-                    // Size to its content instead of a fixed 130px. The label,
-                    // the native SpinBox, and the "1.0x" multiplier need more
-                    // than that, so the fixed width clipped the multiplier at
-                    // the window edge.
-                    min-width: 150px;
-                    horizontal-stretch: 0;
-                    spacing: 5px;
-                    Text { text: @tr("Speed"); vertical-alignment: center; }
-                    speed-input := SpinBox {
-                        // Let the widget use its natural width. A fixed 80px is
-                        // narrower than the spin buttons need, so the theme drew
-                        // the lower button outside the box, on top of "1.0x".
-                        height: 28px;
-                        value <=> root.playback-speed-percent;
-                        minimum: 10;
-                        maximum: 400;
-                        step-size: 10;
-                        enabled: !root.playing;
-                        accessible-label: @tr("Playback speed (percent)");
-                        accessible-description: root.playback-speed-multiplier;
-                        edited(value) => { root.playback-speed-changed(value); }
-                    }
-                    // Qt renders the box as a multiplier, e.g. "1.0x"
-                    // (MainWindow.qml:1143). Slint's SpinBox has no text formatter,
-                    // so the percent value stays native and the matching
-                    // multiplier is shown beside it.
-                    Text {
-                        text: root.playback-speed-multiplier;
-                        vertical-alignment: center;
-                        color: AppTheme.muted-foreground;
-                    }
-                }
+            transport := TransportBar {
+                playhead: root.playhead;
+                duration: root.duration;
+                playhead-frame: root.playhead-frame;
+                frame-rate: root.frame-rate;
+                playing: root.playing;
+                playback-speed-percent <=> root.playback-speed-percent;
+                playback-speed-multiplier: root.playback-speed-multiplier;
+                audio-peak-left: root.audio-peak-left;
+                audio-peak-right: root.audio-peak-right;
+                audio-rms-left: root.audio-rms-left;
+                audio-rms-right: root.audio-rms-right;
+                audio-output-status: root.audio-output-status;
+                seek(value) => { root.seek(value); }
+                previous-frame => { root.previous-frame(); }
+                toggle-playback => { root.toggle-playback(); }
+                next-frame => { root.next-frame(); }
+                playback-speed-changed(percent) => { root.playback-speed-changed(percent); }
             }
-        }
         // The workspace reports the result of every edit ("Added effect ...",
         // "Relinked media to ...") and the reason a command was refused. Those
         // messages used to be projected into a property nothing rendered, so a

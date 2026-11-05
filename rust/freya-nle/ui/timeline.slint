@@ -12,6 +12,7 @@ import {
     TimelineToolFeedback,
 } from "models.slint";
 import { FooterBar, PanelHeader, TimeFormat } from "chrome.slint";
+import { TransportBar } from "transport-bar.slint";
 import { MediaBinPanel } from "media-bin.slint";
 import { Button, ComboBox, LineEdit, RadioGroup, ScrollView, SpinBox } from "std-widgets.slint";
 import { AppTheme, TimelineMetrics } from "theme.slint";
@@ -25,7 +26,9 @@ export component TimelineWindow inherits Window {
     min-width: 720px;
     // The dock needs room for the list and the selected entry's editor; a shorter window would
     // show neither. Collapsing the library gives the height back.
-    min-height: root.media-bin-visible ? 470px : 300px;
+    min-height: root.preview-visible
+        ? 640px
+        : root.media-bin-visible ? 470px : 300px;
     forward-focus: timeline-shortcuts;
     private property <bool> drag-active: false;
     private property <TimelineDragFeedback> drag-feedback;
@@ -64,6 +67,16 @@ export component TimelineWindow inherits Window {
     in property <int> timeline-track-height: 32;
     in property <int> timeline-header-height: 28;
     in property <int> timeline-ruler-height: 32;
+    // Merged preview pane. AviUtl2 keeps the preview directly above the layer
+    // editing area in one window; this pane brings the same picture to the
+    // timeline without forcing the standalone preview window to close.
+    in-out property <bool> preview-visible: false;
+    in property <image> preview-image;
+    in property <bool> playing: false;
+    // Height of the merged preview pane. Dragging the divider below it
+    // updates the value; a fixed length keeps the binding out of the layout's
+    // own height calculation (a ratio read of `root.height` there forms a loop).
+    in-out property <length> preview-pane-height: 320px;
     // Footer readings. The host projects the selected scene alongside the
     // playhead, mirroring AviUtl2's footer format (style.conf [Format]):
     // time/frame on the left, scene/resolution/rate on the right.
@@ -181,6 +194,13 @@ export component TimelineWindow inherits Window {
             + "  |  " + "\{root.scene-frame-rate} fps";
     }
 
+    // The preview pane controls the same transport as the preview window; the
+    // host forwards these to the window that owns the commands.
+    callback seek(float);
+    callback toggle-preview();
+    callback previous-frame();
+    callback toggle-playback();
+    callback next-frame();
     callback timeline-action(string, int, int);
     callback seek-audio-frame(int, int);
     callback filter-objects(string, int);
@@ -315,6 +335,12 @@ export component TimelineWindow inherits Window {
         Menu {
             title: @tr("View");
             MenuItem { title: @tr("Media Library"); checkable: true; checked <=> root.media-bin-visible; }
+            // The host owns the persisted preference, so this is a plain
+            // toggle whose label reflects the current state.
+            MenuItem {
+                title: root.preview-visible ? @tr("Hide preview in Timeline") : @tr("Show preview in Timeline");
+                activated => { root.toggle-preview(); }
+            }
             MenuItem { title: @tr("Show Timeline"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[21] : root.no-shortcut; icon: @image-url("icons/timeline.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-timeline(); } }
             MenuItem { title: @tr("Show Settings Dialog"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[22] : root.no-shortcut; icon: @image-url("icons/settings.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-object-settings(); } }
             Menu {
@@ -692,6 +718,67 @@ export component TimelineWindow inherits Window {
                 }
             }
         }
+            if root.preview-visible : Rectangle {
+                width: 100%;
+                height: root.preview-pane-height;
+                background: AppTheme.canvas-background;
+                VerticalLayout {
+                    width: 100%;
+                    min-height: 0px;
+                    spacing: 0px;
+                    Image {
+                        source: root.preview-image;
+                        image-fit: contain;
+                        vertical-stretch: 1;
+                        // Without this the picture's natural height becomes the
+                        // pane's minimum and the layer area collapses.
+                        min-height: 0px;
+                    }
+                    TransportBar {
+                        compact: true;
+                        playhead: root.playhead;
+                        duration: root.duration;
+                        playhead-frame: root.playhead;
+                        frame-rate: root.scene-frame-rate;
+                        playing: root.playing;
+                        seek(value) => { root.seek(value); }
+                        previous-frame => { root.previous-frame(); }
+                        toggle-playback => { root.toggle-playback(); }
+                        next-frame => { root.next-frame(); }
+                    }
+                }
+            }
+            if root.preview-visible : Rectangle {
+                height: 6px;
+                background: AppTheme.separator;
+                divider-touch := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: ns-resize;
+                    private property <length> start-y;
+                    private property <length> start-height;
+                    private property <bool> dragging: false;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            self.start-y = self.absolute-position.y;
+                            self.start-height = root.preview-pane-height;
+                            self.dragging = true;
+                        }
+                        if event.kind == PointerEventKind.move && self.dragging {
+                            // Reading the window height here is safe: the handler
+                            // runs on input, not while a binding is evaluated.
+                            root.preview-pane-height = clamp(
+                                self.start-height + (self.absolute-position.y - self.start-y),
+                                120px,
+                                max(120px, root.height - 240px)
+                            );
+                        }
+                        if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                            self.dragging = false;
+                        }
+                    }
+                }
+            }
             Rectangle {
             height: root.timeline-ruler-height * 1px;
             background: AppTheme.ruler-background;

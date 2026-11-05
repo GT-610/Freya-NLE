@@ -601,6 +601,9 @@ msgstr "すべてのレイヤーを非表示"
 msgid "Hide media library"
 msgstr "メディアライブラリを隠す"
 
+msgid "Hide preview in Timeline"
+msgstr "タイムラインのプレビューを隠す"
+
 msgid "Hide this layer"
 msgstr "このレイヤーを非表示にする"
 
@@ -1199,6 +1202,12 @@ msgstr "設定ダイアログの表示"
 
 msgid "Show Timeline"
 msgstr "タイムラインの表示"
+
+msgid "Show preview in Timeline"
+msgstr "タイムラインにプレビューを表示"
+
+msgid "Show the preview inside the timeline"
+msgstr "タイムライン内にプレビューを表示"
 
 msgid "Show all layers"
 msgstr "すべてのレイヤーを表示"

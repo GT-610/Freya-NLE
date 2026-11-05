@@ -601,6 +601,9 @@ msgstr "隐藏所有图层"
 msgid "Hide media library"
 msgstr "隐藏媒体库"
 
+msgid "Hide preview in Timeline"
+msgstr "在时间线中隐藏预览"
+
 msgid "Hide this layer"
 msgstr "隐藏此图层"
 
@@ -1199,6 +1202,12 @@ msgstr "显示设置对话框"
 
 msgid "Show Timeline"
 msgstr "显示时间线"
+
+msgid "Show preview in Timeline"
+msgstr "在时间线中显示预览"
+
+msgid "Show the preview inside the timeline"
+msgstr "在时间线内显示预览"
 
 msgid "Show all layers"
 msgstr "显示所有图层"

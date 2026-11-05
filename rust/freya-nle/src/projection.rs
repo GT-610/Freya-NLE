@@ -325,6 +325,8 @@ pub(super) fn sync_transport(
     timeline.set_playhead(workspace.playhead());
     timeline.set_duration(workspace.timeline_view_duration());
     timeline.set_selected_layer(workspace.selected_layer());
+    // The merged preview pane draws its own transport button state.
+    timeline.set_playing(workspace.is_playing());
     main.set_playhead_frame(workspace.playhead());
     if let Some(scene) = workspace.scene_settings(workspace.selected_scene()) {
         timeline.set_grid_mode(SharedString::from(scene.grid_mode));

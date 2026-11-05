@@ -132,6 +132,9 @@ pub(super) fn sync_timeline_runtime_settings(
     timeline.set_minimum_clip_duration_frames(
         settings.i32_value("minClipDurationFrames", 5).clamp(1, 100),
     );
+    // AviUtl2 keeps the preview above the layer area; the merged pane follows
+    // the same preference here and can be hidden again from the View menu.
+    timeline.set_preview_visible(settings.bool_value("timelinePreviewVisible", false));
     let skimming_enabled = settings.bool_value("enableTimelineSkimming", true);
     timeline.set_timeline_skimming_enabled(skimming_enabled);
     if !skimming_enabled {
@@ -233,6 +236,7 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
             .clamp(0, 600),
     );
     window.set_enable_timeline_skimming(settings.bool_value("enableTimelineSkimming", true));
+    window.set_timeline_preview_visible(settings.bool_value("timelinePreviewVisible", false));
     window.set_timeline_track_height(settings.i32_value("timelineTrackHeight", 32).clamp(16, 100));
     window.set_timeline_header_height(
         settings
@@ -484,6 +488,10 @@ fn system_settings_replacement(
         (
             "enableTimelineSkimming",
             serde_json::json!(window.get_enable_timeline_skimming()),
+        ),
+        (
+            "timelinePreviewVisible",
+            serde_json::json!(window.get_timeline_preview_visible()),
         ),
         (
             "timelineTrackHeight",
