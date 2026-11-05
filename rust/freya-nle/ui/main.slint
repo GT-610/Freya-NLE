@@ -72,6 +72,7 @@ export component MainWindow inherits Window {
     callback show-preview-window();
     callback adjust-preview-height(float);
     callback show-timeline-media-library();
+    callback show-timeline-object-list();
     callback choose-edit-tool(string);
     callback show-object-settings();
     callback show-package-manager();
@@ -182,6 +183,7 @@ export component MainWindow inherits Window {
             // The media library belongs to the timeline window; this item only toggles it there,
             // so both windows keep an identical menu bar for macOS focus switching.
             MenuItem { title: @tr("Media Library"); activated => { root.show-timeline-media-library(); } }
+            MenuItem { title: @tr("Object List"); activated => { root.show-timeline-object-list(); } }
             MenuItem { title: @tr("Taller preview"); activated => { root.adjust-preview-height(40); } }
             MenuItem { title: @tr("Shorter preview"); activated => { root.adjust-preview-height(-40); } }
             MenuItem { title: @tr("Show Preview Window"); icon: @image-url("icons/timeline.svg"); activated => { root.show-preview-window(); } }

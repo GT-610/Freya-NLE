@@ -1483,3 +1483,15 @@ msgstr "オフセットはこのレイヤーのメディアオブジェクトに
 
 msgid "Copy with Following"
 msgstr "自身以降をコピー"
+
+msgid "Objects at Frame"
+msgstr "フレーム上のオブジェクト"
+
+msgid "Show or hide the object list"
+msgstr "オブジェクトリストの表示を切り替え"
+
+msgid "Hide object list"
+msgstr "オブジェクトリストを隠す"
+
+msgid "No objects at this frame"
+msgstr "このフレームにオブジェクトはありません"

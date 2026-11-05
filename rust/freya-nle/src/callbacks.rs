@@ -1521,6 +1521,15 @@ pub(super) fn install_callbacks(
             let _ = show_and_redraw(&window);
         }
     });
+    // The object list is a timeline dock, like the media library; this menu item
+    // raises the timeline and opens it.
+    let object_list_window = timeline.as_weak();
+    main.on_show_timeline_object_list(move || {
+        if let Some(window) = object_list_window.upgrade() {
+            window.set_object_list_visible(true);
+            let _ = show_and_redraw(&window);
+        }
+    });
     let tool_menu_window = timeline.as_weak();
     main.on_choose_edit_tool(move |tool| {
         if let Some(window) = tool_menu_window.upgrade() {

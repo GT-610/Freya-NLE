@@ -109,6 +109,18 @@ pub struct TimelineClip {
     pub primary: bool,
 }
 
+/// One object that is visible at the playhead, as AviUtl2's object list shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectListEntry {
+    pub clip_id: i32,
+    pub label: String,
+    pub clip_type: String,
+    pub layer: i32,
+    pub audio: bool,
+    pub locked: bool,
+    pub selected: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectSettingsInput {
     pub width: i32,
@@ -304,6 +316,32 @@ impl WorkspaceModel {
             .find(|name| !name.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| clip.clip_type.clone())
+    }
+
+    /// Objects of the edited scene that cover the playhead, top layer first.
+    ///
+    /// The list mirrors AviUtl2's オブジェクトリスト: it answers "what is on this
+    /// frame" without requiring the user to scan every layer.
+    pub fn objects_at_playhead(&self) -> Vec<ObjectListEntry> {
+        let frame = self.playhead;
+        let mut objects = self
+            .timeline_clips()
+            .into_iter()
+            .filter(|clip| {
+                clip.start <= frame && frame < clip.start.saturating_add(clip.duration.max(1))
+            })
+            .map(|clip| ObjectListEntry {
+                clip_id: clip.id,
+                label: clip.label,
+                clip_type: clip.clip_type,
+                layer: clip.layer,
+                audio: clip.audio,
+                locked: clip.locked,
+                selected: clip.selected,
+            })
+            .collect::<Vec<_>>();
+        objects.sort_by_key(|object| (object.layer, object.clip_id));
+        objects
     }
 
     pub fn timeline_clips(&self) -> Vec<TimelineClip> {
@@ -5583,6 +5621,41 @@ mod tests {
         assert_eq!(saved.x, MAX_LAYER_OFFSET);
         assert_eq!(saved.z, 0.0, "a non-finite offset falls back to none");
         assert_eq!(saved.volume_percent, MAX_LAYER_VOLUME_PERCENT);
+    }
+
+    #[test]
+    fn object_list_reports_the_objects_under_the_playhead_in_layer_order() {
+        let mut workspace = workspace();
+        workspace.seek(10);
+        let objects = workspace.objects_at_playhead();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].clip_id, 1);
+        assert_eq!(objects[0].layer, 0);
+        assert!(!objects[0].selected);
+
+        workspace.seek(40);
+        let objects = workspace.objects_at_playhead();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].clip_id, 2);
+        assert_eq!(objects[0].layer, 1);
+
+        workspace.seek(25);
+        assert!(
+            workspace.objects_at_playhead().is_empty(),
+            "an empty frame reports no objects"
+        );
+
+        workspace.seek(10);
+        workspace.click_clip(1, false);
+        assert!(workspace.objects_at_playhead()[0].selected);
+        workspace.switch_scene(2);
+        workspace.seek(10);
+        assert_eq!(workspace.objects_at_playhead()[0].clip_id, 3);
+
+        workspace.switch_scene(1);
+        workspace.seek(40);
+        workspace.toggle_layer_lock(1);
+        assert!(workspace.objects_at_playhead()[0].locked);
     }
 
     #[test]

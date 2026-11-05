@@ -75,6 +75,16 @@ export struct TimelineClipData {
     midpoints: [int],
 }
 
+// One object visible at the playhead, for the object list panel.
+export struct TimelineObjectData {
+    clip-id: int,
+    label: string,
+    layer: int,
+    kind: string,
+    locked: bool,
+    selected: bool,
+}
+
 export struct MediaBinGroupData {
     id: int,
     name: string,

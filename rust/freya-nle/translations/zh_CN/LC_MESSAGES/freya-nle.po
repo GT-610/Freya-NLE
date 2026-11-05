@@ -1483,3 +1483,15 @@ msgstr "偏移作用于该图层的媒体对象；相机控制的对象不会被
 
 msgid "Copy with Following"
 msgstr "复制自身及之后"
+
+msgid "Objects at Frame"
+msgstr "当前帧对象"
+
+msgid "Show or hide the object list"
+msgstr "显示或隐藏对象列表"
+
+msgid "Hide object list"
+msgstr "隐藏对象列表"
+
+msgid "No objects at this frame"
+msgstr "当前帧没有对象"

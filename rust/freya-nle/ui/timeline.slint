@@ -11,11 +11,13 @@ import {
     MediaBinEntryData,
     MediaBinGroupData,
     TimelineMarkData,
+    TimelineObjectData,
     TimelineToolFeedback,
 } from "models.slint";
 import { FooterBar, PanelHeader, TimeFormat } from "chrome.slint";
 import { TransportBar } from "transport-bar.slint";
 import { MediaBinPanel } from "media-bin.slint";
+import { ObjectListPanel } from "object-list.slint";
 import { Button, ComboBox, LineEdit, RadioGroup, ScrollView, SpinBox } from "std-widgets.slint";
 import { AppTheme, TimelineMetrics } from "theme.slint";
 import { ProjectTab, SceneTab, LayerHeaderItem, TimelineClipItem } from "timeline-items.slint";
@@ -46,6 +48,20 @@ export component TimelineWindow inherits Window {
     // Frame marks of the edited scene, already ordered by frame.
     in property <[TimelineMarkData]> marks;
     in property <bool> mark-at-playhead: false;
+    // Objects covering the playhead, for the object list panel.
+    in property <[TimelineObjectData]> objects;
+    in-out property <bool> object-list-visible: false;
+    // The two right-hand docks share the width, so opening one closes the other.
+    changed object-list-visible => {
+        if (self.object-list-visible) {
+            root.media-bin-visible = false;
+        }
+    }
+    changed media-bin-visible => {
+        if (self.media-bin-visible) {
+            root.object-list-visible = false;
+        }
+    }
     in property <[MediaBinEntryData]> media-entries;
     in property <[MediaBinGroupData]> media-groups;
     in property <[string]> media-group-names;
@@ -429,6 +445,7 @@ export component TimelineWindow inherits Window {
         Menu {
             title: @tr("View");
             MenuItem { title: @tr("Media Library"); checkable: true; checked <=> root.media-bin-visible; }
+            MenuItem { title: @tr("Object List"); checkable: true; checked <=> root.object-list-visible; }
             // The host owns the persisted preference, so this is a plain
             // toggle whose label reflects the current state.
             MenuItem {
@@ -854,6 +871,13 @@ export component TimelineWindow inherits Window {
                     checkable: true;
                     checked <=> root.media-bin-visible;
                     accessible-label: @tr("Show or hide the media library");
+                }
+                Button {
+                    width: 74px;
+                    text: root.object-list-visible ? "◀ " + @tr("Objects") : "▶ " + @tr("Objects");
+                    checkable: true;
+                    checked <=> root.object-list-visible;
+                    accessible-label: @tr("Show or hide the object list");
                 }
                 ComboBox {
                     min-width: 124px;
@@ -1454,6 +1478,21 @@ export component TimelineWindow inherits Window {
                 remove-group(id) => { root.remove-media-group(id); }
                 assign-group(id, group) => { root.assign-media-group(id, group); }
                 rename-group(id, name) => { root.rename-media-group(id, name); }
+                }
+            }
+            if root.object-list-visible : VerticalLayout {
+                width: 240px;
+                spacing: 0px;
+                ObjectListPanel {
+                    width: parent.width;
+                    vertical-stretch: 1;
+                    objects: root.objects;
+                    select(clip-id) => { root.clip-selected(clip-id, false); }
+                    open(clip-id) => {
+                        root.clip-selected(clip-id, false);
+                        root.show-object-settings();
+                    }
+                    close-requested => { root.object-list-visible = false; }
                 }
             }
         }

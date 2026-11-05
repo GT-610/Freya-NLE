@@ -20,7 +20,8 @@ Set `UI_SNAPSHOT_THEME=light` to render the light palette; the Rust tool then
 writes `timeline-light.*`, and `python3 snapshot.py` with no arguments picks the
 same names up. Other modes: `settings`, `system`, `confirm`, `mark`, `layer`, `export`,
 `packages`. `UI_SNAPSHOT_SIZE=680x600` overrides the window size, and
-`UI_SNAPSHOT_IMAGE=/path/to.png` supplies a stand-in preview frame.
+`UI_SNAPSHOT_IMAGE=/path/to.png` supplies a stand-in preview frame, and
+`UI_SNAPSHOT_OBJECTS=1` opens the object list dock.
 
 The build script compiles the shipping UI from
 `rust/freya-nle/ui/app.slint`, so the render always matches the code. The sample

@@ -167,6 +167,7 @@ fn main() {
             populate_timeline(&ui);
             // The merged preview pane is a mode, not the default layout.
             ui.set_preview_visible(std::env::var("UI_SNAPSHOT_PREVIEW").is_ok());
+            ui.set_object_list_visible(std::env::var("UI_SNAPSHOT_OBJECTS").is_ok());
             if let Some(image) = load_preview() {
                 ui.set_preview_image(image);
             }
@@ -512,6 +513,24 @@ fn populate_timeline(ui: &TimelineWindow) {
     ui.set_playhead(240);
     // Three marks, one of them under the playhead, so the ruler ticks and the
     // checked "mark at playhead" state are both visible in the snapshot.
+    ui.set_objects(ModelRc::new(VecModel::from(vec![
+        TimelineObjectData {
+            clip_id: 3,
+            label: "camera_control".into(),
+            layer: 2,
+            kind: "camera_control".into(),
+            locked: false,
+            selected: false,
+        },
+        TimelineObjectData {
+            clip_id: 4,
+            label: "ambience_rain.wav".into(),
+            layer: 3,
+            kind: "audio".into(),
+            locked: true,
+            selected: true,
+        },
+    ])));
     ui.set_marks(ModelRc::new(VecModel::from(vec![
         TimelineMarkData {
             frame: 120,

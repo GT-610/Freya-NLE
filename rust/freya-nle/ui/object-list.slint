@@ -1,0 +1,126 @@
+import { ScrollView } from "std-widgets.slint";
+import { PanelHeader } from "chrome.slint";
+import { TimelineObjectData } from "models.slint";
+import { AppTheme } from "theme.slint";
+
+// AviUtl2's オブジェクトリスト: the objects that cover the current frame.
+//
+// The list is a navigation aid, not a second timeline: a single click selects
+// the object (the layer and object settings follow), a double click also opens
+// its settings.
+export component ObjectListPanel inherits Rectangle {
+    in property <[TimelineObjectData]> objects;
+    callback select(int);
+    callback open(int);
+    callback close-requested();
+
+    // A short glyph per object kind; the label carries the readable name.
+    pure function kind-glyph(kind: string) -> string {
+        if kind == "audio" {
+            return "♪";
+        }
+        if kind == "video" {
+            return "▶";
+        }
+        if kind == "image" {
+            return "▣";
+        }
+        if kind == "text" || kind == "counter" {
+            return "T";
+        }
+        if kind == "camera" || kind == "camera_control" {
+            return "⌾";
+        }
+        if kind == "scene" {
+            return "▤";
+        }
+        if kind == "GroupControl" {
+            return "❏";
+        }
+        if kind == "frame_buffer" {
+            return "▥";
+        }
+        return "◆";
+    }
+
+    VerticalLayout {
+        PanelHeader {
+            title: @tr("Objects at Frame");
+            actions: [
+                { glyph: "×", label: @tr("Hide object list"), enabled: true }
+            ];
+            action(index) => {
+                if index == 0 {
+                    root.close-requested();
+                }
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: self.visible-width;
+            viewport-height: object-list.preferred-height;
+            object-list := VerticalLayout {
+                width: parent.width;
+                spacing: 1px;
+                for object in root.objects : Rectangle {
+                    height: 28px;
+                    background: object.selected
+                        ? AppTheme.selection-background
+                        : object-touch.has-hover ? AppTheme.hover-background : transparent;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        Text {
+                            text: "\{object.layer + 1}";
+                            width: 20px;
+                            color: AppTheme.muted-foreground;
+                            font-size: 0.76rem;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                        Text {
+                            text: root.kind-glyph(object.kind);
+                            width: 16px;
+                            color: AppTheme.muted-foreground;
+                            font-size: 0.8rem;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: object.label;
+                            horizontal-stretch: 1;
+                            color: AppTheme.foreground;
+                            font-size: 0.8rem;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: object.locked ? "L" : "";
+                            color: AppTheme.warning;
+                            font-size: 0.72rem;
+                            vertical-alignment: center;
+                        }
+                    }
+                    object-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: list-item;
+                        accessible-label: object.label;
+                        accessible-item-selectable: true;
+                        accessible-item-selected: object.selected;
+                        clicked => { root.select(object.clip-id); }
+                        double-clicked => { root.open(object.clip-id); }
+                    }
+                }
+                if root.objects.length == 0 : Text {
+                    text: @tr("No objects at this frame");
+                    x: 8px;
+                    width: parent.width - 16px;
+                    color: AppTheme.muted-foreground;
+                    font-size: 0.8rem;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

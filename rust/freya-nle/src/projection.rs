@@ -4,7 +4,7 @@ use crate::localization::{localized, localized_effect_metadata, status_line};
 use crate::object_settings::finite_f32;
 use crate::{
     LayerData, MainWindow, MediaBinEntryData, MediaBinGroupData, MissingMediaData, ProjectTabData,
-    SceneTabData, TimelineClipData, TimelineMarkData, TimelineWindow,
+    SceneTabData, TimelineClipData, TimelineMarkData, TimelineObjectData, TimelineWindow,
 };
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::{ApplicationModel, MAX_TIMELINE_LAYERS};
@@ -53,6 +53,7 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         update_vec_model(&timeline.get_layers(), Vec::new());
         update_vec_model(&timeline.get_media_entries(), Vec::new());
         update_vec_model(&timeline.get_media_groups(), Vec::new());
+        update_vec_model(&timeline.get_objects(), Vec::new());
         // No project means no marks: both menus would otherwise keep the last
         // project's list and offer commands that cannot run.
         sync_marks(main, timeline, model);
@@ -125,6 +126,19 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         })
         .collect::<Vec<_>>();
     update_vec_model(&timeline.get_clips(), clips);
+    let objects = workspace
+        .objects_at_playhead()
+        .into_iter()
+        .map(|object| TimelineObjectData {
+            clip_id: object.clip_id,
+            label: SharedString::from(localized_effect_metadata(&object.label).into_owned()),
+            layer: object.layer,
+            kind: SharedString::from(object.clip_type),
+            locked: object.locked,
+            selected: object.selected,
+        })
+        .collect::<Vec<_>>();
+    update_vec_model(&timeline.get_objects(), objects);
     let selected_layer = workspace.selected_layer();
     let scene = workspace.selected_scene_document();
     let layer_settings = workspace.layer_settings();
