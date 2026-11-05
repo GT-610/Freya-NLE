@@ -1495,3 +1495,9 @@ msgstr "隐藏对象列表"
 
 msgid "No objects at this frame"
 msgstr "当前帧没有对象"
+
+msgid "Duplicate Scene"
+msgstr "复制场景"
+
+msgid "Close Scene"
+msgstr "关闭场景"

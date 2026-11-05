@@ -2078,6 +2078,106 @@ impl WorkspaceModel {
         Some(scene_id)
     }
 
+    /// Clones a scene and every clip in it under fresh IDs, as one undo step.
+    ///
+    /// The name gets a numeric suffix so the copy is distinguishable without a
+    /// translated word; the scene's marks and layer settings are scene data and
+    /// travel with it.
+    pub fn duplicate_scene(&mut self, scene_id: i32) -> Option<i32> {
+        let Some(source) = self
+            .project
+            .document
+            .scenes
+            .iter()
+            .find(|scene| scene.id == scene_id)
+            .cloned()
+        else {
+            self.set_status(status_message!(
+                "Scene #{scene_id} does not exist",
+                "场景 #{scene_id} 不存在",
+                "シーン #{scene_id} は存在しません"
+            ));
+            return None;
+        };
+        let clips = self
+            .project
+            .document
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == scene_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let new_scene_id = match self.project.state.reserve_scene_ids(1) {
+            Ok(ids) => ids[0],
+            Err(error) => {
+                self.set_status_text(error.to_string());
+                return None;
+            }
+        };
+        let new_clip_ids = match self.project.state.reserve_clip_ids(clips.len()) {
+            Ok(ids) => ids,
+            Err(error) => {
+                self.set_status_text(error.to_string());
+                return None;
+            }
+        };
+        let source_index = self
+            .project
+            .document
+            .scenes
+            .iter()
+            .position(|scene| scene.id == scene_id)
+            .unwrap_or(0);
+        let mut scene = source.clone();
+        scene.id = new_scene_id;
+        let name = self.unique_scene_name(&source.name);
+        scene.name = name.clone();
+        let mut commands = vec![TimelineCommand::InsertScene {
+            index: Some(source_index + 1),
+            scene,
+        }];
+        for (clip, new_id) in clips.into_iter().zip(new_clip_ids) {
+            let mut clip = clip;
+            clip.id = new_id;
+            clip.scene_id = new_scene_id;
+            commands.push(TimelineCommand::InsertClip { index: None, clip });
+        }
+        if !self.execute_batch(commands) {
+            return None;
+        }
+        self.selected_scene = new_scene_id;
+        self.selection.clear();
+        self.effect_selection.clear();
+        self.playhead = 0;
+        self.transport.pause();
+        self.set_status(status_message!(
+            "Duplicated scene {} as {}",
+            "已将场景 {} 复制为 {}",
+            "シーン {} を {} として複製しました",
+            source.name,
+            name
+        ));
+        Some(new_scene_id)
+    }
+
+    fn unique_scene_name(&self, base: &str) -> String {
+        let existing = self
+            .project
+            .document
+            .scenes
+            .iter()
+            .map(|scene| scene.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut index = 2;
+        loop {
+            let candidate = format!("{base} {index}");
+            if !existing.contains(candidate.as_str()) {
+                return candidate;
+            }
+            index += 1;
+        }
+    }
+
     pub fn update_scene_settings(&mut self, scene_id: i32, input: SceneSettingsInput) -> bool {
         let Some(mut scene) = self
             .project
@@ -5621,6 +5721,75 @@ mod tests {
         assert_eq!(saved.x, MAX_LAYER_OFFSET);
         assert_eq!(saved.z, 0.0, "a non-finite offset falls back to none");
         assert_eq!(saved.volume_percent, MAX_LAYER_VOLUME_PERCENT);
+    }
+
+    #[test]
+    fn duplicating_a_scene_copies_clips_marks_and_layer_settings() {
+        let mut workspace = workspace();
+        workspace.seek(5);
+        workspace.toggle_mark_at_playhead();
+        let mut layer = LayerSettingsInput::defaults(0);
+        layer.name = "Titles".to_owned();
+        assert!(workspace.update_layer_settings(layer));
+        let original = workspace.document().clone();
+        let source = original
+            .scenes
+            .iter()
+            .find(|scene| scene.id == 1)
+            .expect("scene 1 exists")
+            .clone();
+        let source_clip_ids = original
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == 1)
+            .map(|clip| clip.id)
+            .collect::<Vec<_>>();
+
+        let new_id = workspace.duplicate_scene(1).expect("scene duplicates");
+        assert_ne!(new_id, 1);
+        assert_eq!(workspace.selected_scene(), new_id);
+        let document = workspace.document().clone();
+        let copy = document
+            .scenes
+            .iter()
+            .find(|scene| scene.id == new_id)
+            .expect("the copy exists");
+        assert_eq!(copy.name, "Root 2");
+        assert_eq!(copy.marks, source.marks);
+        assert_eq!(copy.layer_settings, source.layer_settings);
+        let copied = document
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == new_id)
+            .collect::<Vec<_>>();
+        assert_eq!(copied.len(), source_clip_ids.len());
+        assert!(
+            copied
+                .iter()
+                .all(|clip| !source_clip_ids.contains(&clip.id)),
+            "copies get fresh clip IDs"
+        );
+
+        // The scene and its clips leave together in one undo step.
+        assert!(workspace.undo());
+        assert_eq!(workspace.document(), &original);
+    }
+
+    #[test]
+    fn duplicated_scene_names_stay_unique_and_unknown_scenes_are_refused() {
+        let mut workspace = workspace();
+        assert!(workspace.duplicate_scene(99).is_none());
+        let first = workspace.duplicate_scene(1).expect("first copy");
+        let second = workspace.duplicate_scene(1).expect("second copy");
+        let names = workspace
+            .document()
+            .scenes
+            .iter()
+            .map(|scene| scene.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"Root 2"));
+        assert!(names.contains(&"Root 3"));
+        assert_ne!(first, second);
     }
 
     #[test]

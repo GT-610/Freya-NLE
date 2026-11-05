@@ -1495,3 +1495,9 @@ msgstr "オブジェクトリストを隠す"
 
 msgid "No objects at this frame"
 msgstr "このフレームにオブジェクトはありません"
+
+msgid "Duplicate Scene"
+msgstr "シーンを複製"
+
+msgid "Close Scene"
+msgstr "シーンを閉じる"

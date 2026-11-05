@@ -274,6 +274,7 @@ export component TimelineWindow inherits Window {
     callback scene-selected(int);
     callback scene-settings(int);
     callback scene-closed(int);
+    callback scene-duplicate(int);
     callback clip-selected(int, bool);
     callback clip-drag-started(int, bool);
     callback clip-context-selected(int);
@@ -860,6 +861,7 @@ export component TimelineWindow inherits Window {
                             height: root.timeline-header-height * 1px;
                             activate(scene-id) => { root.scene-selected(scene-id); }
                             settings(scene-id) => { root.scene-settings(scene-id); }
+                            duplicate(scene-id) => { root.scene-duplicate(scene-id); }
                             close(scene-id) => { root.scene-closed(scene-id); }
                         }
                     }

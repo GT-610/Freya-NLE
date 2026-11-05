@@ -2266,6 +2266,20 @@ pub(super) fn install_callbacks(
         sync_weak_windows(&close_scene_main, &close_scene_timeline, &close_scene_model);
     });
 
+    let duplicate_scene_model = model.clone();
+    let duplicate_scene_main = main.as_weak();
+    let duplicate_scene_timeline = timeline.as_weak();
+    timeline.on_scene_duplicate(move |scene_id| {
+        if let Some(workspace) = duplicate_scene_model.borrow_mut().current_workspace_mut() {
+            workspace.duplicate_scene(scene_id);
+        }
+        sync_weak_windows(
+            &duplicate_scene_main,
+            &duplicate_scene_timeline,
+            &duplicate_scene_model,
+        );
+    });
+
     let scene_edit_model = model.clone();
     let scene_edit_window = scene_settings.as_weak();
     timeline.on_scene_settings(move |scene_id| {

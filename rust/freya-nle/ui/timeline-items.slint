@@ -7,6 +7,7 @@ export component SceneTab inherits Rectangle {
     callback activate(int);
     callback close(int);
     callback settings(int);
+    callback duplicate(int);
     preferred-width: 100px;
     min-width: 100px;
     max-width: 220px;
@@ -34,20 +35,25 @@ export component SceneTab inherits Rectangle {
             clicked => { root.close(root.scene.id); }
         }
     }
-    scene-touch := TouchArea {
-        width: root.scene.root ? parent.width : parent.width - 28px;
-        mouse-cursor: pointer;
-        accessible-role: tab;
-        accessible-label: root.scene.name;
-        accessible-item-selectable: true;
-        accessible-item-selected: root.scene.selected;
-        accessible-action-default => { root.activate(root.scene.id); }
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                root.activate(root.scene.id);
-            }
-            if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
-                root.settings(root.scene.id);
+    scene-menu := ContextMenuArea {
+        Menu {
+            MenuItem { title: @tr("Scene Settings..."); activated => { root.settings(root.scene.id); } }
+            MenuItem { title: @tr("Duplicate Scene"); activated => { root.duplicate(root.scene.id); } }
+            MenuSeparator { }
+            MenuItem { title: @tr("Close Scene"); enabled: !root.scene.root; activated => { root.close(root.scene.id); } }
+        }
+        scene-touch := TouchArea {
+            width: root.scene.root ? parent.width : parent.width - 28px;
+            mouse-cursor: pointer;
+            accessible-role: tab;
+            accessible-label: root.scene.name;
+            accessible-item-selectable: true;
+            accessible-item-selected: root.scene.selected;
+            accessible-action-default => { root.activate(root.scene.id); }
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.activate(root.scene.id);
+                }
             }
         }
     }
