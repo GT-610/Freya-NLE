@@ -18,6 +18,9 @@ const MAX_GRID_OFFSET: f64 = 86_400.0;
 const MAX_GRID_INTERVAL: i32 = 1_000_000;
 const MAX_GRID_SUBDIVISION: i32 = 128;
 const MAX_MAGNETIC_SNAP_RANGE: i32 = 100;
+/// Longest note a frame mark may carry, counted in characters so a note made of
+/// multi-byte text cannot exceed it by accident.
+pub const MAX_MARK_NOTE_CHARS: usize = 512;
 pub const MAX_TIMELINE_LAYERS: i32 = 512;
 pub const MAX_TIMELINE_LAYER: i32 = MAX_TIMELINE_LAYERS - 1;
 
@@ -79,6 +82,23 @@ pub struct SceneDocument {
     pub enable_snap: bool,
     #[serde(rename = "magneticSnapRange")]
     pub magnetic_snap_range: i32,
+    /// Frame marks on this scene's timeline. Empty for documents written before
+    /// marks existed; the normalizer sorts and de-duplicates whatever is read.
+    #[serde(default)]
+    pub marks: Vec<SceneMark>,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
+/// One frame mark: a frame number and the note the user attached to it.
+///
+/// Marks live on the scene rather than the project because each scene owns its
+/// own frame range; the timeline edits one scene at a time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneMark {
+    pub frame: i32,
+    #[serde(default)]
+    pub note: String,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }
@@ -221,6 +241,40 @@ fn normalize_layers(value: Option<&Value>) -> Value {
             .map(|layer| Value::Number(Number::from(layer)))
             .collect(),
     )
+}
+
+fn normalize_marks(value: Option<&Value>) -> Value {
+    let mut marks = array(value)
+        .into_iter()
+        .filter_map(|mark| {
+            let mark = object(Some(&mark));
+            let frame = integer(mark.get("frame"), -1);
+            if frame < 0 {
+                return None;
+            }
+            Some((frame, mark))
+        })
+        .collect::<Vec<_>>();
+    // Stable sort keeps the first note when two entries name the same frame, so
+    // a duplicated mark never reorders the ones around it.
+    marks.sort_by_key(|(frame, _)| *frame);
+    let mut seen = BTreeSet::new();
+    let marks = marks
+        .into_iter()
+        .filter_map(|(frame, mut mark)| {
+            if !seen.insert(frame) {
+                return None;
+            }
+            let note = string(mark.get("note"), "")
+                .chars()
+                .take(MAX_MARK_NOTE_CHARS)
+                .collect::<String>();
+            set_integer(&mut mark, "frame", frame);
+            set_string(&mut mark, "note", note);
+            Some(Value::Object(mark))
+        })
+        .collect::<Vec<_>>();
+    Value::Array(marks)
 }
 
 fn normalize_settings(root: &mut Map<String, Value>) -> (i32, i32, f64, i32) {
@@ -373,6 +427,10 @@ fn normalize_scenes(
             let enable_snap = version < 3 || boolean(scene.get("enableSnap"), true);
             set_boolean(&mut scene, "enableSnap", enable_snap);
             set_integer(&mut scene, "magneticSnapRange", magnetic_snap_range);
+            // Marks are read for every document version: an older file simply has
+            // none, and a document that round-trips through an older build must not
+            // lose marks just because its version number stayed low.
+            scene.insert("marks".to_owned(), normalize_marks(scene.get("marks")));
             Value::Object(scene)
         })
         .collect();
@@ -582,6 +640,58 @@ mod tests {
             1
         );
         assert_eq!(normalized["clips"][0]["effects"][0]["id"], "camera_control");
+    }
+
+    #[test]
+    fn normalizes_frame_marks_by_sorting_deduplicating_and_bounding_notes() {
+        let long_note = "x".repeat(MAX_MARK_NOTE_CHARS + 5);
+        let input = format!(
+            r#"{{
+                "version": 3,
+                "settings": {{}},
+                "scenes": [{{
+                    "id": 4,
+                    "marks": [
+                        {{"frame": 9, "note": "later", "markExtension": 1}},
+                        {{"frame": -4, "note": "negative frames are dropped"}},
+                        {{"frame": 3, "note": "earlier"}},
+                        {{"frame": 9, "note": "duplicate keeps the first"}},
+                        {{"frame": 4, "note": "{long_note}"}}
+                    ]
+                }}],
+                "clips": []
+            }}"#
+        );
+        let normalized = normalize(&input);
+        let marks = normalized["scenes"][0]["marks"]
+            .as_array()
+            .expect("marks array");
+        assert_eq!(marks.len(), 3);
+        assert_eq!(marks[0]["frame"], 3);
+        assert_eq!(marks[0]["note"], "earlier");
+        assert_eq!(marks[1]["frame"], 4);
+        assert_eq!(
+            marks[1]["note"].as_str().expect("note").chars().count(),
+            MAX_MARK_NOTE_CHARS
+        );
+        assert_eq!(marks[2]["frame"], 9);
+        assert_eq!(marks[2]["note"], "later");
+        // Extension fields on a mark survive normalization like every other document object.
+        assert_eq!(marks[2]["markExtension"], 1);
+    }
+
+    #[test]
+    fn a_document_without_marks_loads_with_an_empty_list() {
+        let input = br#"{
+            "version": 1,
+            "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+            "scenes": [{"id": 0, "name": "Root"}],
+            "clips": []
+        }"#;
+        let document = parse_project_document(input).expect("document without marks");
+        assert!(document.scenes[0].marks.is_empty());
+        let normalized = normalize(std::str::from_utf8(input).expect("utf-8 fixture"));
+        assert_eq!(normalized["scenes"][0]["marks"], serde_json::json!([]));
     }
 
     #[test]

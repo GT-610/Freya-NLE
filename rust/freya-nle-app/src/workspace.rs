@@ -1889,6 +1889,7 @@ impl WorkspaceModel {
             grid_subdivision: 4,
             enable_snap: true,
             magnetic_snap_range: 10,
+            marks: Vec::new(),
             extra: BTreeMap::new(),
         };
         if !self.execute(TimelineCommand::InsertScene { index: None, scene }) {

@@ -5,7 +5,8 @@ use crate::policy::{
 };
 use crate::project::{
     AudioPluginDocument, ClipDocument, DEFAULT_FPS, EffectDocument, ExtraFields,
-    MAX_TIMELINE_LAYER, ProjectDocument, ProjectError, ProjectSettings, SceneDocument,
+    MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, ProjectDocument, ProjectError, ProjectSettings,
+    SceneDocument, SceneMark,
 };
 use crate::timeline_domain::allocate_id;
 use crate::types::IdAllocation;
@@ -214,6 +215,36 @@ impl TimelineState {
                     PatchOperation::ReplaceScene {
                         index,
                         before: scene,
+                        after: before,
+                    },
+                ))
+            }
+            EditRequest::SetSceneMarks { scene_id, marks } => {
+                if !valid_scene_marks(&marks) {
+                    return Err(StateError::InvalidArgument);
+                }
+                let index = self
+                    .document
+                    .scenes
+                    .iter()
+                    .position(|item| item.id == scene_id)
+                    .ok_or(StateError::InvalidArgument)?;
+                let before = self.document.scenes[index].clone();
+                if before.marks == marks {
+                    // No change means no patch, so a no-op never reaches the history stack.
+                    return Err(StateError::InvalidArgument);
+                }
+                let mut after = before.clone();
+                after.marks = marks;
+                Ok(replacement_transaction(
+                    PatchOperation::ReplaceScene {
+                        index,
+                        before: before.clone(),
+                        after: after.clone(),
+                    },
+                    PatchOperation::ReplaceScene {
+                        index,
+                        before: after,
                         after: before,
                     },
                 ))
@@ -1001,6 +1032,12 @@ pub enum EditRequest {
     UpdateScene {
         scene_id: i32,
         scene: SceneDocument,
+    },
+    /// Replaces one scene's frame marks. Frames must be non-negative and strictly
+    /// ascending; an identical list is rejected so a no-op never enters history.
+    SetSceneMarks {
+        scene_id: i32,
+        marks: Vec<SceneMark>,
     },
     InsertClip {
         #[serde(default)]
@@ -1806,6 +1843,22 @@ fn apply_operation(
     Ok(())
 }
 
+/// A scene's marks must be addressable and ordered, so the mark list can walk
+/// them by frame without sorting again on every redraw.
+fn valid_scene_marks(marks: &[SceneMark]) -> bool {
+    let mut previous: Option<i32> = None;
+    marks.iter().all(|mark| {
+        if mark.frame < 0 || mark.note.chars().count() > MAX_MARK_NOTE_CHARS {
+            return false;
+        }
+        if previous.is_some_and(|frame| mark.frame <= frame) {
+            return false;
+        }
+        previous = Some(mark.frame);
+        true
+    })
+}
+
 fn validate_document(document: &ProjectDocument) -> Result<(), StateError> {
     let settings = &document.settings;
     if !(1..=32_768).contains(&settings.width)
@@ -1818,11 +1871,9 @@ fn validate_document(document: &ProjectDocument) -> Result<(), StateError> {
         return Err(StateError::InvalidArgument);
     }
     let mut scene_ids = BTreeSet::new();
-    if document
-        .scenes
-        .iter()
-        .any(|scene| scene.id < 0 || !scene_ids.insert(scene.id))
-    {
+    if document.scenes.iter().any(|scene| {
+        scene.id < 0 || !scene_ids.insert(scene.id) || !valid_scene_marks(&scene.marks)
+    }) {
         return Err(StateError::InvalidArgument);
     }
     let mut clip_ids = BTreeSet::new();
@@ -2138,6 +2189,90 @@ mod tests {
             .apply_patch(&scene_transaction.inverse)
             .expect("scene inverse applies");
         assert_eq!(state.document, before);
+    }
+
+    fn mark(frame: i32, note: &str) -> SceneMark {
+        SceneMark {
+            frame,
+            note: note.to_owned(),
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn scene_marks_replace_as_one_reversible_patch() {
+        let mut before = document();
+        before.scenes[0]
+            .extra
+            .insert("sceneExtension".to_owned(), json!({"token": 1}));
+        let mut state = TimelineState::new(before.clone(), 2, 1).expect("valid state");
+        let marks = vec![mark(10, "intro"), mark(90, "chorus")];
+
+        let transaction = state
+            .plan(EditRequest::SetSceneMarks {
+                scene_id: 0,
+                marks: marks.clone(),
+            })
+            .expect("mark replacement plans");
+        state
+            .apply_patch(&transaction.forward)
+            .expect("mark replacement applies");
+        assert_eq!(state.document.scenes[0].marks, marks);
+        // Replacing marks must not disturb the rest of the scene.
+        assert_eq!(state.document.scenes[0].name, before.scenes[0].name);
+        assert_eq!(
+            state.document.scenes[0].extra["sceneExtension"],
+            json!({"token": 1})
+        );
+
+        state
+            .apply_patch(&transaction.inverse)
+            .expect("mark replacement reverses");
+        assert_eq!(state.document, before);
+    }
+
+    #[test]
+    fn scene_marks_reject_invalid_unchanged_and_unknown_scene_lists() {
+        let state = TimelineState::new(document(), 2, 1).expect("valid state");
+        for marks in [
+            vec![mark(5, ""), mark(5, "same frame")],
+            vec![mark(9, ""), mark(3, "descending")],
+            vec![mark(-1, "negative")],
+        ] {
+            assert!(
+                state
+                    .plan(EditRequest::SetSceneMarks { scene_id: 0, marks })
+                    .is_err(),
+                "an unordered, duplicated, or negative mark list must be refused"
+            );
+        }
+        // Clearing an already empty list is a no-op and must not enter history.
+        assert!(
+            state
+                .plan(EditRequest::SetSceneMarks {
+                    scene_id: 0,
+                    marks: Vec::new(),
+                })
+                .is_err()
+        );
+        assert!(
+            state
+                .plan(EditRequest::SetSceneMarks {
+                    scene_id: 99,
+                    marks: vec![mark(1, "")],
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn document_validation_rejects_out_of_order_marks() {
+        let mut document = document();
+        document.scenes[0].marks = vec![mark(4, ""), mark(2, "")];
+        assert_eq!(
+            TimelineState::new(document, 2, 1).err(),
+            Some(StateError::InvalidArgument)
+        );
     }
 
     #[test]

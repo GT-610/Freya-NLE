@@ -374,6 +374,7 @@ mod tests {
             grid_subdivision: 4,
             enable_snap: true,
             magnetic_snap_range: 10,
+            marks: Vec::new(),
             extra: Default::default(),
         }
     }
