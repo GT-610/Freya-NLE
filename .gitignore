@@ -14,6 +14,10 @@
 /no-gpu-probes/*/target/
 /no-gpu-probes/*/Cargo.lock
 
+# Offscreen UI snapshot tool (standalone crate)
+/tools/ui-snapshot/target/
+/tools/ui-snapshot/Cargo.lock
+
 # Exports
 /project_context.json
 
