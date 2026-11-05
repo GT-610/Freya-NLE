@@ -39,8 +39,50 @@ export global AppTheme {
     out property <length> control-radius: 6px;
     out property <length> surface-radius: 10px;
     out property <length> compact-control-height: 30px;
-    out property <length> toolbar-height: 38px;
-    out property <length> status-height: 24px;
+
+    // --- Editor chrome -------------------------------------------------
+    // Panel structure follows AviUtl2's style.conf [Layout] table so every
+    // surface derives its metrics from one place instead of ad-hoc pixels
+    // (audits/2026-11-05-aviutl2-ui-analysis.zh-CN.md, section 4).
+    out property <length> panel-header-height: 22px;
+    out property <length> footer-height: 24px;
+    out property <length> group-tab-height: 24px;
+    out property <length> separator-size: 6px;
+    out property <length> list-row-height: 26px;
+    out property <length> setting-row-height: 22px;
+    out property <length> setting-label-width: 96px;
+    out property <length> layer-height: 32px;
+    out property <length> layer-header-width: 96px;
+    out property <length> time-gauge-height: 32px;
+    out property <length> player-control-height: 40px;
+    out property <length> level-meter-width: 18px;
+
+    out property <brush> title-header-background: dark ? #404040 : #e9e9ee;
+    out property <brush> title-header-foreground: dark ? #f2f2f2 : #1b1c20;
+    out property <brush> separator: dark ? #0b0b0d : #c4c6cd;
+    out property <brush> ruler-background: dark ? #26262a : #f0f1f5;
+    out property <brush> grid-line: dark ? #ffffff16 : #00000012;
+    out property <brush> timecode: dark ? #e8e8ec : #23252b;
+    out property <brush> playhead: dark ? #c83030 : #b82828;
+    out property <brush> footer-background: dark ? #304080 : #dce3f2;
+    out property <brush> footer-foreground: dark ? #e8ebf7 : #1d2433;
+    out property <brush> footer-progress: dark ? #b84848 : #9c3a3a;
+
+    out property <brush> layer-background: dark ? #404040 : #f4f5f8;
+    out property <brush> layer-header-background: dark ? #4a4a4a : #e7e8ee;
+    out property <brush> layer-hover: dark ? #585858 : #dfe1e8;
+    out property <brush> layer-selected: dark ? #3c4054 : #d9e1f5;
+    out property <brush> layer-disabled: dark ? #343434 : #edeff3;
+
+    // Object colours follow AviUtl2's type groups, so a clip reads the same
+    // way at a glance regardless of the media it holds.
+    out property <brush> object-video: dark ? #3040e0 : #3b57d6;
+    out property <brush> object-audio: dark ? #d04030 : #bb382c;
+    out property <brush> object-text: dark ? #c8a030 : #a07a10;
+    out property <brush> object-control: dark ? #30b0c0 : #1d8b99;
+    out property <brush> object-filter: dark ? #30b030 : #268a26;
+    out property <brush> object-audio-filter: dark ? #b8b030 : #8f8a18;
+    out property <brush> object-selected: dark ? #5868ff : #2f49cc;
 
     changed preference-index => {
         Palette.color-scheme = preference-index == 0

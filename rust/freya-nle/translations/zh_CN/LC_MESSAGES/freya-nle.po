@@ -589,6 +589,9 @@ msgstr "隐藏，未锁定"
 msgid "Hide all layers"
 msgstr "隐藏所有图层"
 
+msgid "Hide media library"
+msgstr "隐藏媒体库"
+
 msgid "Hide this layer"
 msgstr "隐藏此图层"
 
@@ -915,6 +918,9 @@ msgstr "播放"
 
 msgid "Play / Pause"
 msgstr "播放 / 暂停"
+
+msgid "Playback position"
+msgstr "播放位置"
 
 msgid "Playback speed (percent)"
 msgstr "播放速度（百分比）"

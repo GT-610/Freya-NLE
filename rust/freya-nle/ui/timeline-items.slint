@@ -60,30 +60,40 @@ export component LayerHeaderItem inherits Rectangle {
     callback select-contents(int);
     callback command(string, int);
     callback scroll-requested(length) -> bool;
-    height: 30px;
-    background: root.layer.selected ? AppTheme.selection-background : header-touch.has-hover ? AppTheme.hover-background : AppTheme.panel-background;
+    height: AppTheme.layer-height;
+    background: !root.layer.visible
+        ? AppTheme.layer-disabled
+        : root.layer.selected
+            ? AppTheme.layer-selected
+            : header-touch.has-hover ? AppTheme.layer-hover : AppTheme.layer-header-background;
     border-width: 0px;
     animate background { duration: 120ms; }
 
     HorizontalLayout {
-        padding-left: 5px;
-        padding-right: 5px;
-        spacing: 4px;
+        padding-left: 7px;
+        padding-right: 6px;
+        spacing: 6px;
+        // Hidden layers dim the label instead of colouring the whole row, so a
+        // hidden layer stays selectable and readable (AviUtl2 keeps visibility
+        // on the name cell rather than as a row-wide tint).
         Text {
-            text: root.layer.visible ? "●" : "○";
+            text: root.layer.visible ? "◉" : "◌";
             color: root.layer.visible ? AppTheme.success : AppTheme.muted-foreground;
+            font-size: 0.8rem;
             vertical-alignment: center;
         }
         Text {
-            text: root.layer.index + 1;
-            color: AppTheme.foreground;
-            horizontal-alignment: center;
+            text: @tr("Layer {}", root.layer.index + 1);
+            color: root.layer.visible ? AppTheme.foreground : AppTheme.muted-foreground;
+            font-size: 0.8rem;
             vertical-alignment: center;
             horizontal-stretch: 1;
+            overflow: elide;
         }
         Text {
             text: root.layer.locked ? "L" : "";
             color: AppTheme.warning;
+            font-size: 0.72rem;
             vertical-alignment: center;
         }
     }

@@ -115,13 +115,13 @@ pub(super) fn sync_timeline_runtime_settings(
     main.set_project_tab_height(header_height);
     timeline.set_timeline_header_height(header_height);
     timeline
-        .set_timeline_track_height(settings.i32_value("timelineTrackHeight", 30).clamp(16, 100));
+        .set_timeline_track_height(settings.i32_value("timelineTrackHeight", 32).clamp(16, 100));
     timeline
         .set_timeline_ruler_height(settings.i32_value("timelineRulerHeight", 32).clamp(16, 100));
     timeline.set_maximum_layers(timeline_maximum_layers(settings));
     timeline.set_layer_header_width(
         settings
-            .i32_value("timelineLayerHeaderWidth", 60)
+            .i32_value("timelineLayerHeaderWidth", 96)
             .clamp(40, 300),
     );
     timeline.set_clip_resize_handle_width(
@@ -233,7 +233,7 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
             .clamp(0, 600),
     );
     window.set_enable_timeline_skimming(settings.bool_value("enableTimelineSkimming", true));
-    window.set_timeline_track_height(settings.i32_value("timelineTrackHeight", 30).clamp(16, 100));
+    window.set_timeline_track_height(settings.i32_value("timelineTrackHeight", 32).clamp(16, 100));
     window.set_timeline_header_height(
         settings
             .i32_value("timelineHeaderHeight", 28)
@@ -249,7 +249,7 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
     );
     window.set_timeline_layer_header_width(
         settings
-            .i32_value("timelineLayerHeaderWidth", 60)
+            .i32_value("timelineLayerHeaderWidth", 96)
             .clamp(40, 300),
     );
     window.set_timeline_clip_resize_handle_width(

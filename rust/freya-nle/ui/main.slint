@@ -1,5 +1,6 @@
 import { ProjectTabData, MissingMediaData } from "models.slint";
 import { Button, ScrollView, Slider, SpinBox } from "std-widgets.slint";
+import { FooterBar, TimeFormat } from "chrome.slint";
 import { AppTheme } from "theme.slint";
 import { ProjectTab } from "timeline-items.slint";
 import { TabAddButton, TransportButton, StereoAudioMeter } from "widgets.slint";
@@ -25,6 +26,10 @@ export component MainWindow inherits Window {
     in property <string> playback-speed-multiplier: "1.0x";
     in property <string> status-text: "Ready";
     in property <string> frame-counter-text: "0 / 0";
+    // Integer frame position and rate for the transport timecode. The host
+    // projects them with the rest of the transport state.
+    in property <int> playhead-frame: 0;
+    in property <int> frame-rate: 60;
     in property <float> audio-peak-left: 0;
     in property <float> audio-peak-right: 0;
     in property <float> audio-rms-left: 0;
@@ -198,8 +203,8 @@ export component MainWindow inherits Window {
             }
         }
             Rectangle {
-            height: AppTheme.toolbar-height;
-            background: AppTheme.panel-background;
+            height: AppTheme.player-control-height;
+            background: AppTheme.raised-background;
             HorizontalLayout {
                 padding-left: 10px;
                 padding-right: 10px;
@@ -208,6 +213,16 @@ export component MainWindow inherits Window {
                 // 8px keeps the natural-width speed spin box clear of the right
                 // padding at the 640px default window width.
                 spacing: 8px;
+                // Time first, gauge second: the control bar reads left to right
+                // the way AviUtl2's player control bar does.
+                Text {
+                    text: TimeFormat.timecode(root.playhead-frame, root.frame-rate);
+                    color: AppTheme.timecode;
+                    font-family: "Monospace";
+                    font-size: 0.78rem;
+                    vertical-alignment: center;
+                    accessible-label: @tr("Playback position");
+                }
                 seek-slider := Slider {
                     value: root.playhead;
                     minimum: 0;
@@ -216,17 +231,6 @@ export component MainWindow inherits Window {
                     accessible-label: @tr("Seek Bar");
                     accessible-description: @tr("Drag to change playback position on the timeline");
                     changed => { root.seek(self.value); }
-                }
-                Text {
-                    // Qt zero-pads the current frame to the total's digit count and
-                    // lets the label size itself, so the counter never clips and the
-                    // column keeps a stable width while the numbers change
-                    // (MainWindow.qml:1035-1049).
-                    text: root.frame-counter-text;
-                    font-family: "Monospace";
-                    font-size: 12px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
                 }
                 HorizontalLayout {
                     min-width: 96px;
@@ -299,22 +303,10 @@ export component MainWindow inherits Window {
         // "Relinked media to ...") and the reason a command was refused. Those
         // messages used to be projected into a property nothing rendered, so a
         // rejected action looked like a no-op.
-        Rectangle {
-            height: AppTheme.status-height;
-            background: AppTheme.raised-background;
-            border-width: 1px;
-            border-color: AppTheme.subtle-border;
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
-                Text {
-                    text: root.status-text;
-                    color: AppTheme.muted-foreground;
-                    font-size: 0.78rem;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
+        FooterBar {
+            left-text: root.status-text;
+            right-text: root.frame-counter-text;
+            monospace-left: false;
         }
         }
     }

@@ -589,6 +589,9 @@ msgstr "非表示、ロックなし"
 msgid "Hide all layers"
 msgstr "すべてのレイヤーを非表示"
 
+msgid "Hide media library"
+msgstr "メディアライブラリを隠す"
+
 msgid "Hide this layer"
 msgstr "このレイヤーを非表示にする"
 
@@ -915,6 +918,9 @@ msgstr "再生"
 
 msgid "Play / Pause"
 msgstr "再生 / 一時停止"
+
+msgid "Playback position"
+msgstr "再生位置"
 
 msgid "Playback speed (percent)"
 msgstr "再生速度（パーセント）"

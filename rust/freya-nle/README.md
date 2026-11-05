@@ -10,6 +10,13 @@ for the supported behavior, validation, and deferred architecture work.
 Standard widgets use the active platform palette and metrics. Timeline clips, waveforms,
 keyframes, drag grips, and splitter hit regions remain custom Slint editing surfaces.
 
+Editor chrome — panel headers, window footers, ruler timecode, and layer rows — uses the
+explicit tokens in `ui/theme.slint` instead of per-window pixel values. They follow AviUtl2's
+`style.conf` tables with light and dark values; `ui/chrome.slint` holds the shared `PanelHeader`,
+`FooterBar`, and `TimeFormat`. The rationale and the remaining batches are in
+[the AviUtl2 UI analysis](../../audits/2026-11-05-aviutl2-ui-analysis.zh-CN.md), and
+`tools/ui-snapshot` renders the windows offscreen for design review.
+
 ## Architecture
 
 The Slint frontend is intentionally thin:

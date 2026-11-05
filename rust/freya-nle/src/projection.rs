@@ -56,6 +56,11 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         timeline.set_playhead(0);
         timeline.set_duration(0);
         timeline.set_selected_clip_count(0);
+        // The footer's right reading belongs to the selected scene; with no
+        // project open it must not keep the last project's name.
+        timeline.set_scene_name(SharedString::default());
+        timeline.set_scene_resolution(SharedString::default());
+        timeline.set_scene_frame_rate(60);
         return;
     };
     let missing_media = workspace.missing_media();
@@ -312,6 +317,7 @@ pub(super) fn sync_transport(
     timeline.set_playhead(workspace.playhead());
     timeline.set_duration(workspace.timeline_view_duration());
     timeline.set_selected_layer(workspace.selected_layer());
+    main.set_playhead_frame(workspace.playhead());
     if let Some(scene) = workspace.scene_settings(workspace.selected_scene()) {
         timeline.set_grid_mode(SharedString::from(scene.grid_mode));
         timeline.set_grid_fps(finite_f32(scene.fps, 60.0));
@@ -319,7 +325,39 @@ pub(super) fn sync_transport(
         timeline.set_grid_offset(finite_f32(scene.grid_offset, 0.0));
         timeline.set_grid_interval(scene.grid_interval.max(1));
         timeline.set_grid_subdivision(scene.grid_subdivision.max(1));
+        // The footer repeats what the scene list and the time gauge refer to:
+        // name, pixel size and frame rate (AviUtl2's style.conf [Format]).
+        let frame_rate = scene_frame_rate(scene.fps);
+        timeline.set_scene_name(SharedString::from(scene.name));
+        timeline.set_scene_resolution(SharedString::from(scene_resolution_text(
+            scene.width,
+            scene.height,
+        )));
+        timeline.set_scene_frame_rate(frame_rate);
+        main.set_frame_rate(frame_rate);
+    } else {
+        timeline.set_scene_name(SharedString::default());
+        timeline.set_scene_resolution(SharedString::default());
+        timeline.set_scene_frame_rate(60);
+        main.set_frame_rate(60);
     }
+}
+
+/// Nominal frame rate for the timecode readings.
+///
+/// The timecode counts whole frames per second, so a fractional rate is
+/// rounded the way a video editor labels its own ruler. Zero, negative and
+/// non-finite rates fall back to 60 instead of dividing by zero.
+pub(super) fn scene_frame_rate(fps: f64) -> i32 {
+    if !fps.is_finite() || fps <= 0.0 {
+        return 60;
+    }
+    fps.round().clamp(1.0, 1000.0) as i32
+}
+
+/// `1920x1080` for the footer's resolution reading.
+pub(super) fn scene_resolution_text(width: i32, height: i32) -> String {
+    format!("{width}x{height}")
 }
 
 /// Format the playback speed the way Qt's SpinBox does.
