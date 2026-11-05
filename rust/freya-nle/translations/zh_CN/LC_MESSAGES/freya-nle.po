@@ -141,6 +141,9 @@ msgstr "电平表"
 msgid "Audio Object / Plugin Settings"
 msgstr "音频对象 / 插件设置"
 
+msgid "Audio object / plugin"
+msgstr "音频对象 / 插件"
+
 msgid "Audio Plugins"
 msgstr "音频插件"
 
@@ -852,6 +855,9 @@ msgstr "要插入的图层数："
 
 msgid "Number of recent projects to keep"
 msgstr "最近使用项目的保留数量"
+
+msgid "Object settings"
+msgstr "对象设置"
 
 msgid "Object / Effect"
 msgstr "对象 / 效果"

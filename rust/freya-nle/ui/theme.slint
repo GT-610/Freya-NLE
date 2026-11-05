@@ -49,7 +49,11 @@ export global AppTheme {
     out property <length> group-tab-height: 24px;
     out property <length> separator-size: 6px;
     out property <length> list-row-height: 26px;
-    out property <length> setting-row-height: 22px;
+    // AviUtl2 draws 20px controls and fits a row in 22px. Stock Slint controls
+    // need 26px to stay usable and accessible, so the row is 30px; the 22px
+    // density stays available as a later compact mode.
+    out property <length> setting-row-height: 30px;
+    out property <length> setting-header-height: 48px;
     out property <length> setting-label-width: 96px;
     out property <length> layer-height: 32px;
     out property <length> layer-header-width: 96px;

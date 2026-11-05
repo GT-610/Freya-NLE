@@ -141,6 +141,9 @@ msgstr "メーター"
 msgid "Audio Object / Plugin Settings"
 msgstr "音声オブジェクト / プラグイン設定"
 
+msgid "Audio object / plugin"
+msgstr "音声オブジェクト / プラグイン"
+
 msgid "Audio Plugins"
 msgstr "オーディオプラグイン"
 
@@ -852,6 +855,9 @@ msgstr "挿入するレイヤー数:"
 
 msgid "Number of recent projects to keep"
 msgstr "最近使ったプロジェクトの保持数"
+
+msgid "Object settings"
+msgstr "オブジェクト設定"
 
 msgid "Object / Effect"
 msgstr "オブジェクト / エフェクト"
