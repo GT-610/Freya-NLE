@@ -1480,3 +1480,6 @@ msgstr "音量（%）："
 
 msgid "Offsets apply to media objects on this layer; camera-controlled objects are not moved."
 msgstr "偏移作用于该图层的媒体对象；相机控制的对象不会被移动。"
+
+msgid "Copy with Following"
+msgstr "复制自身及之后"

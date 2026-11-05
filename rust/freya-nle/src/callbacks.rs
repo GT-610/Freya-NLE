@@ -549,6 +549,36 @@ pub(super) fn install_callbacks(
             });
         object_enabled_ui.sync();
     });
+    let object_copy_ui = object_settings_ui.clone();
+    object_settings.on_copy_effect(move |index, include_following| {
+        let _ = object_copy_ui
+            .model
+            .borrow_mut()
+            .current_workspace_mut()
+            .is_some_and(|workspace| {
+                workspace.copy_effects(index.max(0) as usize, include_following)
+            });
+        object_copy_ui.sync();
+    });
+    let object_cut_ui = object_settings_ui.clone();
+    object_settings.on_cut_effect(move |index| {
+        let _ = object_cut_ui
+            .model
+            .borrow_mut()
+            .current_workspace_mut()
+            .is_some_and(|workspace| workspace.cut_effects(index.max(0) as usize, false));
+        object_cut_ui.sync();
+    });
+    let object_paste_ui = object_settings_ui.clone();
+    object_settings.on_paste_effect(move |index| {
+        let _ = object_paste_ui
+            .model
+            .borrow_mut()
+            .current_workspace_mut()
+            .is_some_and(|workspace| workspace.paste_effects(index.max(0) as usize));
+        object_paste_ui.sync();
+    });
+
     let object_remove_ui = object_settings_ui.clone();
     object_settings.on_remove_effect(move |index| {
         let _ = object_remove_ui

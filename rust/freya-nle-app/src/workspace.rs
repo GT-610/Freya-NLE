@@ -171,6 +171,9 @@ pub struct WorkspaceModel {
     undo: Vec<TimelineTransaction>,
     redo: Vec<TimelineTransaction>,
     clip_clipboard: Vec<ClipDocument>,
+    /// Effects copied from an object's stack, in stack order. Audio plugins
+    /// keep their own presets, so this clipboard holds effects only.
+    effect_clipboard: Vec<EffectDocument>,
     undo_limit: usize,
     undo_group_start: Option<usize>,
     continuous_edit: Option<ContinuousEdit>,
@@ -200,6 +203,7 @@ impl WorkspaceModel {
             undo: Vec::new(),
             redo: Vec::new(),
             clip_clipboard: Vec::new(),
+            effect_clipboard: Vec::new(),
             undo_limit: DEFAULT_UNDO_LIMIT,
             undo_group_start: None,
             continuous_edit: None,
@@ -1244,6 +1248,102 @@ impl WorkspaceModel {
         } else {
             false
         }
+    }
+
+    /// Copies effects from the selected object's stack: the clicked effect, or
+    /// the clicked effect and everything below it.
+    pub fn copy_effects(&mut self, effect_index: usize, include_following: bool) -> bool {
+        let Some((_, effects)) = self
+            .selected_clip_document()
+            .map(|clip| (clip.id, clip.effects.clone()))
+        else {
+            return false;
+        };
+        let Some(range) = effect_copy_range(effects.len(), effect_index, include_following) else {
+            return false;
+        };
+        let copied = effects[range].to_vec();
+        let count = copied.len();
+        self.effect_clipboard = copied;
+        self.set_status(status_message!(
+            "Copied {count} effect(s)",
+            "已复制 {count} 个特效",
+            "エフェクト {count} 件をコピーしました"
+        ));
+        true
+    }
+
+    /// Copies a range and removes it as one undo step. The clipboard is only
+    /// replaced when the removal succeeds, so a refused cut keeps the old one.
+    pub fn cut_effects(&mut self, effect_index: usize, include_following: bool) -> bool {
+        let Some((_, effects)) = self
+            .selected_clip_document()
+            .map(|clip| (clip.id, clip.effects.clone()))
+        else {
+            return false;
+        };
+        let Some(range) = effect_copy_range(effects.len(), effect_index, include_following) else {
+            return false;
+        };
+        let copied = effects[range.clone()].to_vec();
+        let count = copied.len();
+        if !self.remove_effect_indices(range.collect()) {
+            return false;
+        }
+        self.effect_clipboard = copied;
+        self.set_status(status_message!(
+            "Cut {count} effect(s)",
+            "已剪切 {count} 个特效",
+            "エフェクト {count} 件を切り取りました"
+        ));
+        true
+    }
+
+    /// Pastes the effect clipboard after `effect_index`, or at the end of the
+    /// stack when the index is past it. Pasting is one undo step.
+    pub fn paste_effects(&mut self, effect_index: usize) -> bool {
+        let Some((clip_id, length)) = self
+            .selected_clip_document()
+            .map(|clip| (clip.id, clip.effects.len()))
+        else {
+            return false;
+        };
+        if self.effect_clipboard.is_empty() {
+            self.set_status(status_message!(
+                "The effect clipboard is empty",
+                "特效剪贴板为空",
+                "エフェクトのクリップボードは空です"
+            ));
+            return false;
+        }
+        let insert_at = effect_index.saturating_add(1).min(length);
+        let insertions = self
+            .effect_clipboard
+            .iter()
+            .enumerate()
+            .map(|(offset, effect)| EffectInsertion {
+                index: insert_at + offset,
+                effect: effect.clone(),
+            })
+            .collect::<Vec<_>>();
+        let count = insertions.len();
+        if !self.execute(TimelineCommand::InsertEffects {
+            clip_id,
+            insertions,
+        }) {
+            return false;
+        }
+        self.effect_selection.click(insert_at, false, false);
+        self.set_status(status_message!(
+            "Pasted {count} effect(s)",
+            "已粘贴 {count} 个特效",
+            "エフェクト {count} 件を貼り付けました"
+        ));
+        true
+    }
+
+    pub fn has_effect_clipboard(&self) -> bool {
+        !self.effect_clipboard.is_empty()
     }
 
     pub fn set_effect_parameter_at_frame(
@@ -5138,6 +5238,19 @@ fn normalized_scene_settings(mut input: SceneSettingsInput) -> SceneSettingsInpu
     input
 }
 
+/// The effect indices a copy or cut covers, or `None` when the clicked index is
+/// past the stack.
+fn effect_copy_range(
+    length: usize,
+    index: usize,
+    include_following: bool,
+) -> Option<std::ops::Range<usize>> {
+    if index >= length {
+        return None;
+    }
+    Some(index..if include_following { length } else { index + 1 })
+}
+
 fn bounded_f64(value: f64, minimum: f64, maximum: f64, fallback: f64) -> f64 {
     if value.is_finite() {
         value.clamp(minimum, maximum)
@@ -6017,6 +6130,79 @@ mod tests {
             path: None,
             dirty: false,
         })
+    }
+
+    #[test]
+    fn effect_clipboard_copies_pastes_and_undoes_as_one_step() {
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        assert!(!workspace.has_effect_clipboard());
+        assert!(!workspace.paste_effects(0), "an empty clipboard is refused");
+
+        assert!(workspace.copy_effects(1, false));
+        assert!(workspace.has_effect_clipboard());
+        let before = workspace.document().clone();
+        assert!(workspace.paste_effects(1));
+        let effects = workspace
+            .selected_clip_document()
+            .expect("clip stays selected")
+            .effects
+            .clone();
+        assert_eq!(effects.len(), 4);
+        assert_eq!(effects[1].id, "blur");
+        assert_eq!(
+            effects[2].id, "blur",
+            "the copy lands right after the clicked effect"
+        );
+        assert_eq!(effects[2].params["size"], json!(0));
+        assert!(effects[2].keyframes.is_some(), "keyframes travel with it");
+        assert_eq!(effects[3].id, "mosaic");
+
+        assert!(workspace.undo());
+        assert_eq!(workspace.document(), &before);
+    }
+
+    #[test]
+    fn effect_clipboard_copies_and_cuts_a_tail_or_a_single_effect() {
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+
+        // Copy the clicked effect and everything below it.
+        assert!(workspace.copy_effects(1, true));
+        assert!(workspace.paste_effects(2));
+        let effects = workspace
+            .selected_clip_document()
+            .expect("clip stays selected")
+            .effects
+            .clone();
+        assert_eq!(effects.len(), 5);
+        assert_eq!(
+            effects
+                .iter()
+                .map(|effect| effect.id.as_str())
+                .collect::<Vec<_>>(),
+            ["rect", "blur", "mosaic", "blur", "mosaic"]
+        );
+
+        // A cut removes the range and keeps the clipboard only after it works.
+        assert!(workspace.cut_effects(0, false));
+        let effects = workspace
+            .selected_clip_document()
+            .expect("clip stays selected")
+            .effects
+            .clone();
+        assert_eq!(effects.len(), 4);
+        assert!(
+            !workspace.cut_effects(99, false),
+            "a stale index is refused"
+        );
+        assert!(workspace.paste_effects(0));
+        let effects = workspace
+            .selected_clip_document()
+            .expect("clip stays selected")
+            .effects
+            .clone();
+        assert_eq!(effects[1].id, "rect", "the refused cut kept the clipboard");
     }
 
     #[test]

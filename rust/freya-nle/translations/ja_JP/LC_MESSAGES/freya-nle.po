@@ -1480,3 +1480,6 @@ msgstr "音量 (%):"
 
 msgid "Offsets apply to media objects on this layer; camera-controlled objects are not moved."
 msgstr "オフセットはこのレイヤーのメディアオブジェクトに適用されます。カメラ制御の対象オブジェクトは移動しません。"
+
+msgid "Copy with Following"
+msgstr "自身以降をコピー"

@@ -82,10 +82,14 @@ export component ObjectSettingsWindow inherits Window {
     in-out property <int> picker-alpha: 255;
     in-out property <string> font-filter: "";
     in-out property <string> current-font-family: "";
+    in property <bool> has-effect-clipboard: false;
     callback select-effect(int, bool, bool);
     callback context-select-effect(int);
     callback reorder-effect(int, float);
     callback set-effect-enabled(int, bool);
+    callback copy-effect(int, bool);
+    callback cut-effect(int);
+    callback paste-effect(int);
     callback remove-effect(int);
     callback remove-effect-selection(int);
     callback delete-selected-effects();
@@ -236,9 +240,14 @@ export component ObjectSettingsWindow inherits Window {
                             effect: effect;
                             selected-count: root.selected-effect-count;
                             selected-removable: root.selected-effects-removable;
+                            effects-mode: !root.audio-plugin-mode;
+                            clipboard-available: root.has-effect-clipboard;
                             activate(index, control, shift) => { root.select-effect(index, control, shift); }
                             context-activate(index) => { root.context-select-effect(index); }
                             set-enabled(index, enabled) => { root.set-effect-enabled(index, enabled); }
+                            copy-effect(index, following) => { root.copy-effect(index, following); }
+                            cut-effect(index) => { root.cut-effect(index); }
+                            paste-effect(index) => { root.paste-effect(index); }
                             remove-selection(index) => { root.remove-effect-selection(index); }
                             reorder(index, delta-y) => { root.reorder-effect(index, delta-y); }
                             save-preset(index, effect-name) => {

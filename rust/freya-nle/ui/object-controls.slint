@@ -300,11 +300,17 @@ export component EffectSidebarEntry inherits Rectangle {
     in property <ObjectEffectData> effect;
     in property <int> selected-count: 0;
     in property <bool> selected-removable: false;
+    // The effect clipboard is effect-only; audio plugins keep presets instead.
+    in property <bool> effects-mode: true;
+    in property <bool> clipboard-available: false;
     callback activate(int, bool, bool);
     callback context-activate(int);
     callback set-enabled(int, bool);
     callback remove-selection(int);
     callback reorder(int, float);
+    callback copy-effect(int, bool);
+    callback cut-effect(int);
+    callback paste-effect(int);
     callback save-preset(int, string);
     callback load-preset(int, string);
     callback delete-preset(int, string);
@@ -322,6 +328,29 @@ export component EffectSidebarEntry inherits Rectangle {
 
     effect-menu := ContextMenuArea {
         Menu {
+            MenuItem {
+                title: @tr("Copy");
+                enabled: root.effects-mode;
+                activated => { root.copy-effect(root.effect.index, false); }
+            }
+            MenuItem {
+                title: @tr("Copy with Following");
+                enabled: root.effects-mode;
+                activated => { root.copy-effect(root.effect.index, true); }
+            }
+            MenuItem {
+                title: @tr("Cut");
+                // The leading transform cannot leave the stack; the core would
+                // refuse the cut, so the item is greyed instead.
+                enabled: root.effects-mode && root.effect.removable;
+                activated => { root.cut-effect(root.effect.index); }
+            }
+            MenuItem {
+                title: @tr("Paste");
+                enabled: root.effects-mode && root.clipboard-available;
+                activated => { root.paste-effect(root.effect.index); }
+            }
+            MenuSeparator { }
             MenuItem {
                 title: root.selected-count > 1
                     ? @tr("Delete {} selected items", root.selected-count)

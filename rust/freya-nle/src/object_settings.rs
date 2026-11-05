@@ -566,6 +566,7 @@ pub(super) fn sync_object_settings(
         window.set_audio_plugin_mode(false);
         window.set_selected_effect_count(0);
         window.set_selected_effects_removable(false);
+        window.set_has_effect_clipboard(false);
         update_vec_model(&window.get_effects(), Vec::new());
         update_vec_model(&window.get_setting_rows(), Vec::new());
         return;
@@ -581,6 +582,11 @@ pub(super) fn sync_object_settings(
             .map_or(0, |workspace| workspace.selected_clip_count() as i32),
     );
     window.set_audio_plugin_mode(projection.audio_plugin_mode);
+    window.set_has_effect_clipboard(
+        model
+            .current_workspace()
+            .is_some_and(|workspace| workspace.has_effect_clipboard()),
+    );
     window.set_clip_title(SharedString::from(format!(
         "{}  (ID {})",
         localized_effect_metadata(&projection.clip_label),
