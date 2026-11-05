@@ -45,6 +45,7 @@ fn main() {
         "timeline" => (1280u32, 460u32),
         "settings" => (900u32, 650u32),
         "system" => (760u32, 680u32),
+        "confirm" => (460u32, 200u32),
         "export" => (700u32, 700u32),
         "packages" => (760u32, 520u32),
         other => {
@@ -83,6 +84,13 @@ fn main() {
             }
             ui.show().expect("show the main window");
             save(&window, width, height, &output_name("main", preference));
+        }
+        "confirm" => {
+            let ui = SaveConfirmationWindow::new().expect("create the confirmation window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_project_name("Untitled 1".into());
+            ui.show().expect("show the confirmation window");
+            save(&window, width, height, &output_name("confirm", preference));
         }
         "export" => {
             let ui = ExportWindow::new().expect("create the export window");
