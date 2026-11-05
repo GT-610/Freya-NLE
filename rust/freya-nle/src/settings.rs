@@ -113,6 +113,9 @@ pub(super) fn sync_timeline_runtime_settings(
         .i32_value("timelineHeaderHeight", 28)
         .clamp(16, 100);
     main.set_project_tab_height(header_height);
+    // The merged timeline draws the same project strip, so it uses the same
+    // height instead of its own default.
+    timeline.set_project_tab_height(header_height);
     timeline.set_timeline_header_height(header_height);
     timeline
         .set_timeline_track_height(settings.i32_value("timelineTrackHeight", 32).clamp(16, 100));
@@ -135,6 +138,9 @@ pub(super) fn sync_timeline_runtime_settings(
     // AviUtl2 keeps the preview above the layer area; the merged pane follows
     // the same preference here and can be hidden again from the View menu.
     timeline.set_preview_visible(settings.bool_value("timelinePreviewVisible", false));
+    // The preview window's View menu names the layout action, so it has to
+    // know what the timeline is doing.
+    main.set_merged_workspace(timeline.get_preview_visible());
     timeline.set_preview_pane_height(
         settings
             .i32_value("timelinePreviewHeight", 320)
@@ -146,6 +152,32 @@ pub(super) fn sync_timeline_runtime_settings(
         timeline.set_skimmer_visible(false);
     }
     object_settings.set_sidebar_on_right(settings.bool_value("settingDialogSidebarRight", false));
+}
+
+/// Persists the merged-preview preferences.
+///
+/// The View-menu toggle, the divider drag, the height menu items and the
+/// workspace action all change one of these two values; keeping the atomic
+/// write and the clamping here stops the copies from drifting apart.
+pub(super) fn save_timeline_preview_settings(
+    settings: &RefCell<SettingsStore>,
+    visible: Option<bool>,
+    height: Option<f32>,
+) -> Result<(), String> {
+    let mut snapshot = settings.borrow().snapshot();
+    if let Some(visible) = visible {
+        snapshot.insert(
+            "timelinePreviewVisible".to_owned(),
+            serde_json::json!(visible),
+        );
+    }
+    if let Some(height) = height {
+        snapshot.insert(
+            "timelinePreviewHeight".to_owned(),
+            serde_json::json!(height.round().clamp(120.0, 720.0) as i32),
+        );
+    }
+    settings.borrow_mut().apply(snapshot)
 }
 
 pub(super) fn project_defaults(settings: &SettingsStore) -> ProjectDefaults {

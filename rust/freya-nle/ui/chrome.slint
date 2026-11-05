@@ -4,7 +4,7 @@ import { AppTheme } from "theme.slint";
 // AviUtl2 labels its ruler with absolute time beside the frame number; the
 // editor keeps frames first and derives the same reading here.
 export global TimeFormat {
-    public pure function pad-two(value: int) -> string {
+    pure function pad-two(value: int) -> string {
         return value < 10 ? "0\{value}" : "\{value}";
     }
 
@@ -31,9 +31,6 @@ export struct PanelAction {
 
 export component PanelHeader inherits Rectangle {
     in property <string> title;
-    // Secondary text on the right of the title, e.g. a count or the current
-    // filter. Empty hides it.
-    in property <string> subtitle: "";
     in property <[PanelAction]> actions;
     callback action(int);
 
@@ -54,13 +51,6 @@ export component PanelHeader inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
             horizontal-stretch: 1;
-        }
-        Text {
-            text: root.subtitle;
-            visible: root.subtitle != "";
-            color: AppTheme.muted-foreground;
-            font-size: 0.72rem;
-            vertical-alignment: center;
         }
         for action[index] in root.actions : Rectangle {
             width: 20px;

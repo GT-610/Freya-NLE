@@ -186,6 +186,8 @@ export component PackageManagerWindow inherits Window {
         FooterBar {
             left-text: root.status-text;
             progress: root.busy ? root.progress : -1;
+            // Status text is prose, not a counter.
+            monospace-left: false;
         }
     }
 

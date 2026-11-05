@@ -174,13 +174,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // A saved geometry from before the merged layout can be shorter than the
     // pane needs; grow it so the transport bar is not clipped on launch.
-    if timeline.get_preview_visible() {
-        let window = timeline.window();
-        let logical = window.size().to_logical(window.scale_factor());
-        if logical.height < 640.0 {
-            window.set_size(slint::LogicalSize::new(logical.width, 720.0));
-        }
-    }
+    lifecycle::ensure_timeline_height_for_preview(&timeline);
     restore_window_geometry(
         save_confirmation.window(),
         &settings.borrow(),

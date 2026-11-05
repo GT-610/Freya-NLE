@@ -195,8 +195,8 @@ RTTI 中的 `Component::*` 类名与 `.rdata` 标题一一对应，构成完整�
 
 ### 采用
 
-1. **显式令牌**：把 AviUtl2 的度量与色彩整理成 `AppTheme` 的 `chrome` 与
-   `object-*` 令牌，明暗两套派生，替换散落的魔法数字。
+1. **显式令牌**：把 AviUtl2 的度量与色彩整理成 `AppTheme` 的界面令牌（明暗两套派生），
+   替换散落的魔法数字。
 2. **面板标题头**：统一为"标题 + 右侧动作"的 22px 结构，先用于时间线侧栏。
 3. **时间双读数**：标尺主行帧号、次行 `HH:MM:SS.FF`；脚注栏并列时间与帧。
 4. **脚注栏**：24px，左段时间/帧，右段场景名 | 分辨率 | 帧率，随播放头更新。
@@ -251,7 +251,7 @@ B1 的边界：只改呈现层和少量投影属性，不触碰编辑模型、�
 
 | 位置 | 改动 |
 | --- | --- |
-| `theme.slint` | 新增 `panel-header-height`、`footer-height`、`layer-height`、`layer-header-width`、`setting-row-height` 等度量令牌，以及脚注、标尺、时间、图层、对象类型五组颜色；明暗两套取值。 |
+| `theme.slint` | 新增 `panel-header-height`、`footer-height`、`layer-height`、`setting-row-height` 等度量令牌，以及脚注、标尺、时间、图层四组颜色；明暗两套取值。 |
 | `chrome.slint`（新增） | `PanelHeader`（标题 + 右侧字符动作）、`FooterBar`（左/右读数）、`TimeFormat.timecode`（帧 → `HH:MM:SS.FF`）。 |
 | `main.slint` | 播放器控制条改为"时间 → 走带条 → 走带 → 电平 → 倍速"，状态条换成脚注栏（左状态、右帧计数）。 |
 | `timeline.slint` | 标尺主行帧号、次行时间码（按刻度宽度决定每 1/2/4/8 个刻度标一次）；底部脚注栏；媒体库改为标题头 + 面板；默认行高 32、名区 96；播放头改为帧光标红。 |
@@ -293,7 +293,7 @@ AviUtl2 的 `LayerHeightMenu` 允许把图层行高在小/中/大之间切换（
 | 位置 | 改动 |
 | --- | --- |
 | `system-settings.slint` | 新增"图层密度"下拉（紧凑 24 / 标准 32 / 大 48 / 自定义）；`changed timeline-track-height` 反推档位，避免下拉与实际值不同步；草稿默认值同步为 32 / 96。 |
-| `projection.rs` | 补齐对象类型色：控制类对象（`camera` / `camera_control` / `scene`）用青色，音频用红色，媒体对象继续用主题的视频蓝；与 `theme.slint` 的 `object-*` 令牌一致。 |
+| `projection.rs` | 补齐对象类型色：控制类对象（`camera` / `camera_control` / `scene`）用青色，音频用红色，媒体对象继续用主题的视频蓝；颜色常量集中在 `timeline_clip_style`。 |
 | `tests.rs` | 新增类型色映射测试，覆盖音频、三种控制对象与媒体回退。 |
 
 验证：`cargo test -p freya-nle`（54 项）通过；离屏渲染"时间线"与"系统设置→时间线"

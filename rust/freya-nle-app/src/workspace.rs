@@ -4823,7 +4823,9 @@ fn bounded_positive_f64(value: f64, maximum: f64, fallback: f64) -> f64 {
 mod tests {
     use super::*;
 
-    fn labelled_clip(effects: Vec<(&str, &str, &[(&str, &str)])>) -> ClipDocument {
+    type LabelledEffect<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    fn labelled_clip(effects: Vec<LabelledEffect<'_>>) -> ClipDocument {
         ClipDocument {
             id: 1,
             scene_id: 1,

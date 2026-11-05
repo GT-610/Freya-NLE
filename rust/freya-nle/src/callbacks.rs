@@ -24,8 +24,8 @@ use crate::playback::AudioPlaybackRuntime;
 use crate::projection::{sync_transport_weak, sync_weak_windows, update_vec_model};
 use crate::settings::{
     apply_system_settings, parse_finite_f64, parse_i32_unbounded, parse_required_f64,
-    parse_required_i32, project_defaults, sync_project_settings, sync_scene_settings,
-    sync_system_settings, timeline_last_layer,
+    parse_required_i32, project_defaults, save_timeline_preview_settings, sync_project_settings,
+    sync_scene_settings, sync_system_settings, timeline_last_layer,
 };
 use crate::shortcuts::sync_timeline_zoom_settings;
 use crate::{MainWindow, TimelineMediaDropResult, TimelineWindow};
@@ -2815,21 +2815,18 @@ pub(super) fn install_callbacks(
         };
         let next = (timeline.get_preview_pane_height() + delta).clamp(120.0, 720.0);
         timeline.set_preview_pane_height(next);
-        let mut snapshot = adjust_preview_settings.borrow().snapshot();
-        snapshot.insert(
-            "timelinePreviewHeight".to_owned(),
-            serde_json::json!(next.round() as i32),
-        );
-        if let Err(error) = adjust_preview_settings.borrow_mut().apply(snapshot) {
+        if let Err(error) =
+            save_timeline_preview_settings(&adjust_preview_settings, None, Some(next))
+        {
             eprintln!("Could not save the preview height: {error}");
         }
     });
     let own_preview_target = main.as_weak();
     main.on_show_preview_window(move || {
-        if let Some(main) = own_preview_target.upgrade() {
-            if let Err(error) = main.show() {
-                eprintln!("Could not show the preview window: {error}");
-            }
+        if let Some(main) = own_preview_target.upgrade()
+            && let Err(error) = main.show()
+        {
+            eprintln!("Could not show the preview window: {error}");
         }
     });
     let preview_window_target = main.as_weak();
@@ -2857,12 +2854,9 @@ pub(super) fn install_callbacks(
 
     let preview_height_settings = settings.clone();
     timeline.on_preview_height_changed(move |height| {
-        let mut snapshot = preview_height_settings.borrow().snapshot();
-        snapshot.insert(
-            "timelinePreviewHeight".to_owned(),
-            serde_json::json!(height.round().clamp(120.0, 720.0) as i32),
-        );
-        if let Err(error) = preview_height_settings.borrow_mut().apply(snapshot) {
+        if let Err(error) =
+            save_timeline_preview_settings(&preview_height_settings, None, Some(height))
+        {
             eprintln!("Could not save the preview height: {error}");
         }
     });
@@ -2879,23 +2873,12 @@ pub(super) fn install_callbacks(
         if let Some(main) = preview_toggle_main.upgrade() {
             main.set_merged_workspace(visible);
         }
-        // The merged layout has a taller minimum; grow the window when the
-        // pane is switched on so its transport bar is not clipped.
-        if visible {
-            let window = timeline.window();
-            let logical = window.size().to_logical(window.scale_factor());
-            if logical.height < 640.0 {
-                window.set_size(slint::LogicalSize::new(logical.width, 720.0));
-            }
-        }
+        crate::lifecycle::ensure_timeline_height_for_preview(&timeline);
         // The menu toggle is the quick path, so it writes the preference the
         // settings dialog uses instead of keeping a session-only state.
-        let mut snapshot = preview_toggle_settings.borrow().snapshot();
-        snapshot.insert(
-            "timelinePreviewVisible".to_owned(),
-            serde_json::json!(visible),
-        );
-        if let Err(error) = preview_toggle_settings.borrow_mut().apply(snapshot) {
+        if let Err(error) =
+            save_timeline_preview_settings(&preview_toggle_settings, Some(visible), None)
+        {
             eprintln!("Could not save the timeline preview preference: {error}");
         }
     });

@@ -27,7 +27,7 @@ use freya_nle_app::fragment::FRAGMENT_EXTENSION;
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::{ApplicationModel, LifecycleStep, WorkspaceModel};
 use slint::winit_030::WinitWindowAccessor;
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -62,6 +62,19 @@ pub(super) struct LifecycleUi {
     pub(super) effect_catalog: Rc<RefCell<EffectCatalog>>,
     pub(super) audio_plugin_catalog: Rc<RefCell<AudioPluginCatalog>>,
     pub(super) quit_confirmed: Cell<bool>,
+}
+
+/// Grows the timeline window when the merged layout needs more height than a
+/// saved geometry provides, so the preview's transport bar is not clipped.
+pub(super) fn ensure_timeline_height_for_preview(timeline: &TimelineWindow) {
+    if !timeline.get_preview_visible() {
+        return;
+    }
+    let window = timeline.window();
+    let logical = window.size().to_logical(window.scale_factor());
+    if logical.height < 640.0 {
+        window.set_size(LogicalSize::new(logical.width, 720.0));
+    }
 }
 
 pub(super) struct WindowRefs<'a> {

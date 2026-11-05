@@ -454,6 +454,7 @@ fn populate_timeline(ui: &TimelineWindow) {
     ui.set_selected_media_id(2);
 }
 
+#[allow(clippy::too_many_arguments)] // a sample row, not a reusable API
 fn clip(
     id: i32,
     label: &str,
