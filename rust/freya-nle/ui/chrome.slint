@@ -105,6 +105,9 @@ export component FooterBar inherits Rectangle {
     in property <string> right-text: "";
     // The left reading changes every frame; monospace keeps it from jittering.
     in property <bool> monospace-left: true;
+    // Long-running work fills the footer instead of pushing a bar into the
+    // content (AviUtl2's style.conf `FooterProgress`). Negative hides it.
+    in property <float> progress: -1;
 
     height: AppTheme.footer-height;
     background: AppTheme.footer-background;
@@ -129,5 +132,11 @@ export component FooterBar inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
+    }
+    if root.progress >= 0 : Rectangle {
+        y: parent.height - 3px;
+        height: 3px;
+        width: parent.width * clamp(root.progress, 0, 1);
+        background: AppTheme.footer-progress;
     }
 }
