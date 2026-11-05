@@ -766,11 +766,11 @@ msgstr "媒体"
 msgid "Media Library"
 msgstr "媒体库"
 
-msgid "Merged workspace"
-msgstr "合并工作区"
-
 msgid "Memory and Cache"
 msgstr "内存与缓存"
+
+msgid "Merge workspace"
+msgstr "合并工作区"
 
 msgid "Minimum cache amount"
 msgstr "最小缓存量"
@@ -1182,8 +1182,8 @@ msgstr "选择工具"
 msgid "Sequence number digits"
 msgstr "序列编号位数"
 
-msgid "Separate windows"
-msgstr "独立窗口"
+msgid "Separate workspace"
+msgstr "分离工作区"
 
 msgid "Settings"
 msgstr "设置"

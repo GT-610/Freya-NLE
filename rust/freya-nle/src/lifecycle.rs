@@ -3,7 +3,8 @@
 use crate::dialogs::{
     choose_exo_object_to_import, choose_fragment_save_path, choose_fragment_to_import,
     choose_project_save_path, choose_project_to_open, insert_visible_window_geometry,
-    install_opaque_window, json_i32, show_and_redraw, show_error_dialog, show_info_dialog,
+    install_opaque_window, json_i32, show_and_redraw, show_centered_and_redraw, show_error_dialog,
+    show_info_dialog,
 };
 use crate::easing::refresh_easing_translations;
 use crate::localization::{current_ui_language, localized, select_bundled_ui_translation};
@@ -17,8 +18,8 @@ use crate::settings::{project_defaults, sync_timeline_runtime_settings, system_t
 use crate::{
     AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, MainWindow, ObjectSettingsWindow,
     PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow, ProjectRecoveryWindow,
-    ProjectSettingsWindow, RecentProjectData, RecoveryEntryData, SceneSettingsWindow,
-    SystemSettingsWindow, TimelineWindow,
+    ProjectSettingsWindow, RecentProjectData, RecoveryEntryData, SaveConfirmationWindow,
+    SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::effect_catalog::EffectCatalog;
@@ -45,6 +46,7 @@ pub(super) struct LifecycleUi {
     pub(super) recovery: slint::Weak<ProjectRecoveryWindow>,
     pub(super) main: slint::Weak<MainWindow>,
     pub(super) timeline: slint::Weak<TimelineWindow>,
+    pub(super) save_confirmation: slint::Weak<SaveConfirmationWindow>,
     pub(super) object_settings: slint::Weak<ObjectSettingsWindow>,
     pub(super) easing: slint::Weak<EasingConfigWindow>,
     pub(super) project_settings: slint::Weak<ProjectSettingsWindow>,
@@ -67,6 +69,7 @@ pub(super) struct WindowRefs<'a> {
     pub(super) recovery: &'a ProjectRecoveryWindow,
     pub(super) main: &'a MainWindow,
     pub(super) timeline: &'a TimelineWindow,
+    pub(super) save_confirmation: &'a SaveConfirmationWindow,
     pub(super) object_settings: &'a ObjectSettingsWindow,
     pub(super) easing: &'a EasingConfigWindow,
     pub(super) project_settings: &'a ProjectSettingsWindow,
@@ -196,6 +199,7 @@ impl LifecycleUi {
         if action == "merged" || action == "separate" {
             let merged = action == "merged";
             timeline.set_preview_visible(merged);
+            main.set_merged_workspace(merged);
             if merged {
                 let window = timeline.window();
                 let logical = window.size().to_logical(window.scale_factor());
@@ -283,6 +287,9 @@ impl LifecycleUi {
                 if let Some(timeline) = self.timeline.upgrade() {
                     timeline.set_save_confirmation_visible(false);
                 }
+                if let Some(dialog) = self.save_confirmation.upgrade() {
+                    let _ = dialog.hide();
+                }
             }
 
             match step {
@@ -290,9 +297,20 @@ impl LifecycleUi {
                 LifecycleStep::ConfirmSave { project_name, .. } => {
                     self.sync();
                     if let Some(main) = self.main.upgrade() {
-                        main.set_save_confirmation_project(project_name.into());
                         main.set_save_confirmation_visible(true);
                         let _ = show_and_redraw(&main);
+                    }
+                    if let Some(dialog) = self.save_confirmation.upgrade() {
+                        let preview = self.main.upgrade();
+                        dialog.set_project_name(project_name.into());
+                        match preview {
+                            Some(main) => {
+                                let _ = show_centered_and_redraw(&dialog, &main);
+                            }
+                            None => {
+                                let _ = show_and_redraw(&dialog);
+                            }
+                        }
                     }
                     if let Some(timeline) = self.timeline.upgrade() {
                         timeline.set_save_confirmation_visible(true);
@@ -839,6 +857,9 @@ impl LifecycleUi {
             let _ = window.hide();
         }
         if let Some(window) = self.recovery.upgrade() {
+            let _ = window.hide();
+        }
+        if let Some(window) = self.save_confirmation.upgrade() {
             let _ = window.hide();
         }
         if let Some(window) = self.main.upgrade() {

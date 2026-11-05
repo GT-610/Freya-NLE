@@ -82,10 +82,12 @@ export component LayerHeaderItem inherits Rectangle {
             font-size: 0.8rem;
             vertical-alignment: center;
         }
+        // Only the number: a translated "Layer N" elided to "图层…" in a
+        // 60-96px column, and the number is what users scan for.
         Text {
-            text: @tr("Layer {}", root.layer.index + 1);
+            text: "\{root.layer.index + 1}";
             color: root.layer.visible ? AppTheme.foreground : AppTheme.muted-foreground;
-            font-size: 0.8rem;
+            font-size: 0.82rem;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;

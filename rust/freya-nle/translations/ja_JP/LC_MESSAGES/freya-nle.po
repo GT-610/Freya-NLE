@@ -766,11 +766,11 @@ msgstr "メディア"
 msgid "Media Library"
 msgstr "メディアライブラリ"
 
-msgid "Merged workspace"
-msgstr "統合ワークスペース"
-
 msgid "Memory and Cache"
 msgstr "メモリとキャッシュ"
+
+msgid "Merge workspace"
+msgstr "ワークスペースを統合"
 
 msgid "Minimum cache amount"
 msgstr "最小キャッシュ量"
@@ -1182,8 +1182,8 @@ msgstr "選択ツール"
 msgid "Sequence number digits"
 msgstr "連番桁数"
 
-msgid "Separate windows"
-msgstr "別ウィンドウ"
+msgid "Separate workspace"
+msgstr "ワークスペースを分離"
 
 msgid "Settings"
 msgstr "設定"

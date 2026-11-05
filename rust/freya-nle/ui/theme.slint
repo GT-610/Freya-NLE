@@ -72,6 +72,13 @@ export global AppTheme {
     out property <brush> footer-foreground: dark ? #e8ebf7 : #1d2433;
     out property <brush> footer-progress: dark ? #b84848 : #9c3a3a;
 
+    // Dialog surfaces use explicit values rather than the platform palette:
+    // a freshly created window can render before the palette has a colour
+    // scheme, and a white dialog in a dark editor is the worst case.
+    out property <brush> dialog-background: dark ? #2b2b2d : #f7f7f9;
+    out property <brush> dialog-foreground: dark ? #f2f2f2 : #1b1c20;
+    out property <brush> dialog-muted: dark ? #b9b9c0 : #5b5f6b;
+
     out property <brush> layer-background: dark ? #404040 : #f4f5f8;
     out property <brush> layer-header-background: dark ? #4a4a4a : #e7e8ee;
     out property <brush> layer-hover: dark ? #585858 : #dfe1e8;

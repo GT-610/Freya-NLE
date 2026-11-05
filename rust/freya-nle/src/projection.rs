@@ -282,6 +282,8 @@ pub(super) fn sync_project_tabs(
         .map_or(-1, |index| index as i32);
     update_vec_model(&main.get_project_tabs(), tabs.clone());
     main.set_current_project(current);
+    // The workspace menu item names the action the other layout would take.
+    main.set_merged_workspace(timeline.get_preview_visible());
     // The merged timeline shows the same strip, so it can stand in for the
     // preview window.
     update_vec_model(&timeline.get_project_tabs(), tabs);

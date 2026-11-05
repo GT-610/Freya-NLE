@@ -373,8 +373,11 @@ export component TimelineWindow inherits Window {
             MenuItem { title: @tr("Show Settings Dialog"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[22] : root.no-shortcut; icon: @image-url("icons/settings.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-object-settings(); } }
             Menu {
                 title: @tr("Workspace");
-                MenuItem { title: @tr("Merged workspace"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("merged"); } }
-                MenuItem { title: @tr("Separate windows"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("separate"); } }
+                MenuItem {
+                    title: root.preview-visible ? @tr("Separate workspace") : @tr("Merge workspace");
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.workspace-action(root.preview-visible ? "separate" : "merged"); }
+                }
                 MenuSeparator { }
                 MenuItem { title: @tr("Editing layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("editing"); } }
                 MenuItem { title: @tr("Animation layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("animation"); } }

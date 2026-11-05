@@ -142,6 +142,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let recovery = ProjectRecoveryWindow::new()?;
     let main = MainWindow::new()?;
     let timeline = TimelineWindow::new()?;
+    let save_confirmation = SaveConfirmationWindow::new()?;
     launcher
         .window()
         .set_size(slint::LogicalSize::new(700.0, 500.0));
@@ -160,11 +161,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     sync_timeline_zoom_settings(&timeline, &settings.borrow());
     // The merged preview pane is a saved preference; apply it before the
     // window is shown so the first frame already has its final layout.
-    timeline.set_preview_visible(
-        settings
-            .borrow()
-            .bool_value("timelinePreviewVisible", false),
-    );
+    let merged_workspace = settings
+        .borrow()
+        .bool_value("timelinePreviewVisible", false);
+    timeline.set_preview_visible(merged_workspace);
+    main.set_merged_workspace(merged_workspace);
     timeline.set_preview_pane_height(
         settings
             .borrow()
@@ -180,6 +181,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             window.set_size(slint::LogicalSize::new(logical.width, 720.0));
         }
     }
+    restore_window_geometry(
+        save_confirmation.window(),
+        &settings.borrow(),
+        "saveConfirmation",
+        WindowGeometry::new(400, 300, 460, 200),
+    );
     let object_settings = ObjectSettingsWindow::new()?;
     let easing = EasingConfigWindow::new()?;
     let project_settings = ProjectSettingsWindow::new()?;
@@ -320,6 +327,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         recovery: recovery.as_weak(),
         main: main.as_weak(),
         timeline: timeline.as_weak(),
+        save_confirmation: save_confirmation.as_weak(),
         object_settings: object_settings.as_weak(),
         easing: easing.as_weak(),
         project_settings: project_settings.as_weak(),
@@ -346,6 +354,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             recovery: &recovery,
             main: &main,
             timeline: &timeline,
+            save_confirmation: &save_confirmation,
             object_settings: &object_settings,
             easing: &easing,
             project_settings: &project_settings,

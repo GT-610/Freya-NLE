@@ -369,6 +369,7 @@ pub(super) fn install_callbacks(
         recovery,
         main,
         timeline,
+        save_confirmation,
         object_settings,
         easing,
         project_settings,
@@ -1152,7 +1153,7 @@ pub(super) fn install_callbacks(
     });
 
     let confirm_save_ui = lifecycle_ui.clone();
-    main.on_confirm_save(move || {
+    save_confirmation.on_confirm_save(move || {
         let step = confirm_save_ui
             .model
             .borrow_mut()
@@ -1160,7 +1161,7 @@ pub(super) fn install_callbacks(
         confirm_save_ui.handle(step);
     });
     let confirm_discard_ui = lifecycle_ui.clone();
-    main.on_confirm_discard(move || {
+    save_confirmation.on_confirm_discard(move || {
         let step = confirm_discard_ui
             .model
             .borrow_mut()
@@ -1168,12 +1169,22 @@ pub(super) fn install_callbacks(
         confirm_discard_ui.handle(step);
     });
     let confirm_cancel_ui = lifecycle_ui.clone();
-    main.on_confirm_cancel(move || {
+    save_confirmation.on_confirm_cancel(move || {
         let step = confirm_cancel_ui
             .model
             .borrow_mut()
             .answer_save_confirmation(SaveDecision::Cancel);
         confirm_cancel_ui.handle(step);
+    });
+
+    let confirm_close_ui = lifecycle_ui.clone();
+    save_confirmation.window().on_close_requested(move || {
+        let step = confirm_close_ui
+            .model
+            .borrow_mut()
+            .answer_save_confirmation(SaveDecision::Cancel);
+        confirm_close_ui.handle(step);
+        CloseRequestResponse::HideWindow
     });
 
     let select_model = model.clone();
@@ -2857,6 +2868,7 @@ pub(super) fn install_callbacks(
     });
 
     let preview_toggle_timeline = timeline.as_weak();
+    let preview_toggle_main = main.as_weak();
     let preview_toggle_settings = settings.clone();
     timeline.on_toggle_preview(move || {
         let Some(timeline) = preview_toggle_timeline.upgrade() else {
@@ -2864,6 +2876,9 @@ pub(super) fn install_callbacks(
         };
         let visible = !timeline.get_preview_visible();
         timeline.set_preview_visible(visible);
+        if let Some(main) = preview_toggle_main.upgrade() {
+            main.set_merged_workspace(visible);
+        }
         // The merged layout has a taller minimum; grow the window when the
         // pane is switched on so its transport bar is not clipped.
         if visible {

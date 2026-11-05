@@ -1,0 +1,92 @@
+import { Button } from "std-widgets.slint";
+import { AppTheme } from "theme.slint";
+
+// The unsaved-changes question, as its own window.
+//
+// It used to be drawn as an overlay on the preview window, which meant the
+// dialog moved with the preview and could not be placed on another screen.
+// The Qt build raised a real dialog for it (MainWindow.qml:672-716), and a
+// separate window restores that: Escape cancels, Return saves.
+export component SaveConfirmationWindow inherits Window {
+    title: @tr("Confirm Save");
+    preferred-width: 460px;
+    preferred-height: 200px;
+    min-width: 380px;
+    min-height: 180px;
+    background: AppTheme.dialog-background;
+
+    in property <string> project-name: "";
+
+    callback confirm-save();
+    callback confirm-discard();
+    callback confirm-cancel();
+
+    forward-focus: dialog-focus;
+
+    dialog-focus := FocusScope {
+        width: 100%;
+        height: 100%;
+        // The focus waits for the next event-loop turn: taking it while the
+        // window is being created re-enters the backend's accessibility borrow.
+        init => { dialog-focus-timer.start(); }
+        dialog-focus-timer := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => { self.stop(); dialog-focus.focus(); }
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.confirm-cancel();
+                accept
+            } else if event.text == Key.Return {
+                root.confirm-save();
+                accept
+            } else {
+                reject
+            }
+        }
+
+        // The window background alone is not enough on every renderer, so the
+        // dialog paints its own surface.
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: AppTheme.dialog-background;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            Text {
+                text: @tr("Confirm Save");
+                color: AppTheme.dialog-foreground;
+                font-size: 1.15rem;
+                font-weight: 700;
+            }
+            Text {
+                text: root.project-name + @tr(" has unsaved changes.\nSave before continuing?");
+                color: AppTheme.dialog-muted;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                Button {
+                    text: @tr("confirm-save" => "Save");
+                    accessible-label: @tr("confirm-save" => "Save");
+                    clicked => { root.confirm-save(); }
+                }
+                Button {
+                    text: @tr("Discard");
+                    accessible-label: @tr("Discard");
+                    clicked => { root.confirm-discard(); }
+                }
+                Button {
+                    text: @tr("Cancel");
+                    accessible-label: @tr("Cancel");
+                    clicked => { root.confirm-cancel(); }
+                }
+            }
+        }
+        }
+    }
+}

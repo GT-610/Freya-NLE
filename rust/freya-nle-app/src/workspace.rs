@@ -237,6 +237,42 @@ impl WorkspaceModel {
         self.selected_clips().len()
     }
 
+    /// What a timeline clip calls itself.
+    ///
+    /// Media objects list the generic transform effect first ("標準描画" /
+    /// "Standard drawing"), which told the user nothing about the clip and hid the
+    /// media name. Prefer the file name the object carries, then the first effect
+    /// that is not that transform, then the object type.
+    fn clip_label(clip: &ClipDocument) -> String {
+        // The importer stores the file on the object's effect (`path` for video and
+        // images, `source` for audio), not on the clip itself; project files written
+        // elsewhere sometimes put it on the clip, so both are checked.
+        let media_path = ["path", "source"]
+            .iter()
+            .find_map(|key| clip.params.get(*key))
+            .or_else(|| {
+                clip.effects.iter().find_map(|effect| {
+                    ["path", "source"]
+                        .iter()
+                        .find_map(|key| effect.params.get(*key))
+                })
+            })
+            .and_then(serde_json::Value::as_str);
+        if let Some(name) = media_path
+            .and_then(|path| Path::new(path).file_name())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+        {
+            return name.to_owned();
+        }
+        clip.effects
+            .iter()
+            .find(|effect| effect.id != "transform")
+            .map(|effect| effect.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| clip.clip_type.clone())
+    }
+
     pub fn timeline_clips(&self) -> Vec<TimelineClip> {
         let locked_layers = self
             .selected_scene_document()
@@ -249,12 +285,7 @@ impl WorkspaceModel {
             .filter(|clip| clip.scene_id == self.selected_scene)
             .map(|clip| TimelineClip {
                 id: clip.id,
-                label: clip
-                    .effects
-                    .first()
-                    .map(|effect| effect.name.clone())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| clip.clip_type.clone()),
+                label: Self::clip_label(clip),
                 clip_type: clip.clip_type.clone(),
                 start: clip.start,
                 duration: clip.duration,
@@ -4791,6 +4822,59 @@ fn bounded_positive_f64(value: f64, maximum: f64, fallback: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn labelled_clip(effects: Vec<(&str, &str, &[(&str, &str)])>) -> ClipDocument {
+        ClipDocument {
+            id: 1,
+            scene_id: 1,
+            clip_type: "video".to_owned(),
+            start: 0,
+            duration: 10,
+            layer: 0,
+            clip_by_upper_object: false,
+            params: Map::new(),
+            audio_plugins: Vec::new(),
+            effects: effects
+                .into_iter()
+                .map(|(id, name, params)| EffectDocument {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    enabled: true,
+                    params: params
+                        .iter()
+                        .map(|(key, value)| ((*key).to_owned(), Value::from(*value)))
+                        .collect(),
+                    keyframes: None,
+                    extra: BTreeMap::new(),
+                })
+                .collect(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn clip_labels_prefer_the_media_name_over_the_transform() {
+        // A media object lists the transform first, so the old label read
+        // "標準描画" and hid what the clip actually was.
+        let media = labelled_clip(vec![
+            ("transform", "標準描画", &[]),
+            (
+                "video",
+                "動画ファイル",
+                &[("path", "/media/harbor_sunrise.mp4")],
+            ),
+        ]);
+        assert_eq!(WorkspaceModel::clip_label(&media), "harbor_sunrise.mp4");
+
+        let no_path = labelled_clip(vec![
+            ("transform", "標準描画", &[]),
+            ("text", "テキスト", &[]),
+        ]);
+        assert_eq!(WorkspaceModel::clip_label(&no_path), "テキスト");
+
+        let only_transform = labelled_clip(vec![("transform", "標準描画", &[])]);
+        assert_eq!(WorkspaceModel::clip_label(&only_transform), "video");
+    }
     use crate::ApplicationModel;
     use crate::timeline_interaction::TimelineDragKind;
     use freya_nle_core::api::{TimelineState, clip_midpoints};
