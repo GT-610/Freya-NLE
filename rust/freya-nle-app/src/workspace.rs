@@ -15,12 +15,13 @@ use crate::timeline_interaction::{TimelineDragRequest, plan_timeline_drag};
 use crate::transport::Transport;
 use freya_nle_core::api::{
     ClipDocument, ClipGeometryUpdate, EffectDocument, EffectInsertion, EffectMetadata,
-    EffectPreset, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, MidpointOperation, ProjectDocument,
-    ProjectSettings, SceneDocument, TimelineCommand, TimelineTransaction, TrimEdge,
-    clipboard_duration, evaluate_keyframe_track, find_vacant_scene_frame, inspect_keyframe_track,
-    plan_clip_delta_move, plan_clip_ripple_trim, plan_clip_roll, plan_clip_slide, plan_clip_slip,
-    plan_clipboard_paste, plan_effect_reorder, plan_scene_layer_insertion, plan_scene_layer_shift,
-    snap_scene_frame, timeline_duration as core_timeline_duration,
+    EffectPreset, MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, MidpointOperation,
+    ProjectDocument, ProjectSettings, SceneDocument, SceneMark, TimelineCommand,
+    TimelineTransaction, TrimEdge, clipboard_duration, evaluate_keyframe_track,
+    find_vacant_scene_frame, inspect_keyframe_track, plan_clip_delta_move, plan_clip_ripple_trim,
+    plan_clip_roll, plan_clip_slide, plan_clip_slip, plan_clipboard_paste, plan_effect_reorder,
+    plan_scene_layer_insertion, plan_scene_layer_shift, snap_scene_frame,
+    timeline_duration as core_timeline_duration,
 };
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -1951,6 +1952,190 @@ impl WorkspaceModel {
         } else {
             false
         }
+    }
+
+    /// Frame marks of the scene being edited, in ascending frame order.
+    pub fn scene_marks(&self) -> Vec<SceneMark> {
+        self.selected_scene_document()
+            .map(|scene| scene.marks.clone())
+            .unwrap_or_default()
+    }
+
+    /// The mark under the playhead, when the current scene has one.
+    pub fn mark_at_playhead(&self) -> Option<SceneMark> {
+        self.scene_marks()
+            .into_iter()
+            .find(|mark| mark.frame == self.playhead)
+    }
+
+    /// Adds a mark at the playhead, or removes the mark already there.
+    ///
+    /// The returned flag says whether the mark exists afterwards, so the caller
+    /// can leave a toggle checked without reading the document back.
+    pub fn toggle_mark_at_playhead(&mut self) -> bool {
+        let scene_id = self.selected_scene;
+        let frame = self.playhead;
+        let mut marks = self.scene_marks();
+        let removed = match marks.iter().position(|mark| mark.frame == frame) {
+            Some(index) => {
+                marks.remove(index);
+                true
+            }
+            None => {
+                marks.push(SceneMark {
+                    frame,
+                    note: String::new(),
+                    extra: Default::default(),
+                });
+                marks.sort_by_key(|mark| mark.frame);
+                false
+            }
+        };
+        if !self.execute(TimelineCommand::SetSceneMarks { scene_id, marks }) {
+            return false;
+        }
+        self.set_status(if removed {
+            status_message!(
+                "Removed the mark at frame {frame}",
+                "已删除第 {frame} 帧的标记",
+                "フレーム {frame} のマークを削除しました"
+            )
+        } else {
+            status_message!(
+                "Marked frame {frame}",
+                "已在第 {frame} 帧打标记",
+                "フレーム {frame} にマークしました"
+            )
+        });
+        !removed
+    }
+
+    /// Replaces one mark's note. The note is bounded like a loaded document.
+    pub fn set_mark_note(&mut self, frame: i32, note: &str) -> bool {
+        let note = note.chars().take(MAX_MARK_NOTE_CHARS).collect::<String>();
+        let mut marks = self.scene_marks();
+        let Some(mark) = marks.iter_mut().find(|mark| mark.frame == frame) else {
+            self.set_status(status_message!(
+                "Frame {frame} has no mark",
+                "第 {frame} 帧没有标记",
+                "フレーム {frame} にマークがありません"
+            ));
+            return false;
+        };
+        if mark.note == note {
+            // Nothing changed, so there is nothing to undo.
+            return true;
+        }
+        mark.note = note;
+        let scene_id = self.selected_scene;
+        if !self.execute(TimelineCommand::SetSceneMarks { scene_id, marks }) {
+            return false;
+        }
+        self.set_status(status_message!(
+            "Updated the mark note",
+            "已更新标记备注",
+            "マークのメモを更新しました"
+        ));
+        true
+    }
+
+    /// Removes the mark on the supplied frame, if any.
+    pub fn remove_mark(&mut self, frame: i32) -> bool {
+        let mut marks = self.scene_marks();
+        let Some(index) = marks.iter().position(|mark| mark.frame == frame) else {
+            self.set_status(status_message!(
+                "Frame {frame} has no mark",
+                "第 {frame} 帧没有标记",
+                "フレーム {frame} にマークがありません"
+            ));
+            return false;
+        };
+        marks.remove(index);
+        let scene_id = self.selected_scene;
+        if !self.execute(TimelineCommand::SetSceneMarks { scene_id, marks }) {
+            return false;
+        }
+        self.set_status(status_message!(
+            "Removed the mark at frame {frame}",
+            "已删除第 {frame} 帧的标记",
+            "フレーム {frame} のマークを削除しました"
+        ));
+        true
+    }
+
+    /// Removes every mark in the current scene as one undo step.
+    pub fn clear_marks(&mut self) -> bool {
+        let count = self.scene_marks().len();
+        if count == 0 {
+            self.set_status(status_message!(
+                "There are no marks to clear",
+                "没有可清除的标记",
+                "削除するマークがありません"
+            ));
+            return false;
+        }
+        let scene_id = self.selected_scene;
+        if !self.execute(TimelineCommand::SetSceneMarks {
+            scene_id,
+            marks: Vec::new(),
+        }) {
+            return false;
+        }
+        self.set_status(status_message!(
+            "Cleared {count} marks",
+            "已清除 {count} 个标记",
+            "マークを {count} 件削除しました"
+        ));
+        true
+    }
+
+    /// Moves the playhead onto a mark. The frame is checked first so a stale
+    /// mark-list entry does not move the playhead at all.
+    pub fn seek_to_mark(&mut self, frame: i32) -> bool {
+        if !self.scene_marks().iter().any(|mark| mark.frame == frame) {
+            return false;
+        }
+        self.seek(frame);
+        true
+    }
+
+    /// Moves to the first mark after the playhead.
+    pub fn seek_to_next_mark(&mut self) -> bool {
+        let Some(frame) = self
+            .scene_marks()
+            .into_iter()
+            .find(|mark| mark.frame > self.playhead)
+            .map(|mark| mark.frame)
+        else {
+            self.set_status(status_message!(
+                "There is no later mark",
+                "没有更靠后的标记",
+                "次のマークがありません"
+            ));
+            return false;
+        };
+        self.seek(frame);
+        true
+    }
+
+    /// Moves to the last mark before the playhead.
+    pub fn seek_to_previous_mark(&mut self) -> bool {
+        let Some(frame) = self
+            .scene_marks()
+            .into_iter()
+            .rev()
+            .find(|mark| mark.frame < self.playhead)
+            .map(|mark| mark.frame)
+        else {
+            self.set_status(status_message!(
+                "There is no earlier mark",
+                "没有更靠前的标记",
+                "前のマークがありません"
+            ));
+            return false;
+        };
+        self.seek(frame);
+        true
     }
 
     pub fn execute(&mut self, command: TimelineCommand) -> bool {
@@ -4955,6 +5140,90 @@ mod tests {
             path: None,
             dirty: false,
         })
+    }
+
+    #[test]
+    fn frame_marks_toggle_carry_notes_and_undo_as_one_step() {
+        let mut workspace = workspace();
+        workspace.seek(40);
+        assert!(workspace.toggle_mark_at_playhead(), "a mark is added");
+        assert_eq!(workspace.scene_marks().len(), 1);
+        assert_eq!(
+            workspace.mark_at_playhead().map(|mark| mark.frame),
+            Some(40)
+        );
+
+        assert!(workspace.set_mark_note(40, "chorus"));
+        assert_eq!(workspace.scene_marks()[0].note, "chorus");
+        assert!(
+            !workspace.set_mark_note(41, "nowhere"),
+            "a frame without a mark rejects a note"
+        );
+
+        // Removing the mark is reversible on its own.
+        assert!(!workspace.toggle_mark_at_playhead(), "the mark is removed");
+        assert!(workspace.scene_marks().is_empty());
+        assert!(workspace.undo());
+        assert_eq!(workspace.scene_marks()[0].note, "chorus");
+        assert!(workspace.undo());
+        assert_eq!(workspace.scene_marks()[0].note, "");
+    }
+
+    #[test]
+    fn clearing_marks_removes_all_of_them_and_refuses_an_empty_list() {
+        let mut workspace = workspace();
+        for frame in [0, 20, 40] {
+            workspace.seek(frame);
+            workspace.toggle_mark_at_playhead();
+        }
+        assert_eq!(workspace.scene_marks().len(), 3);
+        assert!(workspace.clear_marks());
+        assert!(workspace.scene_marks().is_empty());
+        assert!(!workspace.clear_marks(), "an empty list is a no-op");
+        assert!(workspace.undo());
+        assert_eq!(workspace.scene_marks().len(), 3);
+    }
+
+    #[test]
+    fn marks_navigate_in_frame_order_within_the_current_scene() {
+        let mut workspace = workspace();
+        for frame in [0, 20, 40] {
+            workspace.seek(frame);
+            workspace.toggle_mark_at_playhead();
+        }
+        workspace.seek(10);
+        assert!(workspace.seek_to_next_mark());
+        assert_eq!(workspace.playhead(), 20);
+        assert!(workspace.seek_to_next_mark());
+        assert_eq!(workspace.playhead(), 40);
+        assert!(!workspace.seek_to_next_mark(), "40 is the last mark");
+        assert!(workspace.seek_to_previous_mark());
+        assert_eq!(workspace.playhead(), 20);
+        assert!(workspace.seek_to_mark(0));
+        assert_eq!(workspace.playhead(), 0);
+        assert!(!workspace.seek_to_mark(21), "an absent frame does not seek");
+
+        // Marks belong to a scene: switching scenes hides the other scene's list.
+        workspace.switch_scene(2);
+        assert!(workspace.scene_marks().is_empty());
+        assert!(!workspace.seek_to_next_mark());
+        workspace.switch_scene(1);
+        assert_eq!(workspace.scene_marks().len(), 3);
+    }
+
+    #[test]
+    fn marks_survive_a_document_round_trip() {
+        let mut workspace = workspace();
+        workspace.seek(12);
+        workspace.toggle_mark_at_playhead();
+        workspace.set_mark_note(12, "keep me");
+        let bytes = serde_json::to_vec(workspace.document()).expect("document serializes");
+        let state = TimelineState::from_json(&bytes).expect("document with marks reloads");
+        let document = state.snapshot();
+        let marks = &document.scenes[0].marks;
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].frame, 12);
+        assert_eq!(marks[0].note, "keep me");
     }
 
     /// A minimal object file with one text object, enough to exercise the import path.
