@@ -416,6 +416,17 @@ fn populate_timeline(ui: &TimelineWindow) {
     ui.set_selected_layer(0);
     ui.set_selected_clip_count(1);
     ui.set_pixels_per_frame(1.6);
+    ui.set_project_tabs(ModelRc::new(VecModel::from(vec![
+        ProjectTabData {
+            name: "harbor_trip".into(),
+            dirty: false,
+        },
+        ProjectTabData {
+            name: "title_reel".into(),
+            dirty: true,
+        },
+    ])));
+    ui.set_current_project(0);
     ui.set_scene_name("Root".into());
     ui.set_scene_resolution("1920x1080".into());
     ui.set_scene_frame_rate(30);
