@@ -44,8 +44,11 @@ fn main() {
         "main" => (640u32, 400u32),
         "timeline" => (1280u32, 460u32),
         "settings" => (900u32, 650u32),
+        "system" => (760u32, 680u32),
         other => {
-            eprintln!("unknown window {other:?}; expected `timeline`, `main` or `settings`");
+            eprintln!(
+                "unknown window {other:?}; expected `timeline`, `main`, `settings` or `system`"
+            );
             std::process::exit(2);
         }
     };
@@ -75,6 +78,13 @@ fn main() {
             populate_main(&ui);
             ui.show().expect("show the main window");
             save(&window, width, height, &output_name("main", preference));
+        }
+        "system" => {
+            let ui = SystemSettingsWindow::new().expect("create the system settings window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_tab_index(2);
+            ui.show().expect("show the system settings window");
+            save(&window, width, height, &output_name("system", preference));
         }
         "settings" => {
             let ui = ObjectSettingsWindow::new().expect("create the object settings window");
@@ -306,7 +316,8 @@ fn populate_timeline(ui: &TimelineWindow) {
             2,
             "「海边的清晨」",
             "text",
-            Color::from_rgb_u8(0xc8, 0xa0, 0x30),
+            // Text is a media object, so it keeps the theme's video blue.
+            Color::from_rgb_u8(0x47, 0x7f, 0xbd),
             60,
             90,
             1,
@@ -334,9 +345,9 @@ fn populate_timeline(ui: &TimelineWindow) {
         ),
         clip(
             5,
-            "blur (filter)",
-            "filter",
-            Color::from_rgb_u8(0x30, 0xb0, 0x30),
+            "scene: Scene 2",
+            "scene",
+            Color::from_rgb_u8(0x30, 0xb0, 0xc0),
             260,
             70,
             1,
