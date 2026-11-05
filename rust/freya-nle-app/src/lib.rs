@@ -376,7 +376,10 @@ impl ApplicationModel {
     }
 
     pub fn select_project(&mut self, index: usize) -> bool {
-        if index >= self.projects.len() {
+        // A prompt in flight (save confirmation, save path) belongs to the
+        // project it was raised for, so a tab click has to wait instead of
+        // moving the current project under it.
+        if self.pending_lifecycle.is_some() || index >= self.projects.len() {
             return false;
         }
         if let Some(workspace) = self.current_workspace_mut() {
@@ -730,6 +733,30 @@ mod tests {
         let mut app = ApplicationModel::default();
         app.create_project(ProjectDefaults::default());
         assert!(!app.select_project(10));
+        assert_eq!(app.current_project_index(), Some(0));
+    }
+
+    #[test]
+    fn project_selection_waits_for_a_pending_prompt() {
+        let mut app = ApplicationModel::default();
+        app.create_project(ProjectDefaults::default());
+        app.create_project(ProjectDefaults::default());
+        let second_id = app.current_project_instance_id().expect("project exists");
+        // An untitled project asks for a path when it is saved, and that prompt
+        // belongs to the project it was raised for.
+        assert!(matches!(
+            app.request_save_current_project(),
+            LifecycleStep::ChooseSavePath { .. }
+        ));
+        assert!(!app.select_project(0));
+        assert_eq!(app.current_project_index(), Some(1));
+        assert_eq!(app.current_project_instance_id(), Some(second_id));
+        // Answering it releases the selection again.
+        assert!(matches!(
+            app.complete_save_path(None),
+            LifecycleStep::Cancelled
+        ));
+        assert!(app.select_project(0));
         assert_eq!(app.current_project_index(), Some(0));
     }
 

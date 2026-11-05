@@ -1152,6 +1152,43 @@ pub(super) fn install_callbacks(
         }
     });
 
+    // The timeline is an auxiliary window in the separate layout, where hiding it
+    // just frees the screen and the preview window keeps the workspace. In the
+    // merged layout it holds the whole workspace, so closing it has to run the
+    // same quit flow as the preview window instead of leaving no window on screen.
+    let close_timeline_ui = lifecycle_ui.clone();
+    let close_timeline_settings = lifecycle_ui.settings.clone();
+    timeline.window().on_close_requested(move || {
+        if close_timeline_ui.quit_confirmed.get() {
+            return CloseRequestResponse::HideWindow;
+        }
+        let merged = close_timeline_ui
+            .timeline
+            .upgrade()
+            .is_some_and(|timeline| timeline.get_preview_visible());
+        if !merged {
+            if let Some(timeline) = close_timeline_ui.timeline.upgrade() {
+                persist_window_geometry(&close_timeline_settings, "timeline", timeline.window());
+            }
+            return CloseRequestResponse::HideWindow;
+        }
+        let confirm_unsaved = close_timeline_ui
+            .settings
+            .borrow()
+            .bool_value("showConfirmOnClose", true);
+        let step = close_timeline_ui
+            .model
+            .borrow_mut()
+            .request_quit(confirm_unsaved);
+        let quit_ready = matches!(step, LifecycleStep::QuitReady);
+        close_timeline_ui.handle(step);
+        if quit_ready {
+            CloseRequestResponse::HideWindow
+        } else {
+            CloseRequestResponse::KeepWindowShown
+        }
+    });
+
     let confirm_save_ui = lifecycle_ui.clone();
     save_confirmation.on_confirm_save(move || {
         let step = confirm_save_ui

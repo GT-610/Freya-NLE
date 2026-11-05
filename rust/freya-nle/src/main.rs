@@ -365,7 +365,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         lifecycle_ui,
         audio_playback.clone(),
     );
-    install_window_geometry_close_handler(timeline.as_weak(), settings.clone(), "timeline");
     let closing_object_settings = object_settings.as_weak();
     let closing_object_model = model.clone();
     let closing_object_store = settings.clone();
