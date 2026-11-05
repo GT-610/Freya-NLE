@@ -165,6 +165,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .borrow()
             .bool_value("timelinePreviewVisible", false),
     );
+    timeline.set_preview_pane_height(
+        settings
+            .borrow()
+            .i32_value("timelinePreviewHeight", 320)
+            .clamp(120, 720) as f32,
+    );
     // A saved geometry from before the merged layout can be shorter than the
     // pane needs; grow it so the transport bar is not clipped on launch.
     if timeline.get_preview_visible() {

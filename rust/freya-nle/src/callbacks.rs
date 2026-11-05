@@ -2796,6 +2796,23 @@ pub(super) fn install_callbacks(
 
     // The merged timeline carries the project strip too, so it forwards tab
     // actions to the preview window that owns the project commands.
+    let adjust_preview_timeline = timeline.as_weak();
+    let adjust_preview_settings = settings.clone();
+    main.on_adjust_preview_height(move |delta| {
+        let Some(timeline) = adjust_preview_timeline.upgrade() else {
+            return;
+        };
+        let next = (timeline.get_preview_pane_height() + delta).clamp(120.0, 720.0);
+        timeline.set_preview_pane_height(next);
+        let mut snapshot = adjust_preview_settings.borrow().snapshot();
+        snapshot.insert(
+            "timelinePreviewHeight".to_owned(),
+            serde_json::json!(next.round() as i32),
+        );
+        if let Err(error) = adjust_preview_settings.borrow_mut().apply(snapshot) {
+            eprintln!("Could not save the preview height: {error}");
+        }
+    });
     let own_preview_target = main.as_weak();
     main.on_show_preview_window(move || {
         if let Some(main) = own_preview_target.upgrade() {
@@ -2824,6 +2841,18 @@ pub(super) fn install_callbacks(
     timeline.on_close_project(move |index| {
         if let Some(main) = tab_close_target.upgrade() {
             main.invoke_close_project(index);
+        }
+    });
+
+    let preview_height_settings = settings.clone();
+    timeline.on_preview_height_changed(move |height| {
+        let mut snapshot = preview_height_settings.borrow().snapshot();
+        snapshot.insert(
+            "timelinePreviewHeight".to_owned(),
+            serde_json::json!(height.round().clamp(120.0, 720.0) as i32),
+        );
+        if let Err(error) = preview_height_settings.borrow_mut().apply(snapshot) {
+            eprintln!("Could not save the preview height: {error}");
         }
     });
 

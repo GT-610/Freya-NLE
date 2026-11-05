@@ -205,6 +205,8 @@ export component TimelineWindow inherits Window {
     callback show-preview-window();
     callback select-project(int);
     callback close-project(int);
+    // Emitted when the merged preview height settles, so the host can keep it.
+    callback preview-height-changed(float);
     callback seek(float);
     callback toggle-preview();
     callback previous-frame();
@@ -349,6 +351,22 @@ export component TimelineWindow inherits Window {
             MenuItem {
                 title: root.preview-visible ? @tr("Hide preview in Timeline") : @tr("Show preview in Timeline");
                 activated => { root.toggle-preview(); }
+            }
+            MenuItem {
+                title: @tr("Taller preview");
+                enabled: root.preview-visible;
+                activated => {
+                    root.preview-pane-height = clamp(root.preview-pane-height + 40px, 120px, 720px);
+                    root.preview-height-changed(root.preview-pane-height / 1px);
+                }
+            }
+            MenuItem {
+                title: @tr("Shorter preview");
+                enabled: root.preview-visible;
+                activated => {
+                    root.preview-pane-height = clamp(root.preview-pane-height - 40px, 120px, 720px);
+                    root.preview-height-changed(root.preview-pane-height / 1px);
+                }
             }
             MenuItem { title: @tr("Show Preview Window"); icon: @image-url("icons/timeline.svg"); activated => { root.show-preview-window(); } }
             MenuItem { title: @tr("Show Timeline"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[21] : root.no-shortcut; icon: @image-url("icons/timeline.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-timeline(); } }
@@ -814,6 +832,9 @@ export component TimelineWindow inherits Window {
                             );
                         }
                         if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                            if self.dragging {
+                                root.preview-height-changed(root.preview-pane-height / 1px);
+                            }
                             self.dragging = false;
                         }
                     }

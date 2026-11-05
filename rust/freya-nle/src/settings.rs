@@ -135,6 +135,11 @@ pub(super) fn sync_timeline_runtime_settings(
     // AviUtl2 keeps the preview above the layer area; the merged pane follows
     // the same preference here and can be hidden again from the View menu.
     timeline.set_preview_visible(settings.bool_value("timelinePreviewVisible", false));
+    timeline.set_preview_pane_height(
+        settings
+            .i32_value("timelinePreviewHeight", 320)
+            .clamp(120, 720) as f32,
+    );
     let skimming_enabled = settings.bool_value("enableTimelineSkimming", true);
     timeline.set_timeline_skimming_enabled(skimming_enabled);
     if !skimming_enabled {

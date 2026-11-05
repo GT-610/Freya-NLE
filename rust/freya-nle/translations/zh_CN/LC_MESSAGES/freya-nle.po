@@ -1203,6 +1203,9 @@ msgstr "设置会在点击“应用”或“OK”后保存"
 msgid "Shortcuts"
 msgstr "快捷键"
 
+msgid "Shorter preview"
+msgstr "缩短预览"
+
 msgid "Show Preview Window"
 msgstr "显示预览窗口"
 
@@ -1283,6 +1286,9 @@ msgstr "策略"
 
 msgid "Sync Repository"
 msgstr "同步仓库"
+
+msgid "Taller preview"
+msgstr "加高预览"
 
 msgid "Target layer range:"
 msgstr "目标图层范围："

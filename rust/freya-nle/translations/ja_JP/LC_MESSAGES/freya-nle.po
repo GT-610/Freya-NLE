@@ -1203,6 +1203,9 @@ msgstr "設定は「適用」または「OK」で保存されます"
 msgid "Shortcuts"
 msgstr "ショートカット"
 
+msgid "Shorter preview"
+msgstr "プレビューを低く"
+
 msgid "Show Preview Window"
 msgstr "プレビューウィンドウを表示"
 
@@ -1283,6 +1286,9 @@ msgstr "方式"
 
 msgid "Sync Repository"
 msgstr "リポジトリを同期"
+
+msgid "Taller preview"
+msgstr "プレビューを高く"
 
 msgid "Target layer range:"
 msgstr "対象レイヤーの範囲:"
