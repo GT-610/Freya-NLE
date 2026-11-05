@@ -343,7 +343,7 @@ impl LifecycleUi {
                         // The merged layout hides the preview window, so the
                         // timeline is the window the dialog belongs over there;
                         // everywhere else it stays over the preview window.
-                        let centered = match (merged, self.timeline.upgrade()) {
+                        let _ = match (merged, self.timeline.upgrade()) {
                             (true, Some(timeline)) if timeline.window().is_visible() => {
                                 show_centered_and_redraw(&dialog, &timeline)
                             }
@@ -352,7 +352,6 @@ impl LifecycleUi {
                                 None => show_and_redraw(&dialog),
                             },
                         };
-                        let _ = centered;
                     }
                     if let Some(timeline) = self.timeline.upgrade() {
                         timeline.set_save_confirmation_visible(true);
