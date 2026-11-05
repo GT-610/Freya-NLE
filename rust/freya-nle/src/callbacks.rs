@@ -633,6 +633,15 @@ pub(super) fn install_callbacks(
         object_paste_ui.sync();
     });
 
+    let object_save_default_ui = object_settings_ui.clone();
+    object_settings.on_save_effect_default(move |index| {
+        object_save_default_ui.save_effect_default(index.max(0) as usize);
+    });
+    let object_clear_default_ui = object_settings_ui.clone();
+    object_settings.on_clear_effect_default(move |index| {
+        object_clear_default_ui.clear_effect_default(index.max(0) as usize);
+    });
+
     let object_remove_ui = object_settings_ui.clone();
     object_settings.on_remove_effect(move |index| {
         let _ = object_remove_ui
@@ -2270,6 +2279,7 @@ pub(super) fn install_callbacks(
             .borrow()
             .i32_value("defaultClipDuration", 100)
             .max(1);
+        let effect_defaults = crate::settings::effect_defaults(&object_add_settings.borrow());
         let catalog = object_add_catalog.borrow();
         let added = object_add_model
             .borrow_mut()
@@ -2289,6 +2299,7 @@ pub(super) fn install_callbacks(
                     // AviUtl's own default contents are Japanese; a new text object
                     // should start in the language the interface is speaking.
                     Some(localized("Text", "文本", "テキスト")),
+                    &effect_defaults,
                 )
             });
         sync_weak_windows(&object_add_main, &object_add_timeline, &object_add_model);

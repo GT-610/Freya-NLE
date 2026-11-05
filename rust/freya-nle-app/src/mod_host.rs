@@ -795,6 +795,7 @@ fn apply_command(
                 default_duration,
                 catalog,
                 None,
+                &serde_json::Map::new(),
             ) {
                 return Err(workspace.status().to_owned());
             }

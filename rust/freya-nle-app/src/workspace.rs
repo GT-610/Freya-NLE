@@ -919,7 +919,20 @@ impl WorkspaceModel {
     }
 
     pub fn add_effect(&mut self, catalog: &EffectCatalog, effect_id: &str) -> bool {
-        let Some(effect) = catalog.effect_document(effect_id) else {
+        self.add_effect_with_defaults(catalog, effect_id, None)
+    }
+
+    /// Adds an effect with the user's creation defaults applied.
+    ///
+    /// Defaults only replace parameters the effect already has, so a stale key
+    /// in the settings file cannot invent a parameter the catalog never knew.
+    pub fn add_effect_with_defaults(
+        &mut self,
+        catalog: &EffectCatalog,
+        effect_id: &str,
+        defaults: Option<&Map<String, Value>>,
+    ) -> bool {
+        let Some(mut effect) = catalog.effect_document(effect_id) else {
             self.set_status(status_message!(
                 "Effect {effect_id} is not available",
                 "特效 {effect_id} 不可用",
@@ -933,6 +946,9 @@ impl WorkspaceModel {
         else {
             return false;
         };
+        if let Some(defaults) = defaults {
+            apply_effect_defaults(&mut effect, defaults);
+        }
         let name = effect.name.clone();
         if self.execute(TimelineCommand::InsertEffects {
             clip_id,
@@ -1216,6 +1232,19 @@ impl WorkspaceModel {
                 false
             }
         }
+    }
+
+    /// The id and current parameters of one effect, for saving creation defaults.
+    pub fn effect_parameters(&self, effect_index: usize) -> Option<(String, Map<String, Value>)> {
+        let clip = self.selected_clip_document()?;
+        let effect = clip.effects.get(effect_index)?;
+        Some((effect.id.clone(), effect.params.clone()))
+    }
+
+    /// Reports a message composed by the interface layer, for commands the
+    /// workspace does not own (saving creation defaults lives in settings).
+    pub fn report_status(&mut self, message: crate::status::StatusMessage) {
+        self.set_status(message);
     }
 
     pub fn set_effect_enabled(&mut self, effect_index: usize, enabled: bool) -> bool {
@@ -3750,6 +3779,10 @@ impl WorkspaceModel {
         self.paste_clips_at(frame, layer, maximum_layers)
     }
 
+    // The catalog row, the placement, the text override and the creation
+    // defaults are all independent caller inputs; grouping them into a builder
+    // would add a type used once.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_catalog_object_at(
         &mut self,
         object_id: &str,
@@ -3758,6 +3791,7 @@ impl WorkspaceModel {
         default_duration_frames: i32,
         catalog: &EffectCatalog,
         text_default: Option<&str>,
+        defaults: &Map<String, Value>,
     ) -> bool {
         let Some(object) = catalog
             .find(object_id)
@@ -3824,7 +3858,7 @@ impl WorkspaceModel {
                 .find(|scene| scene.id != self.selected_scene)
                 .map_or(-1, |scene| scene.id)
         });
-        let clip = object_clip_from_metadata(
+        let mut clip = object_clip_from_metadata(
             clip_id,
             self.selected_scene,
             start,
@@ -3835,6 +3869,7 @@ impl WorkspaceModel {
             target_scene_id,
             text_default,
         );
+        apply_clip_defaults(&mut clip, defaults);
         if !self.execute(TimelineCommand::InsertClip { index: None, clip }) {
             return false;
         }
@@ -5601,6 +5636,25 @@ fn normalized_scene_settings(mut input: SceneSettingsInput) -> SceneSettingsInpu
     input
 }
 
+/// Replaces parameters the effect already has with the user's defaults.
+fn apply_effect_defaults(effect: &mut EffectDocument, defaults: &Map<String, Value>) {
+    for (name, value) in defaults {
+        if effect.params.contains_key(name) {
+            effect.params.insert(name.clone(), value.clone());
+        }
+    }
+}
+
+/// Applies per-effect defaults to every effect a newly created object carries.
+fn apply_clip_defaults(clip: &mut ClipDocument, defaults: &Map<String, Value>) {
+    for effect in &mut clip.effects {
+        let Some(values) = defaults.get(&effect.id).and_then(Value::as_object) else {
+            continue;
+        };
+        apply_effect_defaults(effect, values);
+    }
+}
+
 /// The effect indices a copy or cut covers, or `None` when the clicked index is
 /// past the stack.
 fn effect_copy_range(
@@ -6043,6 +6097,55 @@ mod tests {
         assert!(names.contains(&"Root 2"));
         assert!(names.contains(&"Root 3"));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn effect_creation_defaults_override_known_parameters_only() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let mut defaults = serde_json::Map::new();
+        defaults.insert("size".to_owned(), json!(42));
+        defaults.insert("unknownKey".to_owned(), json!(1));
+        assert!(workspace.add_effect_with_defaults(&catalog, "blur", Some(&defaults)));
+        let clip = workspace
+            .selected_clip_document()
+            .expect("clip stays selected");
+        let blur = clip.effects.last().expect("the effect was appended");
+        assert_eq!(blur.id, "blur");
+        assert_eq!(blur.params["size"], json!(42));
+        assert!(
+            !blur.params.contains_key("unknownKey"),
+            "a stale key cannot invent a parameter"
+        );
+    }
+
+    #[test]
+    fn catalog_object_creation_applies_effect_defaults() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let mut text_defaults = serde_json::Map::new();
+        text_defaults.insert("fontSize".to_owned(), json!(72));
+        let mut defaults = serde_json::Map::new();
+        defaults.insert("text".to_owned(), serde_json::Value::Object(text_defaults));
+        assert!(workspace.insert_catalog_object_at(
+            "text",
+            0,
+            0,
+            25,
+            &catalog,
+            Some("X"),
+            &defaults
+        ));
+        let clip = workspace
+            .selected_clip_document()
+            .expect("the new object is selected");
+        let text = clip
+            .effects
+            .iter()
+            .find(|effect| effect.id == "text")
+            .expect("text effect exists");
+        assert_eq!(text.params["fontSize"], json!(72));
     }
 
     #[test]
@@ -8179,7 +8282,7 @@ mod tests {
         // way when a caller has no interface language to offer - a script insert,
         // for instance.
         let mut plain = workspace();
-        assert!(plain.insert_catalog_object_at("text", 0, 0, 25, &catalog, None));
+        assert!(plain.insert_catalog_object_at("text", 0, 0, 25, &catalog, None, &Map::new()));
         assert_eq!(text_param(&plain), serde_json::Value::from("テキスト"));
 
         let mut localized_language = workspace();
@@ -8189,7 +8292,8 @@ mod tests {
             0,
             25,
             &catalog,
-            Some("文本")
+            Some("文本"),
+            &Map::new()
         ));
         assert_eq!(
             text_param(&localized_language),
@@ -8199,7 +8303,15 @@ mod tests {
         // Only the text object reads the override; every other object keeps the
         // parameters its metadata declares.
         let mut rectangle = workspace();
-        assert!(rectangle.insert_catalog_object_at("rect", 0, 0, 25, &catalog, Some("文本")));
+        assert!(rectangle.insert_catalog_object_at(
+            "rect",
+            0,
+            0,
+            25,
+            &catalog,
+            Some("文本"),
+            &Map::new(),
+        ));
         let rectangle = rectangle
             .selected_clip_document()
             .expect("rect is selected");
@@ -8216,7 +8328,7 @@ mod tests {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace();
 
-        assert!(workspace.insert_catalog_object_at("rect", 0, 0, 25, &catalog, None));
+        assert!(workspace.insert_catalog_object_at("rect", 0, 0, 25, &catalog, None, &Map::new()));
         let rectangle = workspace
             .selected_clip_document()
             .expect("new rectangle becomes the primary selection");
@@ -8239,7 +8351,15 @@ mod tests {
 
         assert!(workspace.undo());
         assert_eq!(workspace.document().clips.len(), 3);
-        assert!(workspace.insert_catalog_object_at("scene", 10, 4, 30, &catalog, None));
+        assert!(workspace.insert_catalog_object_at(
+            "scene",
+            10,
+            4,
+            30,
+            &catalog,
+            None,
+            &Map::new()
+        ));
         let scene = workspace
             .selected_clip_document()
             .expect("new scene object becomes the primary selection");

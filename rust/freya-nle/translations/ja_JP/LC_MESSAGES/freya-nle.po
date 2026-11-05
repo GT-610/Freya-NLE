@@ -1531,3 +1531,9 @@ msgstr "開く"
 
 msgid "No saved versions yet"
 msgstr "保存済みのバージョンはありません"
+
+msgid "Save as Default"
+msgstr "既定値として保存"
+
+msgid "Clear Default"
+msgstr "既定値を削除"

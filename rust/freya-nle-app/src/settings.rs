@@ -22,10 +22,9 @@ impl SettingsStore {
         Self::load_from(default_settings_path(), platform_default_settings())
     }
 
-    pub(crate) fn load_from(
-        path: PathBuf,
-        platform_defaults: Map<String, Value>,
-    ) -> (Self, String) {
+    /// Loads settings from an explicit path. The editor uses the platform
+    /// path; tests and portable builds can point at their own file.
+    pub fn load_from(path: PathBuf, platform_defaults: Map<String, Value>) -> (Self, String) {
         let mut store = Self {
             state: SettingsState::defaults(platform_defaults),
             path,

@@ -311,6 +311,8 @@ export component EffectSidebarEntry inherits Rectangle {
     callback copy-effect(int, bool);
     callback cut-effect(int);
     callback paste-effect(int);
+    callback save-default(int);
+    callback clear-default(int);
     callback save-preset(int, string);
     callback load-preset(int, string);
     callback delete-preset(int, string);
@@ -378,6 +380,19 @@ export component EffectSidebarEntry inherits Rectangle {
                     title: preset;
                     activated => { root.delete-preset(root.effect.index, preset); }
                 }
+            }
+            MenuSeparator { }
+            // Creation defaults: the parameters a new instance of this effect
+            // starts from (AviUtl2's 初期値).
+            MenuItem {
+                title: @tr("Save as Default");
+                enabled: root.effects-mode;
+                activated => { root.save-default(root.effect.index); }
+            }
+            MenuItem {
+                title: @tr("Clear Default");
+                enabled: root.effects-mode;
+                activated => { root.clear-default(root.effect.index); }
             }
         }
         HorizontalLayout {

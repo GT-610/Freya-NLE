@@ -432,11 +432,17 @@ impl ObjectSettingsUi {
             }
         } else {
             let catalog = self.catalog.borrow();
+            let defaults = crate::settings::effect_defaults(&self.settings.borrow());
+            let default = defaults
+                .get(effect_id)
+                .and_then(serde_json::Value::as_object);
             let _ = self
                 .model
                 .borrow_mut()
                 .current_workspace_mut()
-                .is_some_and(|workspace| workspace.add_effect(&catalog, effect_id));
+                .is_some_and(|workspace| {
+                    workspace.add_effect_with_defaults(&catalog, effect_id, default)
+                });
         }
         self.sync();
     }
@@ -507,6 +513,61 @@ impl ObjectSettingsUi {
                 }
             });
         self.sync();
+    }
+
+    pub(super) fn save_effect_default(&self, effect_index: usize) {
+        let Some((id, params)) = self
+            .model
+            .borrow()
+            .current_workspace()
+            .and_then(|workspace| workspace.effect_parameters(effect_index))
+        else {
+            return;
+        };
+        // Content and file parameters belong to the object, not to the style
+        // defaults: carrying them over would make every new text object repeat
+        // this text and every new media object point at this file.
+        let params = params
+            .into_iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "text" | "path" | "source" | "file"))
+            .collect::<serde_json::Map<_, _>>();
+        match crate::settings::save_effect_default(&mut self.settings.borrow_mut(), &id, &params) {
+            Ok(()) => {
+                if let Some(workspace) = self.model.borrow_mut().current_workspace_mut() {
+                    workspace.report_status(freya_nle_app::status_message!(
+                        "Saved the current settings as the default for {id}",
+                        "已将 {id} 的当前设置保存为默认值",
+                        "{id} の現在の設定を既定値として保存しました"
+                    ));
+                }
+                self.sync();
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn clear_effect_default(&self, effect_index: usize) {
+        let Some((id, _)) = self
+            .model
+            .borrow()
+            .current_workspace()
+            .and_then(|workspace| workspace.effect_parameters(effect_index))
+        else {
+            return;
+        };
+        match crate::settings::clear_effect_default(&mut self.settings.borrow_mut(), &id) {
+            Ok(()) => {
+                if let Some(workspace) = self.model.borrow_mut().current_workspace_mut() {
+                    workspace.report_status(freya_nle_app::status_message!(
+                        "Cleared the default for {id}",
+                        "已清除 {id} 的默认值",
+                        "{id} の既定値を削除しました"
+                    ));
+                }
+                self.sync();
+            }
+            Err(error) => show_error_dialog(&error),
+        }
     }
 
     pub(super) fn delete_preset(&self, effect_index: usize, name: &str) {

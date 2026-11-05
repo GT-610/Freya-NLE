@@ -1316,6 +1316,31 @@ fn frame_counter_zero_pads_like_qt() {
 }
 
 #[test]
+fn creation_defaults_round_trip_through_settings() {
+    use freya_nle_app::settings::SettingsStore;
+
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-defaults-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let (mut store, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    let mut params = serde_json::Map::new();
+    params.insert("fontSize".to_owned(), json!(72));
+    crate::settings::save_effect_default(&mut store, "text", &params).expect("default saves");
+    let defaults = crate::settings::effect_defaults(&store);
+    assert_eq!(defaults["text"]["fontSize"], json!(72));
+
+    crate::settings::clear_effect_default(&mut store, "text").expect("default clears");
+    assert!(crate::settings::effect_defaults(&store).is_empty());
+    assert!(store.value("effectDefaults").is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn mark_timecodes_and_labels_follow_the_ruler_reading() {
     assert_eq!(mark_timecode(0, 60), "00:00:00.00");
     assert_eq!(mark_timecode(72, 60), "00:00:01.12");

@@ -11,6 +11,7 @@ use freya_nle_app::{
     ApplicationModel, MAX_TIMELINE_LAYERS, ProjectDefaults, ProjectSettingsInput,
     SceneSettingsInput,
 };
+use serde_json::{Map, Value};
 use slint::{ComponentHandle, Model, SharedString};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -198,6 +199,52 @@ pub(super) fn save_timeline_preview_settings(
         );
     }
     settings.borrow_mut().apply(snapshot)
+}
+
+/// Per-effect parameter defaults used when a new object or effect is created.
+pub(super) fn effect_defaults(settings: &SettingsStore) -> Map<String, Value> {
+    settings
+        .value("effectDefaults")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub(super) fn save_effect_default(
+    settings: &mut SettingsStore,
+    effect_id: &str,
+    params: &Map<String, Value>,
+) -> Result<(), String> {
+    let mut root = settings.snapshot();
+    let mut defaults = root
+        .get("effectDefaults")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    defaults.insert(effect_id.to_owned(), Value::Object(params.clone()));
+    root.insert("effectDefaults".to_owned(), Value::Object(defaults));
+    settings.apply(root)
+}
+
+pub(super) fn clear_effect_default(
+    settings: &mut SettingsStore,
+    effect_id: &str,
+) -> Result<(), String> {
+    let mut root = settings.snapshot();
+    let empty = {
+        let Some(defaults) = root
+            .get_mut("effectDefaults")
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        defaults.remove(effect_id);
+        defaults.is_empty()
+    };
+    if empty {
+        root.remove("effectDefaults");
+    }
+    settings.apply(root)
 }
 
 pub(super) fn project_defaults(settings: &SettingsStore) -> ProjectDefaults {

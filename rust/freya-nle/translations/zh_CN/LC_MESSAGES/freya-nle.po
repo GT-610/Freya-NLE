@@ -1531,3 +1531,9 @@ msgstr "打开"
 
 msgid "No saved versions yet"
 msgstr "还没有已保存的版本"
+
+msgid "Save as Default"
+msgstr "保存为默认值"
+
+msgid "Clear Default"
+msgstr "清除默认值"

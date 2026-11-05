@@ -90,6 +90,8 @@ export component ObjectSettingsWindow inherits Window {
     callback copy-effect(int, bool);
     callback cut-effect(int);
     callback paste-effect(int);
+    callback save-effect-default(int);
+    callback clear-effect-default(int);
     callback remove-effect(int);
     callback remove-effect-selection(int);
     callback delete-selected-effects();
@@ -248,6 +250,8 @@ export component ObjectSettingsWindow inherits Window {
                             copy-effect(index, following) => { root.copy-effect(index, following); }
                             cut-effect(index) => { root.cut-effect(index); }
                             paste-effect(index) => { root.paste-effect(index); }
+                            save-default(index) => { root.save-effect-default(index); }
+                            clear-default(index) => { root.clear-effect-default(index); }
                             remove-selection(index) => { root.remove-effect-selection(index); }
                             reorder(index, delta-y) => { root.reorder-effect(index, delta-y); }
                             save-preset(index, effect-name) => {
