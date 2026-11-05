@@ -40,14 +40,30 @@ fn main() {
         Ok("light") => 1,
         _ => 0,
     };
-    let (width, height) = match which.as_str() {
+    let mut size = match which.as_str() {
         "main" => (640u32, 400u32),
         "timeline" => (1280u32, 460u32),
+        "settings" => (900u32, 650u32),
         other => {
-            eprintln!("unknown window {other:?}; expected `timeline` or `main`");
+            eprintln!("unknown window {other:?}; expected `timeline`, `main` or `settings`");
             std::process::exit(2);
         }
     };
+    // `UI_SNAPSHOT_SIZE=680x600` renders a specific window size, which is how
+    // the minimum-width layouts are checked.
+    if let Ok(value) = std::env::var("UI_SNAPSHOT_SIZE") {
+        let parsed = value
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)));
+        match parsed {
+            Some(value) => size = value,
+            None => {
+                eprintln!("UI_SNAPSHOT_SIZE must look like 680x600, got {value:?}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let (width, height) = size;
 
     let window = WINDOW.with(|window| window.clone());
     window.set_size(PhysicalSize::new(width, height));
@@ -59,6 +75,13 @@ fn main() {
             populate_main(&ui);
             ui.show().expect("show the main window");
             save(&window, width, height, &output_name("main", preference));
+        }
+        "settings" => {
+            let ui = ObjectSettingsWindow::new().expect("create the object settings window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            populate_settings(&ui);
+            ui.show().expect("show the object settings window");
+            save(&window, width, height, &output_name("settings", preference));
         }
         _ => {
             let ui = TimelineWindow::new().expect("create the timeline window");
@@ -138,6 +161,109 @@ fn populate_main(ui: &MainWindow) {
     ui.set_audio_peak_right(0.48);
     ui.set_audio_rms_left(0.35);
     ui.set_audio_rms_right(0.28);
+}
+
+fn populate_settings(ui: &ObjectSettingsWindow) {
+    ui.set_has_selection(true);
+    ui.set_clip_title("harbor_sunrise.mp4".into());
+    ui.set_selected_object_count(1);
+    ui.set_effects(ModelRc::new(VecModel::from(vec![
+        ObjectEffectData {
+            index: 0,
+            id: "video_input".into(),
+            name: "動画ファイル [映像再生]".into(),
+            enabled: true,
+            selected: true,
+            removable: false,
+        },
+        ObjectEffectData {
+            index: 1,
+            id: "blur".into(),
+            name: "ぼかし".into(),
+            enabled: true,
+            selected: false,
+            removable: true,
+        },
+        ObjectEffectData {
+            index: 2,
+            id: "color_correction".into(),
+            name: "色調補正".into(),
+            enabled: false,
+            selected: false,
+            removable: true,
+        },
+    ])));
+    ui.set_setting_rows(ModelRc::new(VecModel::from(vec![
+        row("effect", "動画ファイル [映像再生]", ""),
+        row("number", "X", "X  [直線移動]"),
+        row("number", "Y", "Y  [直線移動]"),
+        row("number", "Z", "Z  [直線移動]"),
+        row("number", "拡大率", "拡大率  [直線移動]"),
+        row("integer", "再生位置", "再生位置  [直線移動]"),
+        row("boolean", "ループ再生", ""),
+        row("option", "合成モード", ""),
+        row("text", "テキスト", ""),
+        row("header", "ぼかし", ""),
+        row("number", "範囲", "範囲  [直線移動]"),
+    ])));
+}
+
+fn row(kind: &str, label: &str, button: &str) -> ObjectSettingRowData {
+    let numeric = kind == "number" || kind == "integer";
+    ObjectSettingRowData {
+        effect_id: "video_input".into(),
+        mixed: false,
+        absent: false,
+        folded: false,
+        row_kind: kind.into(),
+        source_kind: "number".into(),
+        audio_plugin: false,
+        effect_index: 0,
+        param_name: label.into(),
+        label: label.into(),
+        effect_enabled: true,
+        header_toggle_visible: false,
+        selected: kind == "effect",
+        removable: kind == "effect",
+        interactive: true,
+        checked: kind == "boolean",
+        keyframed: false,
+        range_mode: false,
+        right_interactive: true,
+        start_interactive: true,
+        start_frame: 0,
+        end_frame: 240,
+        current_frame: 120,
+        clip_duration: 240,
+        interpolation: "linear".into(),
+        parameter_button_label: button.into(),
+        number_value: 0.0,
+        end_number_value: 0.0,
+        minimum: -2000.0,
+        maximum: 2000.0,
+        step: 1.0,
+        text_value: if numeric {
+            "120.00".into()
+        } else {
+            "harbor sunrise".into()
+        },
+        end_text_value: if numeric {
+            "240.00".into()
+        } else {
+            "harbor sunrise".into()
+        },
+        filter: "".into(),
+        color_value: Color::from_rgb_u8(0xff, 0xff, 0xff),
+        end_color_value: Color::from_rgb_u8(0xff, 0xff, 0xff),
+        unit: "".into(),
+        keyframe_markers: ModelRc::new(VecModel::<KeyframeMarkerData>::default()),
+        option_labels: ModelRc::new(VecModel::from(vec![
+            "通常".into(),
+            "加算".into(),
+            "乗算".into(),
+        ])),
+        selected_option: 0,
+    }
 }
 
 fn populate_timeline(ui: &TimelineWindow) {
