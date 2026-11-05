@@ -273,6 +273,9 @@ msgstr "エフェクトを折りたたむ"
 msgid "Color theme"
 msgstr "カラーテーマ"
 
+msgid "Compact"
+msgstr "コンパクト"
+
 msgid "Complete"
 msgstr "完了"
 
@@ -307,6 +310,9 @@ msgid "Current: Default"
 msgstr "現在: デフォルト"
 
 msgctxt "edit-menu-cut"
+msgid "Custom"
+msgstr "カスタム"
+
 msgid "Cut"
 msgstr "カット"
 
@@ -685,6 +691,9 @@ msgstr "言語"
 msgid "Language changes are applied immediately after pressing Apply or OK."
 msgstr "言語の変更は「適用」または「OK」を押すとすぐに反映されます。"
 
+msgid "Layer density"
+msgstr "レイヤー密度"
+
 msgid "Layer header width"
 msgstr "レイヤーヘッダー幅"
 
@@ -693,6 +702,9 @@ msgstr "レイヤー {}"
 
 msgid "Layers"
 msgstr "レイヤー"
+
+msgid "Large"
+msgstr "大"
 
 msgid "Light"
 msgstr "ライト"

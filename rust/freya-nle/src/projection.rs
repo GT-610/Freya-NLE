@@ -245,9 +245,17 @@ pub(super) fn sync_media_bin(timeline: &TimelineWindow, workspace: &freya_nle_ap
     timeline.set_media_group_index(group_index);
 }
 
-fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
+/// Clip colour for a type, matching AviUtl2's object groups (style.conf
+/// `[Color]`): audio objects are red, control objects (camera, scene
+/// reference) are cyan, and media objects keep the theme's video blue.
+///
+/// The Slint theme owns those tokens; this mirrors their values because the
+/// projection only has `freya-nle-app` types in scope. Keep them in sync with
+/// `AppTheme.object-audio` / `object-control` in `ui/theme.slint`.
+pub(super) fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
     let [red, green, blue] = match clip_type {
-        "audio" => [0xd0, 0x30, 0x30],
+        "audio" => [0xd0, 0x40, 0x30],
+        "camera" | "camera_control" | "scene" => [0x30, 0xb0, 0xc0],
         "counter" | "flare" | "lens_flare_object" | "pie_shape" | "polygon_shape"
         | "radial_lines" | "star" | "track_line" => [0x3b, 0x82, 0xf6],
         _ => return None,

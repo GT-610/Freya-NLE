@@ -175,6 +175,7 @@ use crate::playback::{
 };
 use crate::projection::{
     frame_counter_text, scene_frame_rate, scene_resolution_text, speed_multiplier_text,
+    timeline_clip_style,
 };
 use crate::settings::{
     SYSTEM_AUDIO_BLOCK_SIZES, SYSTEM_EXPORT_AUDIO_CODECS, SYSTEM_EXPORT_VIDEO_CODECS,
@@ -1318,6 +1319,25 @@ fn scene_frame_rate_rounds_for_the_timecode() {
     assert_eq!(scene_frame_rate(f64::NAN), 60);
     assert_eq!(scene_frame_rate(0.4), 1);
     assert_eq!(scene_frame_rate(50_000.0), 1000);
+}
+
+#[test]
+fn clip_colours_follow_the_aviutl2_object_groups() {
+    // AviUtl2 colours audio and control objects; media objects stay on the
+    // theme's video blue, which is why they have no explicit colour.
+    let (audio, _) = timeline_clip_style("audio").expect("audio colour");
+    assert_eq!(audio, slint::Color::from_rgb_u8(0xd0, 0x40, 0x30));
+    for control in ["camera", "camera_control", "scene"] {
+        let (colour, _) = timeline_clip_style(control).expect("control colour");
+        assert_eq!(
+            colour,
+            slint::Color::from_rgb_u8(0x30, 0xb0, 0xc0),
+            "{control}"
+        );
+    }
+    assert!(timeline_clip_style("video").is_none());
+    assert!(timeline_clip_style("text").is_none());
+    assert!(timeline_clip_style("image").is_none());
 }
 
 #[test]
