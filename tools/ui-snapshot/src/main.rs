@@ -76,6 +76,9 @@ fn main() {
             let ui = MainWindow::new().expect("create the main window");
             ui.global::<AppTheme>().set_preference_index(preference);
             populate_main(&ui);
+            if let Some(image) = load_preview() {
+                ui.set_preview_image(image);
+            }
             ui.show().expect("show the main window");
             save(&window, width, height, &output_name("main", preference));
         }
@@ -97,6 +100,11 @@ fn main() {
             let ui = TimelineWindow::new().expect("create the timeline window");
             ui.global::<AppTheme>().set_preference_index(preference);
             populate_timeline(&ui);
+            // The merged preview pane is a mode, not the default layout.
+            ui.set_preview_visible(std::env::var("UI_SNAPSHOT_PREVIEW").is_ok());
+            if let Some(image) = load_preview() {
+                ui.set_preview_image(image);
+            }
             ui.show().expect("show the timeline window");
             save(&window, width, height, &output_name("timeline", preference));
         }
@@ -171,6 +179,18 @@ fn populate_main(ui: &MainWindow) {
     ui.set_audio_peak_right(0.48);
     ui.set_audio_rms_left(0.35);
     ui.set_audio_rms_right(0.28);
+}
+
+/// Load a stand-in frame so the preview panes show something in review.
+fn load_preview() -> Option<slint::Image> {
+    let path = std::env::var("UI_SNAPSHOT_IMAGE").ok()?;
+    match slint::Image::load_from_path(std::path::Path::new(&path)) {
+        Ok(image) => Some(image),
+        Err(error) => {
+            eprintln!("could not load {path}: {error}");
+            None
+        }
+    }
 }
 
 fn populate_settings(ui: &ObjectSettingsWindow) {
