@@ -45,9 +45,11 @@ fn main() {
         "timeline" => (1280u32, 460u32),
         "settings" => (900u32, 650u32),
         "system" => (760u32, 680u32),
+        "export" => (700u32, 700u32),
+        "packages" => (760u32, 520u32),
         other => {
             eprintln!(
-                "unknown window {other:?}; expected `timeline`, `main`, `settings` or `system`"
+                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export` or `packages`"
             );
             std::process::exit(2);
         }
@@ -81,6 +83,31 @@ fn main() {
             }
             ui.show().expect("show the main window");
             save(&window, width, height, &output_name("main", preference));
+        }
+        "export" => {
+            let ui = ExportWindow::new().expect("create the export window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_video_codec_labels(ModelRc::new(VecModel::from(vec![
+                "H.264 (CPU)".into(),
+                "HEVC (VAAPI)".into(),
+            ])));
+            ui.set_audio_codec_labels(ModelRc::new(VecModel::from(vec![
+                "AAC".into(),
+                "Opus".into(),
+            ])));
+            ui.show().expect("show the export window");
+            save(&window, width, height, &output_name("export", preference));
+        }
+        "packages" => {
+            let ui = PackageManagerWindow::new().expect("create the package manager window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            if std::env::var("UI_SNAPSHOT_BUSY").is_ok() {
+                ui.set_busy(true);
+                ui.set_progress(0.42);
+                ui.set_status_text("Syncing repositories…".into());
+            }
+            ui.show().expect("show the package manager window");
+            save(&window, width, height, &output_name("packages", preference));
         }
         "system" => {
             let ui = SystemSettingsWindow::new().expect("create the system settings window");
