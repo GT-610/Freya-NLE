@@ -190,6 +190,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let easing = EasingConfigWindow::new()?;
     let project_settings = ProjectSettingsWindow::new()?;
     let scene_settings = SceneSettingsWindow::new()?;
+    let layer_settings = LayerSettingsWindow::new()?;
     let system_settings = SystemSettingsWindow::new()?;
     let export = ExportWindow::new()?;
     let package_manager = PackageManagerWindow::new()?;
@@ -229,6 +230,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             scene_settings.window(),
             "sceneSettings",
             WindowGeometry::new(300, 200, 450, 550),
+        ),
+        (
+            layer_settings.window(),
+            "layerSettings",
+            WindowGeometry::new(600, 300, 460, 430),
         ),
         (
             easing.window(),
@@ -339,6 +345,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         easing: easing.as_weak(),
         project_settings: project_settings.as_weak(),
         scene_settings: scene_settings.as_weak(),
+        layer_settings: layer_settings.as_weak(),
         system_settings: system_settings.as_weak(),
         export: export.as_weak(),
         package_manager: package_manager.as_weak(),
@@ -367,6 +374,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             easing: &easing,
             project_settings: &project_settings,
             scene_settings: &scene_settings,
+            layer_settings: &layer_settings,
             system_settings: &system_settings,
             package_manager: &package_manager,
             plugin_permissions: &plugin_permissions,
@@ -405,6 +413,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         scene_settings.as_weak(),
         settings.clone(),
         "sceneSettings",
+    );
+    install_window_geometry_close_handler(
+        layer_settings.as_weak(),
+        settings.clone(),
+        "layerSettings",
     );
     install_window_geometry_close_handler(
         system_settings.as_weak(),

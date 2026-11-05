@@ -16,10 +16,11 @@ use crate::playback::PreviewRuntime;
 use crate::projection::{sync_windows, update_vec_model};
 use crate::settings::{project_defaults, sync_timeline_runtime_settings, system_theme_index};
 use crate::{
-    AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, MainWindow, MarkNoteWindow,
-    ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow,
-    ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData, RecoveryEntryData,
-    SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
+    AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, LayerSettingsWindow, MainWindow,
+    MarkNoteWindow, ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow,
+    ProjectLauncherWindow, ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData,
+    RecoveryEntryData, SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow,
+    TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::effect_catalog::EffectCatalog;
@@ -52,6 +53,7 @@ pub(super) struct LifecycleUi {
     pub(super) easing: slint::Weak<EasingConfigWindow>,
     pub(super) project_settings: slint::Weak<ProjectSettingsWindow>,
     pub(super) scene_settings: slint::Weak<SceneSettingsWindow>,
+    pub(super) layer_settings: slint::Weak<LayerSettingsWindow>,
     pub(super) system_settings: slint::Weak<SystemSettingsWindow>,
     pub(super) export: slint::Weak<ExportWindow>,
     pub(super) package_manager: slint::Weak<PackageManagerWindow>,
@@ -118,6 +120,7 @@ pub(super) struct WindowRefs<'a> {
     pub(super) easing: &'a EasingConfigWindow,
     pub(super) project_settings: &'a ProjectSettingsWindow,
     pub(super) scene_settings: &'a SceneSettingsWindow,
+    pub(super) layer_settings: &'a LayerSettingsWindow,
     pub(super) system_settings: &'a SystemSettingsWindow,
     pub(super) package_manager: &'a PackageManagerWindow,
     pub(super) plugin_permissions: &'a PluginPermissionWindow,
@@ -186,6 +189,19 @@ pub(super) enum WorkspaceOrigin {
     Timeline,
 }
 
+/// Trim the trailing `.0` from a layer field so the dialog starts with `10`
+/// rather than `10.0`, while a fractional value keeps its decimals.
+fn layer_number_text(value: f64) -> String {
+    if !value.is_finite() || value == 0.0 {
+        return "0".to_owned();
+    }
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
 impl LifecycleUi {
     /// Shows the note editor for the mark under the playhead.
     ///
@@ -223,6 +239,40 @@ impl LifecycleUi {
         dialog.set_note(SharedString::from(note));
         // The dialog belongs over whichever editor window is in front: the
         // merged layout hides the preview window, so the timeline is the parent.
+        if let Some(timeline) = self.timeline.upgrade()
+            && timeline.window().is_visible()
+        {
+            let _ = show_centered_and_redraw(&dialog, &timeline);
+        } else if let Some(main) = self.main.upgrade() {
+            let _ = show_centered_and_redraw(&dialog, &main);
+        } else {
+            let _ = show_and_redraw(&dialog);
+        }
+    }
+
+    /// Opens the layer settings dialog for one layer, filled from the scene.
+    ///
+    /// The dialog edits one layer at a time; its fields are strings because the
+    /// host parses them and reports a bad number or colour without closing.
+    pub(super) fn open_layer_settings(&self, layer: i32) {
+        let Some(dialog) = self.layer_settings.upgrade() else {
+            return;
+        };
+        let Some(input) = ({
+            let model = self.model.borrow();
+            model
+                .current_workspace()
+                .map(|workspace| workspace.layer_settings_for(layer))
+        }) else {
+            return;
+        };
+        dialog.set_target_layer(layer);
+        dialog.set_layer_name(SharedString::from(input.name));
+        dialog.set_layer_background(SharedString::from(input.background));
+        dialog.set_offset_x(SharedString::from(layer_number_text(input.x)));
+        dialog.set_offset_y(SharedString::from(layer_number_text(input.y)));
+        dialog.set_offset_z(SharedString::from(layer_number_text(input.z)));
+        dialog.set_volume_percent(SharedString::from(layer_number_text(input.volume_percent)));
         if let Some(timeline) = self.timeline.upgrade()
             && timeline.window().is_visible()
         {

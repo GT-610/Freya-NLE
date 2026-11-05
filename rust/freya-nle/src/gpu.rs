@@ -18,7 +18,9 @@ pub(super) const VALIDATION_PROJECT: &str = r##"{
     "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
     "scenes": [
         {"id": 1, "name": "Root", "duration": 1200, "gridMode": "Frame", "gridInterval": 10,
-         "marks": [{"frame": 60, "note": "intro"}, {"frame": 300, "note": "chorus"}]},
+         "marks": [{"frame": 60, "note": "intro"}, {"frame": 300, "note": "chorus"}],
+         "layerSettings": [{"layer": 1, "name": "Titles", "background": "#3040e0",
+                            "x": 10.0, "volumePercent": 80}]},
         {"id": 2, "name": "Scene 2", "duration": 600}
     ],
     "clips": [

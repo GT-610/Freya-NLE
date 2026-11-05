@@ -1,0 +1,96 @@
+import { Button, GroupBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
+
+// AviUtl2's レイヤー設定: the selected layer's name, background colour and the
+// coordinate/volume offsets applied to every media object on it.
+export component LayerSettingsWindow inherits Window {
+    title: @tr("Layer Settings");
+    preferred-width: 460px;
+    preferred-height: 430px;
+    min-width: 400px;
+    min-height: 360px;
+
+    in-out property <int> target-layer: 0;
+    in-out property <string> layer-name: "";
+    in-out property <string> layer-background: "";
+    in-out property <string> offset-x: "0";
+    in-out property <string> offset-y: "0";
+    in-out property <string> offset-z: "0";
+    in-out property <string> volume-percent: "100";
+    callback apply-settings() -> bool;
+    callback close-window();
+
+    ScrollView {
+        VerticalLayout {
+            padding: 15px;
+            spacing: 14px;
+            GroupBox {
+                title: @tr("Layer {}", root.target-layer + 1);
+                GridLayout {
+                    padding: 10px;
+                    spacing: 9px;
+                    Row {
+                        Text { text: @tr("Name:"); vertical-alignment: center; }
+                        LineEdit {
+                            text <=> root.layer-name;
+                            placeholder-text: @tr("Optional layer name");
+                            accessible-label: @tr("Name:");
+                        }
+                    }
+                    Row {
+                        Text { text: @tr("Background:"); vertical-alignment: center; }
+                        LineEdit {
+                            text <=> root.layer-background;
+                            // Accepts #RRGGBB or #AARRGGBB; the host canonicalizes and
+                            // reports anything else instead of closing the dialog.
+                            placeholder-text: @tr("#RRGGBB, empty for the theme background");
+                            accessible-label: @tr("Background:");
+                        }
+                    }
+                }
+            }
+            GroupBox {
+                title: @tr("Offsets");
+                GridLayout {
+                    padding: 10px;
+                    spacing: 9px;
+                    Row {
+                        Text { text: @tr("X:"); vertical-alignment: center; }
+                        LineEdit { text <=> root.offset-x; accessible-label: @tr("X:"); }
+                    }
+                    Row {
+                        Text { text: @tr("Y:"); vertical-alignment: center; }
+                        LineEdit { text <=> root.offset-y; accessible-label: @tr("Y:"); }
+                    }
+                    Row {
+                        Text { text: @tr("Z:"); vertical-alignment: center; }
+                        LineEdit { text <=> root.offset-z; accessible-label: @tr("Z:"); }
+                    }
+                    Row {
+                        Text { text: @tr("Volume (%):"); vertical-alignment: center; }
+                        LineEdit { text <=> root.volume-percent; accessible-label: @tr("Volume (%):"); }
+                    }
+                }
+            }
+            Text {
+                text: @tr("Offsets apply to media objects on this layer; camera-controlled objects are not moved.");
+                color: Palette.foreground.transparentize(0.45);
+                font-size: 0.78rem;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                Button { text: @tr("Cancel"); clicked => { root.close-window(); } }
+                Button {
+                    text: @tr("Apply");
+                    clicked => {
+                        if root.apply-settings() {
+                            root.close-window();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -47,11 +47,12 @@ fn main() {
         "system" => (760u32, 680u32),
         "confirm" => (460u32, 200u32),
         "mark" => (440u32, 190u32),
+        "layer" => (460u32, 430u32),
         "export" => (700u32, 700u32),
         "packages" => (760u32, 520u32),
         other => {
             eprintln!(
-                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm` or `mark`"
+                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm`, `mark` or `layer`"
             );
             std::process::exit(2);
         }
@@ -133,6 +134,19 @@ fn main() {
             ui.set_note("chorus begins".into());
             ui.show().expect("show the mark note window");
             save(&window, width, height, &output_name("mark", preference));
+        }
+        "layer" => {
+            let ui = LayerSettingsWindow::new().expect("create the layer settings window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_target_layer(2);
+            ui.set_layer_name("Titles".into());
+            ui.set_layer_background("#3040e0".into());
+            ui.set_offset_x("12".into());
+            ui.set_offset_y("-5".into());
+            ui.set_offset_z("0".into());
+            ui.set_volume_percent("80".into());
+            ui.show().expect("show the layer settings window");
+            save(&window, width, height, &output_name("layer", preference));
         }
         "system" => {            let ui = SystemSettingsWindow::new().expect("create the system settings window");
             ui.global::<AppTheme>().set_preference_index(preference);
@@ -417,6 +431,13 @@ fn populate_timeline(ui: &TimelineWindow) {
                 visible: index != 5,
                 locked: index == 6,
                 selected: index == 0,
+                name: if index == 2 { "Titles".into() } else { "".into() },
+                background: if index == 3 {
+                    Color::from_rgb_u8(0x30, 0x40, 0xe0)
+                } else {
+                    Color::from_argb_u8(0, 0, 0, 0)
+                },
+                has_background: index == 3,
             })
             .collect::<Vec<_>>(),
     )));

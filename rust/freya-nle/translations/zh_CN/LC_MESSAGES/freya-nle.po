@@ -1453,3 +1453,30 @@ msgstr "标记备注"
 
 msgid "Note for this mark (optional)"
 msgstr "该标记的备注（可选）"
+
+msgid "Layer Settings"
+msgstr "图层设置"
+
+msgid "Layer Settings..."
+msgstr "图层设置..."
+
+msgid "Name:"
+msgstr "名称："
+
+msgid "Optional layer name"
+msgstr "图层名称（可选）"
+
+msgid "Background:"
+msgstr "背景色："
+
+msgid "#RRGGBB, empty for the theme background"
+msgstr "#RRGGBB，留空则使用主题背景"
+
+msgid "Offsets"
+msgstr "偏移"
+
+msgid "Volume (%):"
+msgstr "音量（%）："
+
+msgid "Offsets apply to media objects on this layer; camera-controlled objects are not moved."
+msgstr "偏移作用于该图层的媒体对象；相机控制的对象不会被移动。"

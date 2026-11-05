@@ -18,7 +18,7 @@ python3 -m pip install pillow
 
 Set `UI_SNAPSHOT_THEME=light` to render the light palette; the Rust tool then
 writes `timeline-light.*`, and `python3 snapshot.py` with no arguments picks the
-same names up. Other modes: `settings`, `system`, `confirm`, `mark`, `export`,
+same names up. Other modes: `settings`, `system`, `confirm`, `mark`, `layer`, `export`,
 `packages`. `UI_SNAPSHOT_SIZE=680x600` overrides the window size, and
 `UI_SNAPSHOT_IMAGE=/path/to.png` supplies a stand-in preview frame.
 

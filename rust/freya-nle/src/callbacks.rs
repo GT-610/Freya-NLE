@@ -40,7 +40,8 @@ use freya_nle_app::selection::SelectionBox;
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::timeline_interaction::{TimelineDragKind, TimelineDragRequest};
 use freya_nle_app::{
-    ApplicationModel, LifecycleStep, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, ProjectSettingsInput,
+    ApplicationModel, LayerSettingsInput, LifecycleStep, MAX_LAYER_OFFSET,
+    MAX_LAYER_VOLUME_PERCENT, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS, ProjectSettingsInput,
     SaveDecision, SceneSettingsInput, TrimEdge, WorkspaceModel,
 };
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
@@ -426,6 +427,7 @@ pub(super) fn install_callbacks(
         timeline,
         save_confirmation,
         mark_note,
+        layer_settings,
         object_settings,
         easing,
         project_settings,
@@ -1445,7 +1447,7 @@ pub(super) fn install_callbacks(
         });
     });
 
-    let discard_ui = lifecycle_ui;
+    let discard_ui = lifecycle_ui.clone();
     recovery.on_discard_recovery(move |id| {
         let discard_ui = discard_ui.clone();
         let id = id.to_string();
@@ -2301,6 +2303,88 @@ pub(super) fn install_callbacks(
         }
     });
 
+    let layer_apply_model = model.clone();
+    let layer_apply_main = main.as_weak();
+    let layer_apply_timeline = timeline.as_weak();
+    let layer_apply_window = layer_settings.as_weak();
+    layer_settings.on_apply_settings(move || {
+        let Some(window) = layer_apply_window.upgrade() else {
+            return false;
+        };
+        let volume_label = localized("Volume", "音量", "音量");
+        let parsed = (|| {
+            Ok::<(f64, f64, f64, f64), String>((
+                parse_required_f64(
+                    &window.get_offset_x(),
+                    "X",
+                    -MAX_LAYER_OFFSET,
+                    MAX_LAYER_OFFSET,
+                )?,
+                parse_required_f64(
+                    &window.get_offset_y(),
+                    "Y",
+                    -MAX_LAYER_OFFSET,
+                    MAX_LAYER_OFFSET,
+                )?,
+                parse_required_f64(
+                    &window.get_offset_z(),
+                    "Z",
+                    -MAX_LAYER_OFFSET,
+                    MAX_LAYER_OFFSET,
+                )?,
+                parse_required_f64(
+                    &window.get_volume_percent(),
+                    volume_label,
+                    0.0,
+                    MAX_LAYER_VOLUME_PERCENT,
+                )?,
+            ))
+        })();
+        let (x, y, z, volume_percent) = match parsed {
+            Ok(values) => values,
+            Err(message) => {
+                show_error_dialog(&message);
+                return false;
+            }
+        };
+        let input = LayerSettingsInput {
+            layer: window.get_target_layer(),
+            name: window.get_layer_name().to_string(),
+            background: window.get_layer_background().to_string(),
+            x,
+            y,
+            z,
+            volume_percent,
+        };
+        let updated = layer_apply_model
+            .borrow_mut()
+            .current_workspace_mut()
+            .is_some_and(|workspace| workspace.update_layer_settings(input));
+        if updated {
+            sync_weak_windows(&layer_apply_main, &layer_apply_timeline, &layer_apply_model);
+        } else {
+            // A refused colour is reported by the workspace; show it here because
+            // the dialog covers the window that owns the status bar.
+            let message = layer_apply_model
+                .borrow()
+                .current_workspace()
+                .map(|workspace| workspace.status().to_owned())
+                .unwrap_or_default();
+            if !message.is_empty() {
+                show_error_dialog(&message);
+            }
+        }
+        updated
+    });
+    let layer_close_window = layer_settings.as_weak();
+    let layer_close_settings = settings.clone();
+    layer_settings.on_close_window(move || {
+        if let Some(window) = layer_close_window.upgrade() {
+            persist_window_geometry(&layer_close_settings, "layerSettings", window.window());
+            let _ = window.hide();
+        }
+    });
+
     let system_reload_store = settings.clone();
     let system_reload_window = system_settings.as_weak();
     system_settings.on_reload_settings(move || {
@@ -2694,7 +2778,14 @@ pub(super) fn install_callbacks(
     let layer_command_model = model.clone();
     let layer_command_main = main.as_weak();
     let layer_command_timeline = timeline.as_weak();
+    let layer_command_settings_ui = lifecycle_ui.clone();
     timeline.on_layer_command(move |action, layer| {
+        // The settings dialog reads the model itself, so it must be opened
+        // before this handler takes a mutable borrow of the workspace.
+        if action == "settings" {
+            layer_command_settings_ui.open_layer_settings(layer);
+            return;
+        }
         let maximum_layers = layer_command_timeline
             .upgrade()
             .map_or(MAX_TIMELINE_LAYERS, |window| window.get_maximum_layers());

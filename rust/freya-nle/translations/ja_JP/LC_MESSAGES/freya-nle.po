@@ -1453,3 +1453,30 @@ msgstr "マークのメモ"
 
 msgid "Note for this mark (optional)"
 msgstr "このマークのメモ(任意)"
+
+msgid "Layer Settings"
+msgstr "レイヤー設定"
+
+msgid "Layer Settings..."
+msgstr "レイヤー設定..."
+
+msgid "Name:"
+msgstr "名前:"
+
+msgid "Optional layer name"
+msgstr "レイヤー名(任意)"
+
+msgid "Background:"
+msgstr "背景色:"
+
+msgid "#RRGGBB, empty for the theme background"
+msgstr "#RRGGBB、空欄でテーマの背景色"
+
+msgid "Offsets"
+msgstr "オフセット"
+
+msgid "Volume (%):"
+msgstr "音量 (%):"
+
+msgid "Offsets apply to media objects on this layer; camera-controlled objects are not moved."
+msgstr "オフセットはこのレイヤーのメディアオブジェクトに適用されます。カメラ制御の対象オブジェクトは移動しません。"

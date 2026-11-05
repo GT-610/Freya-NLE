@@ -127,12 +127,21 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
     update_vec_model(&timeline.get_clips(), clips);
     let selected_layer = workspace.selected_layer();
     let scene = workspace.selected_scene_document();
+    let layer_settings = workspace.layer_settings();
     let layers = (0..timeline.get_maximum_layers().clamp(1, MAX_TIMELINE_LAYERS))
-        .map(|index| LayerData {
-            index,
-            visible: scene.is_none_or(|scene| !scene.hidden_layers.contains(&index)),
-            locked: scene.is_some_and(|scene| scene.locked_layers.contains(&index)),
-            selected: index == selected_layer,
+        .map(|index| {
+            let setting = layer_settings.iter().find(|setting| setting.layer == index);
+            LayerData {
+                index,
+                visible: scene.is_none_or(|scene| !scene.hidden_layers.contains(&index)),
+                locked: scene.is_some_and(|scene| scene.locked_layers.contains(&index)),
+                selected: index == selected_layer,
+                name: SharedString::from(setting.map_or("", |setting| setting.name.as_str())),
+                background: setting
+                    .and_then(|setting| layer_background_color(&setting.background))
+                    .unwrap_or(Color::from_argb_u8(0, 0, 0, 0)),
+                has_background: setting.is_some_and(|setting| !setting.background.is_empty()),
+            }
         })
         .collect::<Vec<_>>();
     update_vec_model(&timeline.get_layers(), layers);
@@ -267,6 +276,29 @@ pub(super) fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
     // A half-bright fill takes dark text: the cyan control colour sits just
     // under 0.55, so the old 0.6 cutoff left white text on it (~2:1 contrast).
     Some((Color::from_rgb_u8(red, green, blue), luma > 0.5 * 255.0))
+}
+
+/// Parses a stored layer background (`#rrggbb`/`#aarrggbb`) into a Slint colour.
+///
+/// The document normalizer already canonicalizes the text, so this only has to
+/// accept the two forms it can produce.
+pub(super) fn layer_background_color(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    let parsed = u32::from_str_radix(hex, 16).ok()?;
+    match hex.len() {
+        6 => Some(Color::from_rgb_u8(
+            ((parsed >> 16) & 0xff) as u8,
+            ((parsed >> 8) & 0xff) as u8,
+            (parsed & 0xff) as u8,
+        )),
+        8 => Some(Color::from_argb_u8(
+            ((parsed >> 24) & 0xff) as u8,
+            ((parsed >> 16) & 0xff) as u8,
+            ((parsed >> 8) & 0xff) as u8,
+            (parsed & 0xff) as u8,
+        )),
+        _ => None,
+    }
 }
 
 pub(super) fn sync_project_tabs(

@@ -89,8 +89,17 @@ export component LayerHeaderItem inherits Rectangle {
             color: root.layer.visible ? AppTheme.foreground : AppTheme.muted-foreground;
             font-size: 0.82rem;
             vertical-alignment: center;
+        }
+        if root.layer.name != "" : Text {
+            text: root.layer.name;
+            color: root.layer.visible ? AppTheme.foreground : AppTheme.muted-foreground;
+            font-size: 0.82rem;
+            vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
+        }
+        Rectangle {
+            horizontal-stretch: root.layer.name == "" ? 1 : 0;
         }
         Text {
             text: root.layer.locked ? "L" : "";
@@ -98,6 +107,15 @@ export component LayerHeaderItem inherits Rectangle {
             font-size: 0.72rem;
             vertical-alignment: center;
         }
+    }
+    // A user-chosen layer colour stays readable by painting a narrow strip
+    // instead of tinting the whole header; the clip area carries the tint.
+    if root.layer.has-background : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 3px;
+        height: 100%;
+        background: root.layer.background;
     }
     layer-menu := ContextMenuArea {
         Menu {
@@ -111,6 +129,8 @@ export component LayerHeaderItem inherits Rectangle {
             MenuSeparator { }
             MenuItem { title: root.layer.visible ? @tr("Hide this layer") : @tr("Show this layer"); activated => { root.command("toggle-visible", root.layer.index); } }
             MenuItem { title: root.layer.locked ? @tr("Unlock this layer") : @tr("Lock this layer"); activated => { root.command("toggle-lock", root.layer.index); } }
+            MenuSeparator { }
+            MenuItem { title: @tr("Layer Settings..."); activated => { root.command("settings", root.layer.index); } }
             MenuSeparator { }
             MenuItem { title: @tr("Show all layers"); activated => { root.command("show-all", root.layer.index); } }
             MenuItem { title: @tr("Hide all layers"); activated => { root.command("hide-all", root.layer.index); } }

@@ -1263,6 +1263,17 @@ export component TimelineWindow inherits Window {
                     height: 100%;
                     background: AppTheme.window-background;
                 }
+                // A named/coloured layer paints its row behind the objects,
+                // like AviUtl2's layer background. The tint is translucent so
+                // clips and grid lines stay readable on top of it.
+                for layer in root.layers : Rectangle {
+                    y: layer.index * root.timeline-track-height * 1px;
+                    width: 100%;
+                    height: root.timeline-track-height * 1px;
+                    background: layer.has-background
+                        ? layer.background.transparentize(0.62)
+                        : transparent;
+                }
                 for row in root.layers.length: Rectangle {
                     y: row * root.timeline-track-height * 1px;
                     width: 100%;
