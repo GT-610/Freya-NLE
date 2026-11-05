@@ -142,6 +142,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let recovery = ProjectRecoveryWindow::new()?;
     let main = MainWindow::new()?;
     let timeline = TimelineWindow::new()?;
+    let save_confirmation = SaveConfirmationWindow::new()?;
     launcher
         .window()
         .set_size(slint::LogicalSize::new(700.0, 500.0));
@@ -158,6 +159,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         WindowGeometry::new(100, 600, 1280, 300),
     );
     sync_timeline_zoom_settings(&timeline, &settings.borrow());
+    // The merged preview pane is a saved preference; apply it before the
+    // window is shown so the first frame already has its final layout.
+    let merged_workspace = settings
+        .borrow()
+        .bool_value("timelinePreviewVisible", false);
+    timeline.set_preview_visible(merged_workspace);
+    main.set_merged_workspace(merged_workspace);
+    // A saved geometry from before the merged layout can be shorter than the
+    // pane needs; grow it first, so the height below is bounded by the window
+    // the user actually gets instead of the saved short one.
+    lifecycle::ensure_timeline_height_for_preview(&timeline);
+    timeline.set_preview_pane_height(
+        settings::preview_pane_height(&timeline, &settings.borrow()) as f32
+    );
+    restore_window_geometry(
+        save_confirmation.window(),
+        &settings.borrow(),
+        "saveConfirmation",
+        WindowGeometry::new(400, 300, 460, 200),
+    );
     let object_settings = ObjectSettingsWindow::new()?;
     let easing = EasingConfigWindow::new()?;
     let project_settings = ProjectSettingsWindow::new()?;
@@ -237,10 +258,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         VecModel::<SystemShortcutSettingData>::default(),
     ));
     sync_system_settings(&system_settings, &settings.borrow());
+    timeline.set_preview_image(preview_image.clone());
     main.set_preview_image(preview_image);
     main.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     main.set_missing_media(ModelRc::new(VecModel::<MissingMediaData>::default()));
     recovery.set_recoveries(ModelRc::new(VecModel::<RecoveryEntryData>::default()));
+    timeline.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     timeline.set_scene_tabs(ModelRc::new(VecModel::<SceneTabData>::default()));
     timeline.set_clips(ModelRc::new(VecModel::<TimelineClipData>::default()));
     timeline.set_layers(ModelRc::new(VecModel::<LayerData>::default()));
@@ -298,6 +321,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         recovery: recovery.as_weak(),
         main: main.as_weak(),
         timeline: timeline.as_weak(),
+        save_confirmation: save_confirmation.as_weak(),
         object_settings: object_settings.as_weak(),
         easing: easing.as_weak(),
         project_settings: project_settings.as_weak(),
@@ -324,6 +348,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             recovery: &recovery,
             main: &main,
             timeline: &timeline,
+            save_confirmation: &save_confirmation,
             object_settings: &object_settings,
             easing: &easing,
             project_settings: &project_settings,
@@ -340,7 +365,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         lifecycle_ui,
         audio_playback.clone(),
     );
-    install_window_geometry_close_handler(timeline.as_weak(), settings.clone(), "timeline");
     let closing_object_settings = object_settings.as_weak();
     let closing_object_model = model.clone();
     let closing_object_store = settings.clone();
@@ -709,18 +733,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .update(&window, &animation_model.borrow());
         }
         if let Some(main) = animation_main.upgrade() {
+            let timeline = animation_timeline.upgrade();
             let preview_updated = {
                 let model = animation_model.borrow();
                 let effect_catalog = animation_effect_catalog.borrow();
-                animation_preview
-                    .borrow_mut()
-                    .update(&model, &main, &effect_catalog)
+                animation_preview.borrow_mut().update(
+                    &model,
+                    &main,
+                    timeline.as_ref(),
+                    &effect_catalog,
+                )
             };
             if preview_updated {
                 animation_stats
                     .preview_updates
                     .set(animation_stats.preview_updates.get() + 1);
                 main.window().request_redraw();
+                // The merged layout shows the same frame in the timeline.
+                if let Some(timeline) = &timeline {
+                    timeline.window().request_redraw();
+                }
             }
         }
         update_export(

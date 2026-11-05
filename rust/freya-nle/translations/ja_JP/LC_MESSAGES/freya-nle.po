@@ -141,6 +141,9 @@ msgstr "メーター"
 msgid "Audio Object / Plugin Settings"
 msgstr "音声オブジェクト / プラグイン設定"
 
+msgid "Audio object / plugin"
+msgstr "音声オブジェクト / プラグイン"
+
 msgid "Audio Plugins"
 msgstr "オーディオプラグイン"
 
@@ -270,6 +273,9 @@ msgstr "エフェクトを折りたたむ"
 msgid "Color theme"
 msgstr "カラーテーマ"
 
+msgid "Compact"
+msgstr "コンパクト"
+
 msgid "Complete"
 msgstr "完了"
 
@@ -302,6 +308,9 @@ msgstr "現在: "
 
 msgid "Current: Default"
 msgstr "現在: デフォルト"
+
+msgid "Custom"
+msgstr "カスタム"
 
 msgctxt "edit-menu-cut"
 msgid "Cut"
@@ -589,6 +598,12 @@ msgstr "非表示、ロックなし"
 msgid "Hide all layers"
 msgstr "すべてのレイヤーを非表示"
 
+msgid "Hide media library"
+msgstr "メディアライブラリを隠す"
+
+msgid "Hide preview in Timeline"
+msgstr "タイムラインのプレビューを隠す"
+
 msgid "Hide this layer"
 msgstr "このレイヤーを非表示にする"
 
@@ -679,6 +694,9 @@ msgstr "言語"
 msgid "Language changes are applied immediately after pressing Apply or OK."
 msgstr "言語の変更は「適用」または「OK」を押すとすぐに反映されます。"
 
+msgid "Layer density"
+msgstr "レイヤー密度"
+
 msgid "Layer header width"
 msgstr "レイヤーヘッダー幅"
 
@@ -687,6 +705,9 @@ msgstr "レイヤー {}"
 
 msgid "Layers"
 msgstr "レイヤー"
+
+msgid "Large"
+msgstr "大"
 
 msgid "Light"
 msgstr "ライト"
@@ -747,6 +768,9 @@ msgstr "メディアライブラリ"
 
 msgid "Memory and Cache"
 msgstr "メモリとキャッシュ"
+
+msgid "Merge workspace"
+msgstr "ワークスペースを統合"
 
 msgid "Minimum cache amount"
 msgstr "最小キャッシュ量"
@@ -850,6 +874,9 @@ msgstr "挿入するレイヤー数:"
 msgid "Number of recent projects to keep"
 msgstr "最近使ったプロジェクトの保持数"
 
+msgid "Object settings"
+msgstr "オブジェクト設定"
+
 msgid "Object / Effect"
 msgstr "オブジェクト / エフェクト"
 
@@ -915,6 +942,9 @@ msgstr "再生"
 
 msgid "Play / Pause"
 msgstr "再生 / 一時停止"
+
+msgid "Playback position"
+msgstr "再生位置"
 
 msgid "Playback speed (percent)"
 msgstr "再生速度（パーセント）"
@@ -1152,6 +1182,9 @@ msgstr "選択ツール"
 msgid "Sequence number digits"
 msgstr "連番桁数"
 
+msgid "Separate workspace"
+msgstr "ワークスペースを分離"
+
 msgid "Settings"
 msgstr "設定"
 
@@ -1170,11 +1203,23 @@ msgstr "設定は「適用」または「OK」で保存されます"
 msgid "Shortcuts"
 msgstr "ショートカット"
 
+msgid "Shorter preview"
+msgstr "プレビューを低く"
+
+msgid "Show Preview Window"
+msgstr "プレビューウィンドウを表示"
+
 msgid "Show Settings Dialog"
 msgstr "設定ダイアログの表示"
 
 msgid "Show Timeline"
 msgstr "タイムラインの表示"
+
+msgid "Show preview in Timeline"
+msgstr "タイムラインにプレビューを表示"
+
+msgid "Show the preview inside the timeline"
+msgstr "タイムライン内にプレビューを表示"
 
 msgid "Show all layers"
 msgstr "すべてのレイヤーを表示"
@@ -1241,6 +1286,9 @@ msgstr "方式"
 
 msgid "Sync Repository"
 msgstr "リポジトリを同期"
+
+msgid "Taller preview"
+msgstr "プレビューを高く"
 
 msgid "Target layer range:"
 msgstr "対象レイヤーの範囲:"

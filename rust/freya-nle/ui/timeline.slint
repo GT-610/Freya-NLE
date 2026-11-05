@@ -1,4 +1,5 @@
 import {
+    ProjectTabData,
     SceneTabData,
     TimelineClipData,
     LayerData,
@@ -11,10 +12,12 @@ import {
     MediaBinGroupData,
     TimelineToolFeedback,
 } from "models.slint";
+import { FooterBar, PanelHeader, TimeFormat } from "chrome.slint";
+import { TransportBar } from "transport-bar.slint";
 import { MediaBinPanel } from "media-bin.slint";
 import { Button, ComboBox, LineEdit, RadioGroup, ScrollView, SpinBox } from "std-widgets.slint";
 import { AppTheme, TimelineMetrics } from "theme.slint";
-import { SceneTab, LayerHeaderItem, TimelineClipItem } from "timeline-items.slint";
+import { ProjectTab, SceneTab, LayerHeaderItem, TimelineClipItem } from "timeline-items.slint";
 import { TabAddButton } from "widgets.slint";
 
 export component TimelineWindow inherits Window {
@@ -24,11 +27,18 @@ export component TimelineWindow inherits Window {
     min-width: 720px;
     // The dock needs room for the list and the selected entry's editor; a shorter window would
     // show neither. Collapsing the library gives the height back.
-    min-height: root.media-bin-visible ? 470px : 300px;
+    min-height: root.preview-visible
+        ? 640px
+        : root.media-bin-visible ? 470px : 300px;
     forward-focus: timeline-shortcuts;
     private property <bool> drag-active: false;
     private property <TimelineDragFeedback> drag-feedback;
     callback preview-clip-drag(string, int, float, float, bool) -> TimelineDragFeedback;
+    // Project tabs mirror the preview window's strip. They appear in the
+    // merged layout so the timeline can act as the only workspace window.
+    in property <[ProjectTabData]> project-tabs;
+    in property <int> current-project: -1;
+    in property <int> project-tab-height: 28;
     in property <[SceneTabData]> scene-tabs;
     in property <[TimelineClipData]> clips;
     in property <[LayerData]> layers;
@@ -53,6 +63,9 @@ export component TimelineWindow inherits Window {
     in property <[ObjectCatalogMenuCategoryData]> context-catalog-categories;
     in property <[ObjectCatalogMenuCategoryData]> object-catalog-menu-categories;
     in property <int> duration: 3600;
+    // Actual project length; `duration` is the padded view length the ruler
+    // uses, and the transport must not report padding as the total.
+    in property <int> playback-duration: 3600;
     in property <int> playhead: 0;
     in property <int> selected-layer: 0;
     in property <int> selected-clip-count: 0;
@@ -60,11 +73,39 @@ export component TimelineWindow inherits Window {
     in property <int> zoom-min: 10;
     in property <int> zoom-max: 400;
     in property <bool> timeline-skimming-enabled: true;
-    in property <int> timeline-track-height: 30;
+    in property <int> timeline-track-height: 32;
     in property <int> timeline-header-height: 28;
     in property <int> timeline-ruler-height: 32;
+    // Merged preview pane. AviUtl2 keeps the preview directly above the layer
+    // editing area in one window; this pane brings the same picture to the
+    // timeline without forcing the standalone preview window to close.
+    in-out property <bool> preview-visible: false;
+    in property <image> preview-image;
+    in property <bool> playing: false;
+    // Height of the merged preview pane. Dragging the divider below it
+    // updates the value; a fixed length keeps the binding out of the layout's
+    // own height calculation (a ratio read of `root.height` there forms a loop).
+    in-out property <length> preview-pane-height: 320px;
+    // The pane keeps its height while the window is resized, so a window that
+    // got shorter would otherwise leave the ruler and the layers with less than
+    // the 240px the layout reserves for them.
+    changed height => {
+        if (root.preview-visible) {
+            root.preview-pane-height = clamp(
+                root.preview-pane-height,
+                120px,
+                root.preview-height-ceiling()
+            );
+        }
+    }
+    // Footer readings. The host projects the selected scene alongside the
+    // playhead, mirroring AviUtl2's footer format (style.conf [Format]):
+    // time/frame on the left, scene/resolution/rate on the right.
+    in property <string> scene-name: "";
+    in property <string> scene-resolution: "";
+    in property <int> scene-frame-rate: 60;
     in property <int> maximum-layers: 128;
-    in property <int> layer-header-width: 60;
+    in property <int> layer-header-width: 96;
     in property <int> clip-resize-handle-width: 10;
     in property <int> minimum-clip-duration-frames: 5;
     in property <string> grid-mode: "Auto";
@@ -137,15 +178,64 @@ export component TimelineWindow inherits Window {
     // distance: 10 frames when zoomed in, 300 when zoomed out
     // (Ruler.qml:160-175). A fixed 60-frame interval overlapped the labels at
     // low zoom and spread them far apart at high zoom.
-    private property <float> ruler-tick-interval: root.pixels-per-frame > 5
+    private property <int> ruler-tick-interval: root.pixels-per-frame > 5
         ? 10
         : root.pixels-per-frame > 1
             ? 30
             : root.pixels-per-frame > 0.5 ? 60 : 300;
     private property <int> ruler-tick-count: min(
-        floor(root.duration / root.ruler-tick-interval) + 1,
+        root.duration / root.ruler-tick-interval + 1,
         2048
     );
+    // The tick spacing, in pixels. The timecode line needs a wider label than
+    // the frame number, so it only appears when two labels cannot collide.
+    private property <float> ruler-tick-pixels: root.pixels-per-frame * root.ruler-tick-interval;
+    private property <bool> show-ruler-timecode: root.timeline-ruler-height >= 28
+        && root.ruler-tick-pixels >= 32;
+    // Timecode labels are wider than frame numbers, so at tight zoom every
+    // second (or fourth) tick carries one while every tick keeps its frame.
+    private property <int> ruler-timecode-stride: root.ruler-tick-pixels >= 72
+        ? 1
+        : root.ruler-tick-pixels >= 36
+            ? 2
+            : root.ruler-tick-pixels >= 18 ? 4 : 8;
+
+    // Tallest the merged preview pane may get. It shares the window with the
+    // ruler and the layer area, which keep 240px, and is capped at 720px on its
+    // own; the 120px floor holds even in a window too short for the subtraction.
+    // Only event handlers call this: a binding that read `root.height` here would
+    // feed the layout's own height calculation.
+    pure function preview-height-ceiling() -> length {
+        return clamp(root.height - 240px, 120px, 720px);
+    }
+
+    pure function footer-left-text() -> string {
+        return TimeFormat.timecode(root.playhead, root.scene-frame-rate)
+            + "  /  " + TimeFormat.timecode(root.playback-duration, root.scene-frame-rate)
+            + "   |   " + "\{root.playhead} / \{root.playback-duration}";
+    }
+
+    pure function footer-right-text() -> string {
+        if (root.scene-name == "") {
+            return "";
+        }
+        let size = root.scene-resolution == "" ? "" : "  |  " + root.scene-resolution;
+        return root.scene-name + size
+            + "  |  " + "\{root.scene-frame-rate} fps";
+    }
+
+    // The preview pane controls the same transport as the preview window; the
+    // host forwards these to the window that owns the commands.
+    callback show-preview-window();
+    callback select-project(int);
+    callback close-project(int);
+    // Emitted when the merged preview height settles, so the host can keep it.
+    callback preview-height-changed(float);
+    callback seek(float);
+    callback toggle-preview();
+    callback previous-frame();
+    callback toggle-playback();
+    callback next-frame();
     callback timeline-action(string, int, int);
     callback seek-audio-frame(int, int);
     callback filter-objects(string, int);
@@ -280,10 +370,43 @@ export component TimelineWindow inherits Window {
         Menu {
             title: @tr("View");
             MenuItem { title: @tr("Media Library"); checkable: true; checked <=> root.media-bin-visible; }
+            // The host owns the persisted preference, so this is a plain
+            // toggle whose label reflects the current state.
+            MenuItem {
+                title: root.preview-visible ? @tr("Hide preview in Timeline") : @tr("Show preview in Timeline");
+                activated => { root.toggle-preview(); }
+            }
+            MenuItem {
+                title: @tr("Taller preview");
+                enabled: root.preview-visible;
+                activated => {
+                    root.preview-pane-height = clamp(
+                        root.preview-pane-height + 40px,
+                        120px,
+                        root.preview-height-ceiling()
+                    );
+                    root.preview-height-changed(root.preview-pane-height / 1px);
+                }
+            }
+            MenuItem {
+                title: @tr("Shorter preview");
+                enabled: root.preview-visible;
+                activated => {
+                    root.preview-pane-height = clamp(root.preview-pane-height - 40px, 120px, 720px);
+                    root.preview-height-changed(root.preview-pane-height / 1px);
+                }
+            }
+            MenuItem { title: @tr("Show Preview Window"); icon: @image-url("icons/timeline.svg"); activated => { root.show-preview-window(); } }
             MenuItem { title: @tr("Show Timeline"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[21] : root.no-shortcut; icon: @image-url("icons/timeline.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-timeline(); } }
             MenuItem { title: @tr("Show Settings Dialog"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[22] : root.no-shortcut; icon: @image-url("icons/settings.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-object-settings(); } }
             Menu {
                 title: @tr("Workspace");
+                MenuItem {
+                    title: root.preview-visible ? @tr("Separate workspace") : @tr("Merge workspace");
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.workspace-action(root.preview-visible ? "separate" : "merged"); }
+                }
+                MenuSeparator { }
                 MenuItem { title: @tr("Editing layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("editing"); } }
                 MenuItem { title: @tr("Animation layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("animation"); } }
                 MenuItem { title: @tr("Audio layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("audio"); } }
@@ -602,12 +725,43 @@ export component TimelineWindow inherits Window {
             }
         }
 
+        VerticalLayout {
+            height: 100%;
         HorizontalLayout {
             spacing: 0px;
+            vertical-stretch: 1;
+            min-height: 0px;
             VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 0px;
-                Rectangle {
+                if root.preview-visible && root.project-tabs.length > 1 : Rectangle {
+                height: root.project-tab-height * 1px;
+                background: AppTheme.raised-background;
+                HorizontalLayout {
+                    spacing: 0px;
+                    project-tab-scroll := ScrollView {
+                        horizontal-stretch: 1;
+                        height: 100%;
+                        viewport-width: max(project-tab-list.preferred-width, self.visible-width);
+                        viewport-height: self.visible-height;
+                        mouse-drag-pan-enabled: false;
+                        project-tab-list := HorizontalLayout {
+                            spacing: 0px;
+                            accessible-role: tab-list;
+                            accessible-label: @tr("Project");
+                            for tab[index] in root.project-tabs: ProjectTab {
+                                label: tab.name + (tab.dirty ? " *" : "");
+                                selected: root.current-project == index;
+                                tab-height: root.project-tab-height * 1px;
+                                activate => { root.select-project(index); }
+                                close => { root.close-project(index); }
+                            }
+                        }
+                    }
+                    TabAddButton { accessible-name: @tr("New Project"); clicked => { root.new-project(); } }
+                }
+            }
+            Rectangle {
             height: root.timeline-header-height * 1px;
             background: AppTheme.raised-background;
             HorizontalLayout {
@@ -653,9 +807,74 @@ export component TimelineWindow inherits Window {
                 }
             }
         }
+            if root.preview-visible : Rectangle {
+                width: 100%;
+                height: root.preview-pane-height;
+                background: AppTheme.canvas-background;
+                VerticalLayout {
+                    width: 100%;
+                    min-height: 0px;
+                    spacing: 0px;
+                    Image {
+                        source: root.preview-image;
+                        image-fit: contain;
+                        vertical-stretch: 1;
+                        // Without this the picture's natural height becomes the
+                        // pane's minimum and the layer area collapses.
+                        min-height: 0px;
+                    }
+                    TransportBar {
+                        compact: true;
+                        playhead: root.playhead;
+                        duration: root.playback-duration;
+                        playhead-frame: root.playhead;
+                        frame-rate: root.scene-frame-rate;
+                        playing: root.playing;
+                        seek(value) => { root.seek(value); }
+                        previous-frame => { root.previous-frame(); }
+                        toggle-playback => { root.toggle-playback(); }
+                        next-frame => { root.next-frame(); }
+                    }
+                }
+            }
+            if root.preview-visible : Rectangle {
+                height: 6px;
+                background: AppTheme.separator;
+                divider-touch := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: ns-resize;
+                    private property <length> start-y;
+                    private property <length> start-height;
+                    private property <bool> dragging: false;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            self.start-y = self.absolute-position.y + self.mouse-y;
+                            self.start-height = root.preview-pane-height;
+                            self.dragging = true;
+                        }
+                        if event.kind == PointerEventKind.move && self.dragging {
+                            // Reading the window height here is safe: the handler
+                            // runs on input, not while a binding is evaluated.
+                            root.preview-pane-height = clamp(
+                                self.start-height
+                                    + (self.absolute-position.y + self.mouse-y - self.start-y),
+                                120px,
+                                root.preview-height-ceiling()
+                            );
+                        }
+                        if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                            if self.dragging {
+                                root.preview-height-changed(root.preview-pane-height / 1px);
+                            }
+                            self.dragging = false;
+                        }
+                    }
+                }
+            }
             Rectangle {
             height: root.timeline-ruler-height * 1px;
-            background: AppTheme.panel-background;
+            background: AppTheme.ruler-background;
             Rectangle {
                 y: parent.height - 1px;
                 width: 100%;
@@ -731,20 +950,39 @@ export component TimelineWindow inherits Window {
                     x: tick * root.ruler-tick-interval * root.pixels-per-frame * 1px;
                     width: 1px;
                     height: 100%;
-                    background: AppTheme.subtle-border;
+                    background: AppTheme.grid-line;
+                    // A short mark at the bottom edge keeps the tick readable
+                    // against the object track without a full-height line.
+                    Rectangle {
+                        y: parent.height - 8px;
+                        width: 1px;
+                        height: 8px;
+                        background: AppTheme.border;
+                    }
+                    if root.show-ruler-timecode && mod(tick, root.ruler-timecode-stride) == 0 : Text {
+                        x: 4px;
+                        y: 2px;
+                        text: TimeFormat.timecode(tick * root.ruler-tick-interval, root.scene-frame-rate);
+                        color: AppTheme.muted-foreground;
+                        font-family: "Monospace";
+                        font-size: 0.66rem;
+                        vertical-alignment: center;
+                    }
                     Text {
                         x: 4px;
-                        text: round(tick * root.ruler-tick-interval);
-                        color: AppTheme.foreground;
+                        y: root.show-ruler-timecode ? root.timeline-ruler-height * 1px - 18px : 2px;
+                        text: "\{tick * root.ruler-tick-interval}";
+                        color: AppTheme.timecode;
                         font-family: "Monospace";
-                        font-size: 0.78rem;
+                        font-size: 0.72rem;
+                        vertical-alignment: center;
                     }
                 }
                 Rectangle {
                     x: root.playhead * root.pixels-per-frame * 1px;
                     width: 2px;
                     height: 100%;
-                    background: AppTheme.accent;
+                    background: AppTheme.playhead;
                 }
             }
             ruler-input := TouchArea {
@@ -1093,13 +1331,28 @@ export component TimelineWindow inherits Window {
                     x: root.playhead * root.pixels-per-frame * 1px;
                     width: 2px;
                     height: 100%;
-                    background: AppTheme.accent;
+                    background: AppTheme.playhead;
                 }
             }
         }
         }
-            if root.media-bin-visible: MediaBinPanel {
+            if root.media-bin-visible: VerticalLayout {
                 width: 280px;
+                spacing: 0px;
+                PanelHeader {
+                    title: @tr("Media Library");
+                    actions: [
+                        { glyph: "×", label: @tr("Hide media library"), enabled: true }
+                    ];
+                    action(index) => {
+                        if (index == 0) {
+                            root.media-bin-visible = false;
+                        }
+                    }
+                }
+                MediaBinPanel {
+                    width: parent.width;
+                    vertical-stretch: 1;
                 entries: root.media-entries;
                 groups: root.media-groups;
                 group-names: root.media-group-names;
@@ -1115,7 +1368,13 @@ export component TimelineWindow inherits Window {
                 remove-group(id) => { root.remove-media-group(id); }
                 assign-group(id, group) => { root.assign-media-group(id, group); }
                 rename-group(id, name) => { root.rename-media-group(id, name); }
+                }
             }
+        }
+        FooterBar {
+            left-text: root.footer-left-text();
+            right-text: root.footer-right-text();
+        }
         }
     }
 

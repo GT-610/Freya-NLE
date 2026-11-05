@@ -1,4 +1,5 @@
 import { PackageData, PackageRepositoryData } from "models.slint";
+import { FooterBar } from "chrome.slint";
 import { PackageListRow } from "package-list-row.slint";
 import { Button, CheckBox, GroupBox, LineEdit, ProgressIndicator, ScrollView } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
@@ -37,6 +38,10 @@ export component PackageManagerWindow inherits Window {
     callback dismiss-update();
 
     VerticalLayout {
+        spacing: 0px;
+        // The content keeps its padding; the footer is a full-width band, so it
+        // sits outside the padded column (AviUtl2's window footer).
+        VerticalLayout {
         padding: AppTheme.spacing-lg;
         spacing: AppTheme.spacing-md;
         HorizontalLayout {
@@ -177,15 +182,18 @@ export component PackageManagerWindow inherits Window {
                 Rectangle { horizontal-stretch: 1; }
             }
         }
-        if root.busy : ProgressIndicator {
-            progress: root.progress;
-            indeterminate: root.progress <= 0;
         }
-        Text {
-            text: root.status-text;
-            color: AppTheme.muted-foreground;
-            font-size: 11px;
-            overflow: elide;
+        // A sync can be busy before it knows a percentage; the footer bar alone
+        // would show nothing at 0.
+        if root.busy && root.progress <= 0 : ProgressIndicator {
+            height: 6px;
+            indeterminate: true;
+        }
+        FooterBar {
+            left-text: root.status-text;
+            progress: root.busy ? root.progress : -1;
+            // Status text is prose, not a counter.
+            monospace-left: false;
         }
     }
 

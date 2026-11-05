@@ -11,7 +11,7 @@ use freya_nle_app::{
     ApplicationModel, MAX_TIMELINE_LAYERS, ProjectDefaults, ProjectSettingsInput,
     SceneSettingsInput,
 };
-use slint::{Model, SharedString};
+use slint::{ComponentHandle, Model, SharedString};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -113,15 +113,18 @@ pub(super) fn sync_timeline_runtime_settings(
         .i32_value("timelineHeaderHeight", 28)
         .clamp(16, 100);
     main.set_project_tab_height(header_height);
+    // The merged timeline draws the same project strip, so it uses the same
+    // height instead of its own default.
+    timeline.set_project_tab_height(header_height);
     timeline.set_timeline_header_height(header_height);
     timeline
-        .set_timeline_track_height(settings.i32_value("timelineTrackHeight", 30).clamp(16, 100));
+        .set_timeline_track_height(settings.i32_value("timelineTrackHeight", 32).clamp(16, 100));
     timeline
         .set_timeline_ruler_height(settings.i32_value("timelineRulerHeight", 32).clamp(16, 100));
     timeline.set_maximum_layers(timeline_maximum_layers(settings));
     timeline.set_layer_header_width(
         settings
-            .i32_value("timelineLayerHeaderWidth", 60)
+            .i32_value("timelineLayerHeaderWidth", 96)
             .clamp(40, 300),
     );
     timeline.set_clip_resize_handle_width(
@@ -132,12 +135,65 @@ pub(super) fn sync_timeline_runtime_settings(
     timeline.set_minimum_clip_duration_frames(
         settings.i32_value("minClipDurationFrames", 5).clamp(1, 100),
     );
+    // AviUtl2 keeps the preview above the layer area; the merged pane follows
+    // the same preference here and can be hidden again from the View menu.
+    timeline.set_preview_visible(settings.bool_value("timelinePreviewVisible", false));
+    // The preview window's View menu names the layout action, so it has to
+    // know what the timeline is doing.
+    main.set_merged_workspace(timeline.get_preview_visible());
+    timeline.set_preview_pane_height(preview_pane_height(timeline, settings) as f32);
     let skimming_enabled = settings.bool_value("enableTimelineSkimming", true);
     timeline.set_timeline_skimming_enabled(skimming_enabled);
     if !skimming_enabled {
         timeline.set_skimmer_visible(false);
     }
     object_settings.set_sidebar_on_right(settings.bool_value("settingDialogSidebarRight", false));
+}
+
+/// Tallest the merged preview pane may get in this window.
+///
+/// The pane competes with the ruler and the layer area for one window, so the
+/// ceiling is 720px and never more than the window height minus the 240px the
+/// rest of the timeline needs. The 120px floor wins in a window too short for
+/// the subtraction, because the pane cannot be smaller than that either.
+pub(super) fn preview_pane_max_height(timeline: &TimelineWindow) -> i32 {
+    let window = timeline.window();
+    let available = window.size().to_logical(window.scale_factor()).height as i32 - 240;
+    available.clamp(120, 720)
+}
+
+/// Height for the merged preview pane.
+///
+/// The saved value, bounded by the window like the divider drag is.
+pub(super) fn preview_pane_height(timeline: &TimelineWindow, settings: &SettingsStore) -> i32 {
+    let requested = settings.i32_value("timelinePreviewHeight", 320);
+    requested.clamp(120, preview_pane_max_height(timeline))
+}
+
+/// Persists the merged-preview preferences.
+///
+/// The View-menu toggle, the divider drag, the height menu items and the
+/// workspace action all change one of these two values; keeping the atomic
+/// write and the clamping here stops the copies from drifting apart.
+pub(super) fn save_timeline_preview_settings(
+    settings: &RefCell<SettingsStore>,
+    visible: Option<bool>,
+    height: Option<f32>,
+) -> Result<(), String> {
+    let mut snapshot = settings.borrow().snapshot();
+    if let Some(visible) = visible {
+        snapshot.insert(
+            "timelinePreviewVisible".to_owned(),
+            serde_json::json!(visible),
+        );
+    }
+    if let Some(height) = height {
+        snapshot.insert(
+            "timelinePreviewHeight".to_owned(),
+            serde_json::json!(height.round().clamp(120.0, 720.0) as i32),
+        );
+    }
+    settings.borrow_mut().apply(snapshot)
 }
 
 pub(super) fn project_defaults(settings: &SettingsStore) -> ProjectDefaults {
@@ -233,7 +289,8 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
             .clamp(0, 600),
     );
     window.set_enable_timeline_skimming(settings.bool_value("enableTimelineSkimming", true));
-    window.set_timeline_track_height(settings.i32_value("timelineTrackHeight", 30).clamp(16, 100));
+    window.set_timeline_preview_visible(settings.bool_value("timelinePreviewVisible", false));
+    window.set_timeline_track_height(settings.i32_value("timelineTrackHeight", 32).clamp(16, 100));
     window.set_timeline_header_height(
         settings
             .i32_value("timelineHeaderHeight", 28)
@@ -249,7 +306,7 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
     );
     window.set_timeline_layer_header_width(
         settings
-            .i32_value("timelineLayerHeaderWidth", 60)
+            .i32_value("timelineLayerHeaderWidth", 96)
             .clamp(40, 300),
     );
     window.set_timeline_clip_resize_handle_width(
@@ -484,6 +541,10 @@ fn system_settings_replacement(
         (
             "enableTimelineSkimming",
             serde_json::json!(window.get_enable_timeline_skimming()),
+        ),
+        (
+            "timelinePreviewVisible",
+            serde_json::json!(window.get_timeline_preview_visible()),
         ),
         (
             "timelineTrackHeight",

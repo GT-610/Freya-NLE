@@ -141,6 +141,9 @@ msgstr "电平表"
 msgid "Audio Object / Plugin Settings"
 msgstr "音频对象 / 插件设置"
 
+msgid "Audio object / plugin"
+msgstr "音频对象 / 插件"
+
 msgid "Audio Plugins"
 msgstr "音频插件"
 
@@ -270,6 +273,9 @@ msgstr "折叠效果"
 msgid "Color theme"
 msgstr "配色主题"
 
+msgid "Compact"
+msgstr "紧凑"
+
 msgid "Complete"
 msgstr "完成"
 
@@ -302,6 +308,9 @@ msgstr "当前："
 
 msgid "Current: Default"
 msgstr "当前：默认"
+
+msgid "Custom"
+msgstr "自定义"
 
 msgctxt "edit-menu-cut"
 msgid "Cut"
@@ -589,6 +598,12 @@ msgstr "隐藏，未锁定"
 msgid "Hide all layers"
 msgstr "隐藏所有图层"
 
+msgid "Hide media library"
+msgstr "隐藏媒体库"
+
+msgid "Hide preview in Timeline"
+msgstr "在时间线中隐藏预览"
+
 msgid "Hide this layer"
 msgstr "隐藏此图层"
 
@@ -679,6 +694,9 @@ msgstr "语言"
 msgid "Language changes are applied immediately after pressing Apply or OK."
 msgstr "按下“应用”或“确定”后，语言更改会立即生效。"
 
+msgid "Layer density"
+msgstr "图层密度"
+
 msgid "Layer header width"
 msgstr "图层标题宽度"
 
@@ -687,6 +705,9 @@ msgstr "图层 {}"
 
 msgid "Layers"
 msgstr "图层"
+
+msgid "Large"
+msgstr "大"
 
 msgid "Light"
 msgstr "浅色"
@@ -747,6 +768,9 @@ msgstr "媒体库"
 
 msgid "Memory and Cache"
 msgstr "内存与缓存"
+
+msgid "Merge workspace"
+msgstr "合并工作区"
 
 msgid "Minimum cache amount"
 msgstr "最小缓存量"
@@ -850,6 +874,9 @@ msgstr "要插入的图层数："
 msgid "Number of recent projects to keep"
 msgstr "最近使用项目的保留数量"
 
+msgid "Object settings"
+msgstr "对象设置"
+
 msgid "Object / Effect"
 msgstr "对象 / 效果"
 
@@ -915,6 +942,9 @@ msgstr "播放"
 
 msgid "Play / Pause"
 msgstr "播放 / 暂停"
+
+msgid "Playback position"
+msgstr "播放位置"
 
 msgid "Playback speed (percent)"
 msgstr "播放速度（百分比）"
@@ -1152,6 +1182,9 @@ msgstr "选择工具"
 msgid "Sequence number digits"
 msgstr "序列编号位数"
 
+msgid "Separate workspace"
+msgstr "分离工作区"
+
 msgid "Settings"
 msgstr "设置"
 
@@ -1170,11 +1203,23 @@ msgstr "设置会在点击“应用”或“OK”后保存"
 msgid "Shortcuts"
 msgstr "快捷键"
 
+msgid "Shorter preview"
+msgstr "缩短预览"
+
+msgid "Show Preview Window"
+msgstr "显示预览窗口"
+
 msgid "Show Settings Dialog"
 msgstr "显示设置对话框"
 
 msgid "Show Timeline"
 msgstr "显示时间线"
+
+msgid "Show preview in Timeline"
+msgstr "在时间线中显示预览"
+
+msgid "Show the preview inside the timeline"
+msgstr "在时间线内显示预览"
 
 msgid "Show all layers"
 msgstr "显示所有图层"
@@ -1241,6 +1286,9 @@ msgstr "策略"
 
 msgid "Sync Repository"
 msgstr "同步仓库"
+
+msgid "Taller preview"
+msgstr "加高预览"
 
 msgid "Target layer range:"
 msgstr "目标图层范围："

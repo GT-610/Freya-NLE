@@ -106,7 +106,7 @@ impl ObjectSettingsUi {
     pub(super) fn sync_lightweight(&self) {
         if let (Some(main), Some(timeline)) = (self.main.upgrade(), self.timeline.upgrade()) {
             let model = self.model.borrow();
-            sync_project_tabs(&main, &model);
+            sync_project_tabs(&main, &timeline, &model);
             sync_transport(&main, &timeline, &model);
         }
     }

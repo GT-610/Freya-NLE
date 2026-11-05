@@ -130,17 +130,29 @@ export component SystemSettingsWindow inherits Window {
     in-out property <int> bake-strategy-index: 0;
     in-out property <int> on-demand-prefetch-frames: 30;
     in-out property <bool> enable-timeline-skimming: true;
-    in-out property <int> timeline-track-height: 30;
+    in-out property <bool> timeline-preview-visible: false;
+    in-out property <int> timeline-track-height: 32;
     in-out property <int> timeline-header-height: 28;
     in-out property <bool> setting-dialog-sidebar-right: false;
     in-out property <int> timeline-ruler-height: 32;
     in-out property <int> timeline-max-layers: 128;
-    in-out property <int> timeline-layer-header-width: 60;
+    in-out property <int> timeline-layer-header-width: 96;
     in-out property <int> timeline-clip-resize-handle-width: 10;
     in-out property <int> min-clip-duration-frames: 5;
     in-out property <int> timeline-zoom-min: 10;
     in-out property <int> timeline-zoom-max: 400;
     in-out property <int> timeline-zoom-step: 10;
+    // Preset index for the layer row height: 0 compact, 1 standard,
+    // 2 large, 3 custom. Derived from the height so a hand-typed value
+    // shows up as "Custom" instead of pretending to be a preset.
+    in-out property <int> layer-density-index: 1;
+    changed timeline-track-height => {
+        root.layer-density-index = root.timeline-track-height == 24
+            ? 0
+            : root.timeline-track-height == 32
+                ? 1
+                : root.timeline-track-height == 48 ? 2 : 3;
+    }
     in-out property <int> theme-index: 0;
     in-out property <int> language-index: 0;
     in-out property <int> default-project-width: 1920;
@@ -358,8 +370,40 @@ export component SystemSettingsWindow inherits Window {
                     VerticalLayout {
                         padding: 10px;
                         spacing: 9px;
+                        HorizontalLayout {
+                            spacing: AppTheme.spacing-md;
+                            Text {
+                                text: @tr("Layer density");
+                                width: 240px;
+                                color: AppTheme.muted-foreground;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            ComboBox {
+                                model: [@tr("Compact"), @tr("Standard"), @tr("Large"), @tr("Custom")];
+                                current-index <=> root.layer-density-index;
+                                accessible-label: @tr("Layer density");
+                                horizontal-stretch: 1;
+                                selected(value) => {
+                                    if (value == 0) { root.timeline-track-height = 24; }
+                                    else if (value == 1) { root.timeline-track-height = 32; }
+                                    else if (value == 2) { root.timeline-track-height = 48; }
+                                    else {
+                                        // "Custom" only names a hand-typed
+                                        // height; snap back to the value that
+                                        // matches the current height.
+                                        root.layer-density-index = root.timeline-track-height == 24
+                                            ? 0
+                                            : root.timeline-track-height == 32
+                                                ? 1
+                                                : root.timeline-track-height == 48 ? 2 : 3;
+                                    }
+                                }
+                            }
+                        }
                         SystemSettingSpinRow { label: @tr("Track height"); value <=> root.timeline-track-height; minimum: 16; maximum: 100; }
                         SystemSettingSpinRow { label: @tr("Header height"); value <=> root.timeline-header-height; minimum: 16; maximum: 100; }
+                        CheckBox { text: @tr("Show the preview inside the timeline"); checked <=> root.timeline-preview-visible; }
                         CheckBox { text: @tr("Place settings sidebar on the right"); checked <=> root.setting-dialog-sidebar-right; }
                         SystemSettingSpinRow { label: @tr("Ruler height"); value <=> root.timeline-ruler-height; minimum: 16; maximum: 100; }
                         SystemSettingSpinRow { label: @tr("Maximum layer count"); value <=> root.timeline-max-layers; minimum: 1; maximum: 512; }

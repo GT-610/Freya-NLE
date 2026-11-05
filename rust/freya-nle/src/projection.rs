@@ -41,7 +41,7 @@ pub(super) fn sync_transport_weak(
 }
 
 pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: &ApplicationModel) {
-    sync_project_tabs(main, model);
+    sync_project_tabs(main, timeline, model);
 
     let Some(workspace) = model.current_workspace() else {
         update_vec_model(&main.get_missing_media(), Vec::new());
@@ -55,7 +55,13 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         update_vec_model(&timeline.get_media_groups(), Vec::new());
         timeline.set_playhead(0);
         timeline.set_duration(0);
+        timeline.set_playback_duration(0);
         timeline.set_selected_clip_count(0);
+        // The footer's right reading belongs to the selected scene; with no
+        // project open it must not keep the last project's name.
+        timeline.set_scene_name(SharedString::default());
+        timeline.set_scene_resolution(SharedString::default());
+        timeline.set_scene_frame_rate(60);
         return;
     };
     let missing_media = workspace.missing_media();
@@ -240,18 +246,31 @@ pub(super) fn sync_media_bin(timeline: &TimelineWindow, workspace: &freya_nle_ap
     timeline.set_media_group_index(group_index);
 }
 
-fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
+/// Clip colour for a type, matching AviUtl2's object groups (style.conf
+/// `[Color]`): audio objects are red, control objects (camera, scene
+/// reference) are cyan, and media objects keep the theme's video blue.
+///
+/// The colours live here rather than in `ui/theme.slint` because the
+/// projection only has `freya-nle-app` types in scope.
+pub(super) fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
     let [red, green, blue] = match clip_type {
-        "audio" => [0xd0, 0x30, 0x30],
+        "audio" => [0xd0, 0x40, 0x30],
+        "camera" | "camera_control" | "scene" => [0x30, 0xb0, 0xc0],
         "counter" | "flare" | "lens_flare_object" | "pie_shape" | "polygon_shape"
         | "radial_lines" | "star" | "track_line" => [0x3b, 0x82, 0xf6],
         _ => return None,
     };
     let luma = 0.299 * f32::from(red) + 0.587 * f32::from(green) + 0.114 * f32::from(blue);
-    Some((Color::from_rgb_u8(red, green, blue), luma > 0.6 * 255.0))
+    // A half-bright fill takes dark text: the cyan control colour sits just
+    // under 0.55, so the old 0.6 cutoff left white text on it (~2:1 contrast).
+    Some((Color::from_rgb_u8(red, green, blue), luma > 0.5 * 255.0))
 }
 
-pub(super) fn sync_project_tabs(main: &MainWindow, model: &ApplicationModel) {
+pub(super) fn sync_project_tabs(
+    main: &MainWindow,
+    timeline: &TimelineWindow,
+    model: &ApplicationModel,
+) {
     let tabs = model
         .tabs()
         .into_iter()
@@ -260,12 +279,17 @@ pub(super) fn sync_project_tabs(main: &MainWindow, model: &ApplicationModel) {
             dirty: tab.dirty,
         })
         .collect::<Vec<_>>();
-    update_vec_model(&main.get_project_tabs(), tabs);
-    main.set_current_project(
-        model
-            .current_project_index()
-            .map_or(-1, |index| index as i32),
-    );
+    let current = model
+        .current_project_index()
+        .map_or(-1, |index| index as i32);
+    update_vec_model(&main.get_project_tabs(), tabs.clone());
+    main.set_current_project(current);
+    // The workspace menu item names the action the other layout would take.
+    main.set_merged_workspace(timeline.get_preview_visible());
+    // The merged timeline shows the same strip, so it can stand in for the
+    // preview window.
+    update_vec_model(&timeline.get_project_tabs(), tabs);
+    timeline.set_current_project(current);
 }
 
 pub(super) fn update_vec_model<T: Clone + 'static>(model: &ModelRc<T>, rows: Vec<T>) {
@@ -311,7 +335,13 @@ pub(super) fn sync_transport(
     )));
     timeline.set_playhead(workspace.playhead());
     timeline.set_duration(workspace.timeline_view_duration());
+    // The ruler is padded to the window's width; the transport shows the real
+    // project length.
+    timeline.set_playback_duration(duration);
     timeline.set_selected_layer(workspace.selected_layer());
+    // The merged preview pane draws its own transport button state.
+    timeline.set_playing(workspace.is_playing());
+    main.set_playhead_frame(workspace.playhead());
     if let Some(scene) = workspace.scene_settings(workspace.selected_scene()) {
         timeline.set_grid_mode(SharedString::from(scene.grid_mode));
         timeline.set_grid_fps(finite_f32(scene.fps, 60.0));
@@ -319,7 +349,39 @@ pub(super) fn sync_transport(
         timeline.set_grid_offset(finite_f32(scene.grid_offset, 0.0));
         timeline.set_grid_interval(scene.grid_interval.max(1));
         timeline.set_grid_subdivision(scene.grid_subdivision.max(1));
+        // The footer repeats what the scene list and the time gauge refer to:
+        // name, pixel size and frame rate (AviUtl2's style.conf [Format]).
+        let frame_rate = scene_frame_rate(scene.fps);
+        timeline.set_scene_name(SharedString::from(scene.name));
+        timeline.set_scene_resolution(SharedString::from(scene_resolution_text(
+            scene.width,
+            scene.height,
+        )));
+        timeline.set_scene_frame_rate(frame_rate);
+        main.set_frame_rate(frame_rate);
+    } else {
+        timeline.set_scene_name(SharedString::default());
+        timeline.set_scene_resolution(SharedString::default());
+        timeline.set_scene_frame_rate(60);
+        main.set_frame_rate(60);
     }
+}
+
+/// Nominal frame rate for the timecode readings.
+///
+/// The timecode counts whole frames per second, so a fractional rate is
+/// rounded the way a video editor labels its own ruler. Zero, negative and
+/// non-finite rates fall back to 60 instead of dividing by zero.
+pub(super) fn scene_frame_rate(fps: f64) -> i32 {
+    if !fps.is_finite() || fps <= 0.0 {
+        return 60;
+    }
+    fps.round().clamp(1.0, 1000.0) as i32
+}
+
+/// `1920x1080` for the footer's resolution reading.
+pub(super) fn scene_resolution_text(width: i32, height: i32) -> String {
+    format!("{width}x{height}")
 }
 
 /// Format the playback speed the way Qt's SpinBox does.

@@ -3,7 +3,8 @@
 use crate::dialogs::{
     choose_exo_object_to_import, choose_fragment_save_path, choose_fragment_to_import,
     choose_project_save_path, choose_project_to_open, insert_visible_window_geometry,
-    install_opaque_window, json_i32, show_and_redraw, show_error_dialog, show_info_dialog,
+    install_opaque_window, json_i32, show_and_redraw, show_centered_and_redraw, show_error_dialog,
+    show_info_dialog,
 };
 use crate::easing::refresh_easing_translations;
 use crate::localization::{current_ui_language, localized, select_bundled_ui_translation};
@@ -17,8 +18,8 @@ use crate::settings::{project_defaults, sync_timeline_runtime_settings, system_t
 use crate::{
     AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, MainWindow, ObjectSettingsWindow,
     PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow, ProjectRecoveryWindow,
-    ProjectSettingsWindow, RecentProjectData, RecoveryEntryData, SceneSettingsWindow,
-    SystemSettingsWindow, TimelineWindow,
+    ProjectSettingsWindow, RecentProjectData, RecoveryEntryData, SaveConfirmationWindow,
+    SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::effect_catalog::EffectCatalog;
@@ -26,7 +27,7 @@ use freya_nle_app::fragment::FRAGMENT_EXTENSION;
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::{ApplicationModel, LifecycleStep, WorkspaceModel};
 use slint::winit_030::WinitWindowAccessor;
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, LogicalSize, SharedString};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -45,6 +46,7 @@ pub(super) struct LifecycleUi {
     pub(super) recovery: slint::Weak<ProjectRecoveryWindow>,
     pub(super) main: slint::Weak<MainWindow>,
     pub(super) timeline: slint::Weak<TimelineWindow>,
+    pub(super) save_confirmation: slint::Weak<SaveConfirmationWindow>,
     pub(super) object_settings: slint::Weak<ObjectSettingsWindow>,
     pub(super) easing: slint::Weak<EasingConfigWindow>,
     pub(super) project_settings: slint::Weak<ProjectSettingsWindow>,
@@ -62,11 +64,54 @@ pub(super) struct LifecycleUi {
     pub(super) quit_confirmed: Cell<bool>,
 }
 
+/// Shows the preview window unless the merged layout is active.
+///
+/// In the merged shape the preview lives inside the timeline, so the window
+/// must stay hidden when a project opens instead of appearing next to it.
+pub(super) fn show_preview_window(main: &MainWindow) {
+    if main.get_merged_workspace() {
+        let _ = main.hide();
+    } else {
+        let _ = show_and_redraw(main);
+    }
+}
+
+/// Grows the timeline window when the merged layout needs more height than a
+/// saved geometry provides, so the preview's transport bar is not clipped.
+pub(super) fn ensure_timeline_height_for_preview(timeline: &TimelineWindow) {
+    if !timeline.get_preview_visible() {
+        return;
+    }
+    let window = timeline.window();
+    let logical = window.size().to_logical(window.scale_factor());
+    if logical.height < 640.0 {
+        window.set_size(LogicalSize::new(logical.width, 720.0));
+    }
+}
+
+/// Reconciles which window presents the workspace after the merged layout flips.
+///
+/// The merged shape keeps the preview window hidden, because the picture, the
+/// transport and the project strip all live in the timeline; the separate shape
+/// brings it back. Every path that flips `preview-visible` ends here, so the two
+/// windows cannot disagree about the mode they are in.
+pub(super) fn sync_workspace_presentation(main: &MainWindow, timeline: &TimelineWindow) {
+    let merged = timeline.get_preview_visible();
+    main.set_merged_workspace(merged);
+    if merged {
+        ensure_timeline_height_for_preview(timeline);
+        let _ = main.hide();
+    } else {
+        let _ = show_and_redraw(main);
+    }
+}
+
 pub(super) struct WindowRefs<'a> {
     pub(super) launcher: &'a ProjectLauncherWindow,
     pub(super) recovery: &'a ProjectRecoveryWindow,
     pub(super) main: &'a MainWindow,
     pub(super) timeline: &'a TimelineWindow,
+    pub(super) save_confirmation: &'a SaveConfirmationWindow,
     pub(super) object_settings: &'a ObjectSettingsWindow,
     pub(super) easing: &'a EasingConfigWindow,
     pub(super) project_settings: &'a ProjectSettingsWindow,
@@ -190,6 +235,20 @@ impl LifecycleUi {
             }
             return;
         }
+        // AviUtl2's layout is one window with the preview above the layer area.
+        // These two actions switch between that shape and separate windows
+        // without changing the saved geometry of either form.
+        if action == "merged" || action == "separate" {
+            let merged = action == "merged";
+            timeline.set_preview_visible(merged);
+            sync_workspace_presentation(&main, &timeline);
+            let mut settings = self.settings.borrow().snapshot();
+            settings.insert("timelinePreviewVisible".into(), serde_json::json!(merged));
+            if let Err(message) = self.settings.borrow_mut().apply(settings) {
+                crate::dialogs::show_error_dialog(&message);
+            }
+            return;
+        }
         let defaults = editor_layout(screen, "editing");
         if action == "recover-screen" {
             for ((_, window), fallback) in windows.iter().zip(defaults) {
@@ -253,11 +312,19 @@ impl LifecycleUi {
             if !matches!(step, LifecycleStep::ConfirmSave { .. }) {
                 if let Some(main) = self.main.upgrade() {
                     main.set_save_confirmation_visible(false);
+                    // A confirmation raised before switching to the merged
+                    // layout must not leave the preview window behind.
+                    if main.get_merged_workspace() {
+                        let _ = main.hide();
+                    }
                 }
                 // The timeline window carries its own menu bar; the items that act
                 // on the project have to grey out with the preview window's.
                 if let Some(timeline) = self.timeline.upgrade() {
                     timeline.set_save_confirmation_visible(false);
+                }
+                if let Some(dialog) = self.save_confirmation.upgrade() {
+                    let _ = dialog.hide();
                 }
             }
 
@@ -265,10 +332,26 @@ impl LifecycleUi {
                 LifecycleStep::None | LifecycleStep::Cancelled => return,
                 LifecycleStep::ConfirmSave { project_name, .. } => {
                     self.sync();
+                    let mut merged = false;
                     if let Some(main) = self.main.upgrade() {
-                        main.set_save_confirmation_project(project_name.into());
+                        merged = main.get_merged_workspace();
                         main.set_save_confirmation_visible(true);
-                        let _ = show_and_redraw(&main);
+                        show_preview_window(&main);
+                    }
+                    if let Some(dialog) = self.save_confirmation.upgrade() {
+                        dialog.set_project_name(project_name.into());
+                        // The merged layout hides the preview window, so the
+                        // timeline is the window the dialog belongs over there;
+                        // everywhere else it stays over the preview window.
+                        let _ = match (merged, self.timeline.upgrade()) {
+                            (true, Some(timeline)) if timeline.window().is_visible() => {
+                                show_centered_and_redraw(&dialog, &timeline)
+                            }
+                            _ => match self.main.upgrade() {
+                                Some(main) => show_centered_and_redraw(&dialog, &main),
+                                None => show_and_redraw(&dialog),
+                            },
+                        };
                     }
                     if let Some(timeline) = self.timeline.upgrade() {
                         timeline.set_save_confirmation_visible(true);
@@ -372,7 +455,7 @@ impl LifecycleUi {
             Err(status) => show_error_dialog(&status),
         }
         if let Some(main) = self.main.upgrade() {
-            let _ = show_and_redraw(&main);
+            show_preview_window(&main);
         }
         if let Some(timeline) = self.timeline.upgrade() {
             let _ = show_and_redraw(&timeline);
@@ -557,7 +640,7 @@ impl LifecycleUi {
                 self.hydrate_audio_plugins();
                 self.sync();
                 if let Some(main) = self.main.upgrade() {
-                    let _ = show_and_redraw(&main);
+                    show_preview_window(&main);
                 }
                 if let Some(timeline) = self.timeline.upgrade() {
                     // Media ids belong to a project. Keeping the selection across a load would let
@@ -637,7 +720,21 @@ impl LifecycleUi {
             self.timeline.upgrade(),
             self.object_settings.upgrade(),
         ) {
+            let merged_before = timeline.get_preview_visible();
             sync_timeline_runtime_settings(&main, &timeline, &object_settings, &settings);
+            // Preferences can flip the merged layout too, and that has to move
+            // the preview window like the View-menu toggle does. Only a real
+            // change reconciles, so an unrelated Apply does not reopen a preview
+            // window the user closed.
+            if timeline.get_preview_visible() != merged_before {
+                // The launcher screen has no workspace to present, so only the
+                // flag that decides what a later project open shows is updated.
+                if self.model.borrow().launcher_visible() {
+                    main.set_merged_workspace(timeline.get_preview_visible());
+                } else {
+                    sync_workspace_presentation(&main, &timeline);
+                }
+            }
         }
         let theme_index = system_theme_index(&settings);
         // Native window chrome follows the same choice as the Slint palette, so
@@ -651,6 +748,12 @@ impl LifecycleUi {
             crate::dialogs::apply_native_window_appearance(window.window(), dark);
         }
         if let Some(window) = self.recovery.upgrade() {
+            window
+                .global::<AppTheme>()
+                .set_preference_index(theme_index);
+            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        }
+        if let Some(window) = self.save_confirmation.upgrade() {
             window
                 .global::<AppTheme>()
                 .set_preference_index(theme_index);
@@ -815,6 +918,9 @@ impl LifecycleUi {
             let _ = window.hide();
         }
         if let Some(window) = self.recovery.upgrade() {
+            let _ = window.hide();
+        }
+        if let Some(window) = self.save_confirmation.upgrade() {
             let _ = window.hide();
         }
         if let Some(window) = self.main.upgrade() {

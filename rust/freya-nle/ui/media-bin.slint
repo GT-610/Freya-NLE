@@ -39,7 +39,8 @@ export component MediaBinPanel inherits Rectangle {
     VerticalLayout {
         padding: 8px;
         spacing: 6px;
-        Text { text: @tr("Media Library"); font-weight: 700; }
+        // The dock renders the "Media Library" title in a shared panel header,
+        // so the panel body starts with its controls.
         HorizontalLayout {
             height: 28px;
             spacing: 4px;

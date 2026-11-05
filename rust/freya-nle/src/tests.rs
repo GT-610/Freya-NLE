@@ -173,7 +173,10 @@ use crate::object_settings::{
 use crate::playback::{
     audio_queue_lead_frames, samples_for_timeline_frame, scene_fps, stereo_levels,
 };
-use crate::projection::{frame_counter_text, speed_multiplier_text};
+use crate::projection::{
+    frame_counter_text, scene_frame_rate, scene_resolution_text, speed_multiplier_text,
+    timeline_clip_style,
+};
 use crate::settings::{
     SYSTEM_AUDIO_BLOCK_SIZES, SYSTEM_EXPORT_AUDIO_CODECS, SYSTEM_EXPORT_VIDEO_CODECS,
     SYSTEM_PLUGIN_FORMATS, SYSTEM_PREVIEW_RENDER_SCALES, SYSTEM_SHORTCUT_ROWS, SYSTEM_THEME_VALUES,
@@ -1300,6 +1303,54 @@ fn frame_counter_zero_pads_like_qt() {
     assert_eq!(frame_counter_text(5, 0), "5 / 0");
     // A playhead past the duration never renders a negative number.
     assert_eq!(frame_counter_text(-3, 100), "000 / 100");
+}
+
+#[test]
+fn scene_frame_rate_rounds_for_the_timecode() {
+    // The ruler and footer count whole frames per second, so a fractional
+    // project rate is rounded like a broadcast timecode.
+    assert_eq!(scene_frame_rate(30.0), 30);
+    assert_eq!(scene_frame_rate(29.97), 30);
+    assert_eq!(scene_frame_rate(23.976), 24);
+    assert_eq!(scene_frame_rate(59.94), 60);
+    // A malformed rate must not divide by zero or print a negative rate.
+    assert_eq!(scene_frame_rate(0.0), 60);
+    assert_eq!(scene_frame_rate(-5.0), 60);
+    assert_eq!(scene_frame_rate(f64::NAN), 60);
+    assert_eq!(scene_frame_rate(0.4), 1);
+    assert_eq!(scene_frame_rate(50_000.0), 1000);
+}
+
+#[test]
+fn clip_colours_follow_the_aviutl2_object_groups() {
+    // AviUtl2 colours audio and control objects; media objects stay on the
+    // theme's video blue, which is why they have no explicit colour.
+    let (audio, audio_dark_text) = timeline_clip_style("audio").expect("audio colour");
+    assert_eq!(audio, slint::Color::from_rgb_u8(0xd0, 0x40, 0x30));
+    assert!(!audio_dark_text, "audio clips keep white text");
+    for control in ["camera", "camera_control", "scene"] {
+        let (colour, dark_text) = timeline_clip_style(control).expect("control colour");
+        assert_eq!(
+            colour,
+            slint::Color::from_rgb_u8(0x30, 0xb0, 0xc0),
+            "{control}"
+        );
+        // Cyan is light enough that white text fails contrast.
+        assert!(dark_text, "{control} should use dark text");
+    }
+    let (shape, shape_dark_text) = timeline_clip_style("star").expect("shape colour");
+    assert_eq!(shape, slint::Color::from_rgb_u8(0x3b, 0x82, 0xf6));
+    assert!(!shape_dark_text, "the shape blue keeps white text");
+    assert!(timeline_clip_style("video").is_none());
+    assert!(timeline_clip_style("text").is_none());
+    assert!(timeline_clip_style("image").is_none());
+}
+
+#[test]
+fn scene_resolution_text_matches_the_footer_format() {
+    assert_eq!(scene_resolution_text(1920, 1080), "1920x1080");
+    assert_eq!(scene_resolution_text(3840, 2160), "3840x2160");
+    assert_eq!(scene_resolution_text(1, 1), "1x1");
 }
 
 #[test]

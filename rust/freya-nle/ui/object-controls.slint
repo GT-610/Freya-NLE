@@ -526,12 +526,13 @@ export component ObjectSettingRow inherits Rectangle {
     }
     visible: !root.row-data.folded || root.row-data.row-kind == "effect";
     height: root.row-data.folded && root.row-data.row-kind != "effect" ? 0px
-        : root.row-data.row-kind == "number" || root.row-data.row-kind == "integer" ? 34px
-        : root.row-data.row-kind == "effect" ? 34px
-        : root.row-data.row-kind == "header" ? 28px
-        : root.row-data.row-kind == "text" ? 68px
+        : root.row-data.row-kind == "number" || root.row-data.row-kind == "integer"
+            ? AppTheme.setting-row-height
+        : root.row-data.row-kind == "effect" ? AppTheme.setting-row-height + 4px
+        : root.row-data.row-kind == "header" ? 24px
+        : root.row-data.row-kind == "text" ? AppTheme.setting-row-height + 32px
         : root.row-data.row-kind == "keyframes" ? (root.row-data.keyframed && !root.row-data.mixed ? 24px : 0px)
-        : 34px;
+        : AppTheme.setting-row-height;
     background: root.row-data.row-kind == "effect"
         ? (root.row-data.selected ? AppTheme.selection-background : AppTheme.raised-background)
         : transparent;
@@ -603,11 +604,34 @@ export component ObjectSettingRow inherits Rectangle {
     if root.row-data.row-kind == "boolean" : HorizontalLayout {
         padding-left: 6px;
         padding-right: 6px;
+        spacing: 7px;
+        // The label sits in the same column as every other setting, so a
+        // column of booleans lines up with the choices and text fields. It is
+        // part of the toggle target, as the whole row used to be.
+        Rectangle {
+            width: AppTheme.setting-label-width;
+            height: 100%;
+            background: transparent;
+            Text {
+                text: root.row-data.label;
+                width: 100%;
+                overflow: elide;
+                vertical-alignment: center;
+                color: root.row-data.interactive ? AppTheme.foreground : AppTheme.muted-foreground;
+            }
+            label-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                enabled: root.row-data.interactive;
+                mouse-cursor: pointer;
+                clicked => { root.toggle-bool(); }
+            }
+        }
         // A mixed boolean is a third state, not "unchecked": clicking it must
         // write one value to every object instead of leaving them disagreeing.
         tri-boolean := Rectangle {
-            height: 26px;
             horizontal-stretch: 1;
+            height: 20px;
             accessible-role: checkbox;
             accessible-label: root.row-data.label;
             accessible-description: root.row-data.mixed ? @tr("Mixed values") : "";
@@ -619,15 +643,9 @@ export component ObjectSettingRow inherits Rectangle {
             accessible-action-default => {
                 if root.row-data.interactive { root.toggle-bool(); }
             };
-            Text {
-                x: 24px;
-                text: root.row-data.label + (root.row-data.mixed ? "  (" + @tr("Mixed values") + ")" : "");
-                vertical-alignment: center;
-                color: root.row-data.interactive ? AppTheme.foreground : AppTheme.muted-foreground;
-            }
             Rectangle {
-                x: 4px;
-                y: 4px;
+                x: 2px;
+                y: 2px;
                 width: 16px;
                 height: 16px;
                 border-radius: 3px;
@@ -669,6 +687,12 @@ export component ObjectSettingRow inherits Rectangle {
                 }
             }
         }
+        Text {
+            text: @tr("Mixed values");
+            visible: root.row-data.mixed;
+            color: AppTheme.warning;
+            vertical-alignment: center;
+        }
         Rectangle { horizontal-stretch: 1; }
         if root.row-data.keyframed : Text { text: "KF"; color: AppTheme.warning; vertical-alignment: center; }
     }
@@ -683,7 +707,7 @@ export component ObjectSettingRow inherits Rectangle {
 
         if root.row-data.audio-plugin : Text {
             text: root.row-data.label;
-            width: 100px;
+            width: AppTheme.setting-label-width;
             color: AppTheme.foreground;
             overflow: elide;
             vertical-alignment: center;
@@ -895,7 +919,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: 100px; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
         ComboBox {
             width: 220px;
             height: 26px;
@@ -923,7 +947,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: 100px; overflow: elide; vertical-alignment: top; }
+        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: top; }
         CommitTextEdit {
             height: 62px;
             live-preview: true;
@@ -956,7 +980,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: 100px; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
         CommitLineEdit {
             height: 26px;
             horizontal-stretch: 1;
@@ -995,7 +1019,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: 100px; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
         Button {
             horizontal-stretch: 1;
             height: 26px;
@@ -1025,7 +1049,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: 100px; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
         Rectangle {
             width: 52px;
             height: 26px;
@@ -1166,7 +1190,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: 100px; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
         Text { text: root.row-data.text-value; color: AppTheme.muted-foreground; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
     }
 }

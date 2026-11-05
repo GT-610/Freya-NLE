@@ -154,40 +154,64 @@ export component ObjectSettingsWindow inherits Window {
     }
 
     if root.has-selection : Rectangle {
-        HorizontalLayout {
-            height: 38px;
-            padding: 4px;
-            Button {
-                text: @tr("Effect list");
-                checkable: true;
-                checked: root.sidebar-visible;
-                clicked => { root.sidebar-visible = !root.sidebar-visible; }
-            }
-            Text {
-                text: root.multi-selection
-                    ? @tr("{} selected objects", root.selected-object-count)
-                    : root.clip-title;
-                overflow: elide;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            if root.multi-selection: Text {
-                text: @tr("Properties apply to the selection");
-                color: AppTheme.muted-foreground;
-                vertical-alignment: center;
+        // AviUtl2 gives the settings area a 48px header that names the object
+        // and carries its actions; the sidebar toggle sits in that header
+        // instead of on a separate tool strip.
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            height: AppTheme.setting-header-height;
+            background: AppTheme.title-header-background;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                Button {
+                    // Natural width: the label length changes with the UI
+                    // language, and a fixed 96px clipped the Japanese one.
+                    height: 28px;
+                    text: @tr("Effect list");
+                    checkable: true;
+                    checked: root.sidebar-visible;
+                    clicked => { root.sidebar-visible = !root.sidebar-visible; }
+                }
+                VerticalLayout {
+                    padding-top: 7px;
+                    spacing: 0px;
+                    Text {
+                        text: root.clip-title;
+                        font-weight: 700;
+                        color: AppTheme.title-header-foreground;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.multi-selection
+                            ? @tr("{} selected objects", root.selected-object-count)
+                            : root.audio-plugin-mode ? @tr("Audio object / plugin") : @tr("Object settings");
+                        color: AppTheme.muted-foreground;
+                        font-size: 0.72rem;
+                        overflow: elide;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.multi-selection: Text {
+                    text: @tr("Properties apply to the selection");
+                    color: AppTheme.muted-foreground;
+                    vertical-alignment: center;
+                }
             }
         }
         sidebar := Rectangle {
             visible: root.sidebar-visible;
             x: root.sidebar-on-right ? parent.width - root.sidebar-space : 0px;
-            y: 38px;
+            y: AppTheme.setting-header-height;
             width: root.sidebar-space;
-            height: parent.height - 38px;
+            height: parent.height - AppTheme.setting-header-height;
             background: AppTheme.panel-background;
             VerticalLayout {
                 padding: 8px;
                 spacing: 6px;
-                Text { text: root.clip-title; font-weight: 700; color: AppTheme.foreground; overflow: elide; }
                 Text {
                     text: root.audio-plugin-mode ? @tr("Audio Plugins") : @tr("Object / Effect");
                     color: AppTheme.muted-foreground;
@@ -251,9 +275,9 @@ export component ObjectSettingsWindow inherits Window {
         if root.sidebar-visible : TouchArea {
             z: 5;
             x: (root.sidebar-on-right ? parent.width - root.sidebar-space : root.sidebar-space) - 3px;
-            y: 38px;
+            y: AppTheme.setting-header-height;
             width: 6px;
-            height: parent.height - 38px;
+            height: parent.height - AppTheme.setting-header-height;
             mouse-cursor: ew-resize;
             private property <length> initial-width;
             private property <length> initial-x;
@@ -274,19 +298,12 @@ export component ObjectSettingsWindow inherits Window {
         }
         settings-content := ScrollView {
             x: root.sidebar-on-right ? 0px : root.sidebar-space;
-            y: 38px;
+            y: AppTheme.setting-header-height;
             width: parent.width - root.sidebar-space;
-            height: parent.height - 38px;
+            height: parent.height - AppTheme.setting-header-height;
             VerticalLayout {
                 padding: 8px;
                 spacing: 2px;
-                Text {
-                    text: root.audio-plugin-mode
-                        ? @tr("Audio Object / Plugin Settings")
-                        : @tr("Selected Object Settings");
-                    font-size: 1.15rem;
-                    font-weight: 700;
-                }
                 if root.audio-plugin-mode : GroupBox {
                     title: @tr("Audio Level");
                     height: 64px;

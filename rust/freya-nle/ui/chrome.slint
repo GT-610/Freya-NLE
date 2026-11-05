@@ -1,0 +1,132 @@
+import { AppTheme } from "theme.slint";
+
+// Frame-accurate timecode shared by the ruler, the footer and the transport.
+// AviUtl2 labels its ruler with absolute time beside the frame number; the
+// editor keeps frames first and derives the same reading here.
+export global TimeFormat {
+    pure function pad-two(value: int) -> string {
+        return value < 10 ? "0\{value}" : "\{value}";
+    }
+
+    // HH:MM:SS.FF, with FF counted inside the current second.
+    public pure function timecode(frame: int, rate: int) -> string {
+        let safe-rate = max(1, rate);
+        let safe-frame = max(0, frame);
+        let total-seconds = safe-frame / safe-rate;
+        return pad-two(total-seconds / 3600)
+            + ":" + pad-two(mod(total-seconds / 60, 60))
+            + ":" + pad-two(mod(total-seconds, 60))
+            + "." + pad-two(mod(safe-frame, safe-rate));
+    }
+}
+
+// Fixed panel title header: a compact title strip with optional right-side
+// glyph actions, sized after AviUtl2's 20px title header. Panels keep their
+// own body; this only owns the strip so every dock reads the same way.
+export struct PanelAction {
+    glyph: string,
+    label: string,
+    enabled: bool,
+}
+
+export component PanelHeader inherits Rectangle {
+    in property <string> title;
+    in property <[PanelAction]> actions;
+    callback action(int);
+
+    height: AppTheme.panel-header-height;
+    background: AppTheme.title-header-background;
+    border-width: 1px;
+    border-color: AppTheme.subtle-border;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 3px;
+        spacing: 5px;
+        Text {
+            text: root.title;
+            color: AppTheme.title-header-foreground;
+            font-size: 0.78rem;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        for action[index] in root.actions : Rectangle {
+            width: 20px;
+            height: 18px;
+            border-radius: 3px;
+            background: action-touch.has-hover && action.enabled
+                ? AppTheme.hover-background
+                : transparent;
+            Text {
+                text: action.glyph;
+                color: action.enabled ? AppTheme.title-header-foreground : AppTheme.muted-foreground;
+                font-size: 0.9rem;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            action-touch := TouchArea {
+                enabled: action.enabled;
+                mouse-cursor: action.enabled ? pointer : default;
+                accessible-role: button;
+                accessible-label: action.label;
+                accessible-enabled: action.enabled;
+                accessible-action-default => {
+                    if (action.enabled) {
+                        root.action(index);
+                    }
+                }
+                clicked => {
+                    if (action.enabled) {
+                        root.action(index);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Window footer: a coloured status band with a left reading and a right
+// reading. AviUtl2 keeps time/frame on the left and scene/resolution/rate on
+// the right (style.conf [Format]), which is the layout used here.
+export component FooterBar inherits Rectangle {
+    in property <string> left-text: "";
+    in property <string> right-text: "";
+    // The left reading changes every frame; monospace keeps it from jittering.
+    in property <bool> monospace-left: true;
+    // Long-running work fills the footer instead of pushing a bar into the
+    // content (AviUtl2's style.conf `FooterProgress`). Negative hides it.
+    in property <float> progress: -1;
+
+    height: AppTheme.footer-height;
+    background: AppTheme.footer-background;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: AppTheme.spacing-md;
+        Text {
+            text: root.left-text;
+            color: AppTheme.footer-foreground;
+            font-size: 0.78rem;
+            font-family: root.monospace-left ? "Monospace" : "";
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.right-text;
+            color: AppTheme.footer-foreground;
+            font-size: 0.76rem;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    if root.progress >= 0 : Rectangle {
+        y: parent.height - 3px;
+        height: 3px;
+        width: parent.width * clamp(root.progress, 0, 1);
+        background: AppTheme.footer-progress;
+    }
+}

@@ -24,8 +24,8 @@ use crate::playback::AudioPlaybackRuntime;
 use crate::projection::{sync_transport_weak, sync_weak_windows, update_vec_model};
 use crate::settings::{
     apply_system_settings, parse_finite_f64, parse_i32_unbounded, parse_required_f64,
-    parse_required_i32, project_defaults, sync_project_settings, sync_scene_settings,
-    sync_system_settings, timeline_last_layer,
+    parse_required_i32, preview_pane_max_height, project_defaults, save_timeline_preview_settings,
+    sync_project_settings, sync_scene_settings, sync_system_settings, timeline_last_layer,
 };
 use crate::shortcuts::sync_timeline_zoom_settings;
 use crate::{MainWindow, TimelineMediaDropResult, TimelineWindow};
@@ -369,6 +369,7 @@ pub(super) fn install_callbacks(
         recovery,
         main,
         timeline,
+        save_confirmation,
         object_settings,
         easing,
         project_settings,
@@ -1057,7 +1058,7 @@ pub(super) fn install_callbacks(
         create_model.borrow_mut().create_project(defaults);
         sync_weak_windows(&create_main, &create_timeline, &create_model);
         if let Some(main) = create_main.upgrade() {
-            let _ = show_and_redraw(&main);
+            crate::lifecycle::show_preview_window(&main);
         }
         if let Some(timeline) = create_timeline.upgrade() {
             let _ = show_and_redraw(&timeline);
@@ -1151,8 +1152,45 @@ pub(super) fn install_callbacks(
         }
     });
 
+    // The timeline is an auxiliary window in the separate layout, where hiding it
+    // just frees the screen and the preview window keeps the workspace. In the
+    // merged layout it holds the whole workspace, so closing it has to run the
+    // same quit flow as the preview window instead of leaving no window on screen.
+    let close_timeline_ui = lifecycle_ui.clone();
+    let close_timeline_settings = lifecycle_ui.settings.clone();
+    timeline.window().on_close_requested(move || {
+        if close_timeline_ui.quit_confirmed.get() {
+            return CloseRequestResponse::HideWindow;
+        }
+        let merged = close_timeline_ui
+            .timeline
+            .upgrade()
+            .is_some_and(|timeline| timeline.get_preview_visible());
+        if !merged {
+            if let Some(timeline) = close_timeline_ui.timeline.upgrade() {
+                persist_window_geometry(&close_timeline_settings, "timeline", timeline.window());
+            }
+            return CloseRequestResponse::HideWindow;
+        }
+        let confirm_unsaved = close_timeline_ui
+            .settings
+            .borrow()
+            .bool_value("showConfirmOnClose", true);
+        let step = close_timeline_ui
+            .model
+            .borrow_mut()
+            .request_quit(confirm_unsaved);
+        let quit_ready = matches!(step, LifecycleStep::QuitReady);
+        close_timeline_ui.handle(step);
+        if quit_ready {
+            CloseRequestResponse::HideWindow
+        } else {
+            CloseRequestResponse::KeepWindowShown
+        }
+    });
+
     let confirm_save_ui = lifecycle_ui.clone();
-    main.on_confirm_save(move || {
+    save_confirmation.on_confirm_save(move || {
         let step = confirm_save_ui
             .model
             .borrow_mut()
@@ -1160,7 +1198,7 @@ pub(super) fn install_callbacks(
         confirm_save_ui.handle(step);
     });
     let confirm_discard_ui = lifecycle_ui.clone();
-    main.on_confirm_discard(move || {
+    save_confirmation.on_confirm_discard(move || {
         let step = confirm_discard_ui
             .model
             .borrow_mut()
@@ -1168,12 +1206,22 @@ pub(super) fn install_callbacks(
         confirm_discard_ui.handle(step);
     });
     let confirm_cancel_ui = lifecycle_ui.clone();
-    main.on_confirm_cancel(move || {
+    save_confirmation.on_confirm_cancel(move || {
         let step = confirm_cancel_ui
             .model
             .borrow_mut()
             .answer_save_confirmation(SaveDecision::Cancel);
         confirm_cancel_ui.handle(step);
+    });
+
+    let confirm_close_ui = lifecycle_ui.clone();
+    save_confirmation.window().on_close_requested(move || {
+        let step = confirm_close_ui
+            .model
+            .borrow_mut()
+            .answer_save_confirmation(SaveDecision::Cancel);
+        confirm_close_ui.handle(step);
+        CloseRequestResponse::HideWindow
     });
 
     let select_model = model.clone();
@@ -1259,7 +1307,7 @@ pub(super) fn install_callbacks(
                     }
                     recover_ui.sync();
                     if let Some(window) = recover_ui.main.upgrade() {
-                        let _ = show_and_redraw(&window);
+                        crate::lifecycle::show_preview_window(&window);
                     }
                     if let Some(window) = recover_ui.timeline.upgrade() {
                         let _ = show_and_redraw(&window);
@@ -2764,6 +2812,116 @@ pub(super) fn install_callbacks(
             workspace.toggle_playback();
         }
         sync_transport_weak(&playback_main, &playback_timeline, &playback_model);
+    });
+
+    // The timeline's merged preview pane drives the same transport as the
+    // preview window. Forward the pane's callbacks to the commands that own
+    // them instead of duplicating seek/step/playback logic.
+    let pane_seek_target = main.as_weak();
+    timeline.on_seek(move |frame| {
+        if let Some(main) = pane_seek_target.upgrade() {
+            main.invoke_seek(frame);
+        }
+    });
+    let pane_previous_target = main.as_weak();
+    timeline.on_previous_frame(move || {
+        if let Some(main) = pane_previous_target.upgrade() {
+            main.invoke_previous_frame();
+        }
+    });
+    let pane_next_target = main.as_weak();
+    timeline.on_next_frame(move || {
+        if let Some(main) = pane_next_target.upgrade() {
+            main.invoke_next_frame();
+        }
+    });
+    let pane_playback_target = main.as_weak();
+    timeline.on_toggle_playback(move || {
+        if let Some(main) = pane_playback_target.upgrade() {
+            main.invoke_toggle_playback();
+        }
+    });
+
+    // The merged timeline carries the project strip too, so it forwards tab
+    // actions to the preview window that owns the project commands.
+    let adjust_preview_timeline = timeline.as_weak();
+    let adjust_preview_settings = settings.clone();
+    main.on_adjust_preview_height(move |delta| {
+        let Some(timeline) = adjust_preview_timeline.upgrade() else {
+            return;
+        };
+        // The pane cannot take the room the ruler and the layers need, so the
+        // ceiling follows the window like the divider drag does.
+        let ceiling = preview_pane_max_height(&timeline) as f32;
+        let next = (timeline.get_preview_pane_height() + delta).clamp(120.0, ceiling);
+        timeline.set_preview_pane_height(next);
+        if let Err(error) =
+            save_timeline_preview_settings(&adjust_preview_settings, None, Some(next))
+        {
+            eprintln!("Could not save the preview height: {error}");
+        }
+    });
+    let own_preview_target = main.as_weak();
+    main.on_show_preview_window(move || {
+        if let Some(main) = own_preview_target.upgrade()
+            && let Err(error) = main.show()
+        {
+            eprintln!("Could not show the preview window: {error}");
+        }
+    });
+    let preview_window_target = main.as_weak();
+    timeline.on_show_preview_window(move || {
+        if let Some(main) = preview_window_target.upgrade() {
+            // The merged layout lets the preview window be closed; this is the
+            // way back from the timeline's View menu.
+            if let Err(error) = main.show() {
+                eprintln!("Could not show the preview window: {error}");
+            }
+        }
+    });
+    let tab_select_target = main.as_weak();
+    timeline.on_select_project(move |index| {
+        if let Some(main) = tab_select_target.upgrade() {
+            main.invoke_select_project(index);
+        }
+    });
+    let tab_close_target = main.as_weak();
+    timeline.on_close_project(move |index| {
+        if let Some(main) = tab_close_target.upgrade() {
+            main.invoke_close_project(index);
+        }
+    });
+
+    let preview_height_settings = settings.clone();
+    timeline.on_preview_height_changed(move |height| {
+        if let Err(error) =
+            save_timeline_preview_settings(&preview_height_settings, None, Some(height))
+        {
+            eprintln!("Could not save the preview height: {error}");
+        }
+    });
+
+    let preview_toggle_timeline = timeline.as_weak();
+    let preview_toggle_main = main.as_weak();
+    let preview_toggle_settings = settings.clone();
+    timeline.on_toggle_preview(move || {
+        let Some(timeline) = preview_toggle_timeline.upgrade() else {
+            return;
+        };
+        let visible = !timeline.get_preview_visible();
+        timeline.set_preview_visible(visible);
+        // Flipping the pane is also a workspace switch, so the preview window
+        // follows the same path the merged/separate actions use.
+        if let Some(main) = preview_toggle_main.upgrade() {
+            crate::lifecycle::sync_workspace_presentation(&main, &timeline);
+        }
+        // The menu toggle is the quick path, so it writes the preference the
+        // settings dialog uses instead of keeping a session-only state.
+        if let Err(error) =
+            save_timeline_preview_settings(&preview_toggle_settings, Some(visible), None)
+        {
+            eprintln!("Could not save the timeline preview preference: {error}");
+        }
     });
 
     // The timeline window carries the same menu bar as the preview window, because

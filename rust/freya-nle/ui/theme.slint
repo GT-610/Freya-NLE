@@ -28,8 +28,6 @@ export global AppTheme {
     out property <brush> danger: dark ? #ff8a92 : #c42b35;
     out property <brush> success: dark ? #7fd49a : #218739;
     out property <brush> clip: dark ? #477fbd : #3d78b6;
-    out property <brush> clip-hover: dark ? #548dca : #4b86c3;
-    out property <brush> clip-selected: Palette.accent-background;
 
     out property <length> spacing-xs: max(4px, StyleMetrics.layout-spacing / 2);
     out property <length> spacing-sm: StyleMetrics.layout-spacing;
@@ -39,8 +37,44 @@ export global AppTheme {
     out property <length> control-radius: 6px;
     out property <length> surface-radius: 10px;
     out property <length> compact-control-height: 30px;
-    out property <length> toolbar-height: 38px;
-    out property <length> status-height: 24px;
+
+    // --- Editor chrome -------------------------------------------------
+    // Panel structure follows AviUtl2's style.conf [Layout] table so every
+    // surface derives its metrics from one place instead of ad-hoc pixels
+    // (audits/2026-11-05-aviutl2-ui-analysis.zh-CN.md, section 4).
+    out property <length> panel-header-height: 22px;
+    out property <length> footer-height: 24px;
+    // AviUtl2 draws 20px controls and fits a row in 22px. Stock Slint controls
+    // need 26px to stay usable and accessible, so the row is 30px; the 22px
+    // density stays available as a later compact mode.
+    out property <length> setting-row-height: 30px;
+    out property <length> setting-header-height: 48px;
+    out property <length> setting-label-width: 96px;
+    out property <length> layer-height: 32px;
+    out property <length> player-control-height: 40px;
+
+    out property <brush> title-header-background: dark ? #404040 : #e9e9ee;
+    out property <brush> title-header-foreground: dark ? #f2f2f2 : #1b1c20;
+    out property <brush> separator: dark ? #0b0b0d : #c4c6cd;
+    out property <brush> ruler-background: dark ? #26262a : #f0f1f5;
+    out property <brush> grid-line: dark ? #ffffff16 : #00000012;
+    out property <brush> timecode: dark ? #e8e8ec : #23252b;
+    out property <brush> playhead: dark ? #c83030 : #b82828;
+    out property <brush> footer-background: dark ? #304080 : #dce3f2;
+    out property <brush> footer-foreground: dark ? #e8ebf7 : #1d2433;
+    out property <brush> footer-progress: dark ? #b84848 : #9c3a3a;
+
+    // Dialog surfaces use explicit values rather than the platform palette:
+    // a freshly created window can render before the palette has a colour
+    // scheme, and a white dialog in a dark editor is the worst case.
+    out property <brush> dialog-background: dark ? #2b2b2d : #f7f7f9;
+    out property <brush> dialog-foreground: dark ? #f2f2f2 : #1b1c20;
+    out property <brush> dialog-muted: dark ? #b9b9c0 : #5b5f6b;
+
+    out property <brush> layer-header-background: dark ? #4a4a4a : #e7e8ee;
+    out property <brush> layer-hover: dark ? #585858 : #dfe1e8;
+    out property <brush> layer-selected: dark ? #3c4054 : #d9e1f5;
+    out property <brush> layer-disabled: dark ? #343434 : #edeff3;
 
     changed preference-index => {
         Palette.color-scheme = preference-index == 0
