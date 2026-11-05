@@ -1119,6 +1119,7 @@ mod tests {
                 plan: TextRenderPlan {
                     content: content.to_owned(),
                     runs: Vec::new(),
+                    runs_authoritative: false,
                     font_family: "sans-serif".to_owned(),
                     font_size: 48.0,
                     bold: false,

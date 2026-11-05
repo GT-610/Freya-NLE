@@ -250,7 +250,7 @@ fn rasterize_with_face(
     // Text with control characters carries more than one styled run. The
     // single-style path below stays in charge of plain text so its layout,
     // justification and metrics do not change for existing projects.
-    if plan.runs.len() > 1 {
+    if plan.runs_authoritative || plan.runs.len() > 1 {
         return rasterize_runs(plan, timestamp_seconds, &face);
     }
     let units_per_em = face.units_per_em().max(1) as f32;
@@ -487,6 +487,16 @@ fn rasterize_runs(
     face: &Face<'_>,
 ) -> Result<VideoFrame, TextRasterError> {
     let units_per_em = face.units_per_em().max(1) as f32;
+    if plan.runs.is_empty() {
+        // A timing directive cleared every character: draw an empty frame
+        // instead of a background or outline with nothing inside it.
+        return Ok(VideoFrame {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 0],
+            timestamp_seconds,
+        });
+    }
     let segments = plan
         .runs
         .iter()
@@ -964,6 +974,7 @@ mod tests {
         TextRenderPlan {
             content: "\u{ea01}\n\u{ea02}".to_owned(),
             runs: Vec::new(),
+            runs_authoritative: false,
             font_family: "remixicon".to_owned(),
             font_size: 64.0,
             bold: false,

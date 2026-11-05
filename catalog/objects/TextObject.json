@@ -10,6 +10,7 @@
         "fontItalic": false,
         "letterSpacing": 0,
         "lineSpacing": 0,
+        "speed": 0,
         "alignment": 4,
         "color": "#ffffff",
         "outlineEnabled": false,
@@ -68,6 +69,13 @@
                 "label": "行間隔",
                 "min": -50,
                 "max": 100
+            },
+            {
+                "type": "float",
+                "param": "speed",
+                "label": "表示速度",
+                "min": 0,
+                "max": 1000
             },
             {
                 "type": "int",

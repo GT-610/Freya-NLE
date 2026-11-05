@@ -256,10 +256,11 @@ pub enum TextAlignment {
 pub struct TextRenderPlan {
     /// The raw content, control characters included. Layout uses `runs`.
     pub content: String,
-    /// Styled runs after control characters; empty when the producer did not
-    /// parse the text (the renderer then falls back to `content` and the base
-    /// style below).
+    /// Styled runs after control characters. When `runs_authoritative` is set
+    /// the renderer draws only these runs, even when the list is empty because
+    /// a `<c>` directive cleared the text; otherwise it falls back to `content`.
     pub runs: Vec<TextRun>,
+    pub runs_authoritative: bool,
     pub font_family: String,
     pub font_size: f32,
     pub bold: bool,
@@ -1438,6 +1439,7 @@ fn text_render_plan(
         let color = value_as_color(value("color"), "#ffffff");
         let outline_color = value_as_color(value("outlineColor"), "#000000");
         return Some(TextRenderPlan {
+            runs_authoritative: true,
             runs: vec![TextRun {
                 text: content.clone(),
                 color,
@@ -1484,7 +1486,9 @@ fn text_render_plan(
     let letter_spacing = value_as_f64(value("letterSpacing"), 0.0) as f32;
     let color = value_as_color(value("color"), "#ffffff");
     let outline_color = value_as_color(value("outlineColor"), "#000000");
-    let runs = crate::text_control::parse_text_runs(
+    let speed = value_as_f64(value("speed"), 0.0).clamp(0.0, 1_000.0) as f32;
+    let time = relative_frame as f32 / fps.max(0.001) as f32;
+    let runs = crate::text_control::parse_text_runs_at(
         &content,
         TextBaseStyle {
             color,
@@ -1492,8 +1496,11 @@ fn text_render_plan(
             font_size,
             letter_spacing,
         },
+        speed,
+        time,
     );
     Some(TextRenderPlan {
+        runs_authoritative: true,
         runs,
         content,
         font_family,
@@ -2277,6 +2284,77 @@ mod tests {
                 .iter()
                 .all(|run| !run.text.contains('<') && !run.text.contains('>'))
         );
+    }
+
+    #[test]
+    fn text_speed_and_clear_directives_follow_the_frame() {
+        let input = json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 10, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Scene", "duration": 120}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 60,
+                "layer": 0,
+                "params": {},
+                "audioPlugins": [],
+                "effects": [{
+                    "id": "text",
+                    "name": "Text",
+                    "enabled": true,
+                    "params": {
+                        "text": "abcd",
+                        "fontSize": 48,
+                        "speed": 2
+                    }
+                }]
+            }, {
+                "id": 2,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 60,
+                "layer": 1,
+                "params": {},
+                "audioPlugins": [],
+                "effects": [{
+                    "id": "text",
+                    "name": "Text",
+                    "enabled": true,
+                    "params": {"text": "one<c1>two", "fontSize": 48}
+                }]
+            }]
+        });
+        let bytes = serde_json::to_vec(&input).expect("serialize project fixture");
+        let document = crate::project::parse_project_document(&bytes).expect("project parses");
+        let mut plan = SceneRenderPlan::from_document(&document, 1).expect("scene plan builds");
+
+        let runs_at = |plan: &mut SceneRenderPlan, frame, clip_id| {
+            plan.evaluate(frame)
+                .layers
+                .iter()
+                .find(|layer| layer.clip_id == clip_id)
+                .and_then(|layer| layer.text.as_ref())
+                .map(|text| {
+                    text.runs
+                        .iter()
+                        .map(|run| run.text.as_str())
+                        .collect::<String>()
+                })
+                .unwrap_or_default()
+        };
+
+        // Two characters per second at 10 fps: one at 0 s, two at 0.5 s.
+        assert_eq!(runs_at(&mut plan, 0, 1), "a");
+        assert_eq!(runs_at(&mut plan, 5, 1), "ab");
+        assert_eq!(runs_at(&mut plan, 10, 1), "abc");
+
+        // The clear swaps the visible block at one second.
+        assert_eq!(runs_at(&mut plan, 5, 2), "one");
+        assert_eq!(runs_at(&mut plan, 10, 2), "two");
     }
 
     #[test]
