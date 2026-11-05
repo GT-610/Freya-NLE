@@ -55,6 +55,7 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         update_vec_model(&timeline.get_media_groups(), Vec::new());
         timeline.set_playhead(0);
         timeline.set_duration(0);
+        timeline.set_playback_duration(0);
         timeline.set_selected_clip_count(0);
         // The footer's right reading belongs to the selected scene; with no
         // project open it must not keep the last project's name.
@@ -249,9 +250,8 @@ pub(super) fn sync_media_bin(timeline: &TimelineWindow, workspace: &freya_nle_ap
 /// `[Color]`): audio objects are red, control objects (camera, scene
 /// reference) are cyan, and media objects keep the theme's video blue.
 ///
-/// The Slint theme owns those tokens; this mirrors their values because the
-/// projection only has `freya-nle-app` types in scope. Keep them in sync with
-/// `AppTheme.object-audio` / `object-control` in `ui/theme.slint`.
+/// The colours live here rather than in `ui/theme.slint` because the
+/// projection only has `freya-nle-app` types in scope.
 pub(super) fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
     let [red, green, blue] = match clip_type {
         "audio" => [0xd0, 0x40, 0x30],
@@ -261,7 +261,9 @@ pub(super) fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
         _ => return None,
     };
     let luma = 0.299 * f32::from(red) + 0.587 * f32::from(green) + 0.114 * f32::from(blue);
-    Some((Color::from_rgb_u8(red, green, blue), luma > 0.6 * 255.0))
+    // A half-bright fill takes dark text: the cyan control colour sits just
+    // under 0.55, so the old 0.6 cutoff left white text on it (~2:1 contrast).
+    Some((Color::from_rgb_u8(red, green, blue), luma > 0.5 * 255.0))
 }
 
 pub(super) fn sync_project_tabs(
@@ -333,6 +335,9 @@ pub(super) fn sync_transport(
     )));
     timeline.set_playhead(workspace.playhead());
     timeline.set_duration(workspace.timeline_view_duration());
+    // The ruler is padded to the window's width; the transport shows the real
+    // project length.
+    timeline.set_playback_duration(duration);
     timeline.set_selected_layer(workspace.selected_layer());
     // The merged preview pane draws its own transport button state.
     timeline.set_playing(workspace.is_playing());

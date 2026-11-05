@@ -64,6 +64,18 @@ pub(super) struct LifecycleUi {
     pub(super) quit_confirmed: Cell<bool>,
 }
 
+/// Shows the preview window unless the merged layout is active.
+///
+/// In the merged shape the preview lives inside the timeline, so the window
+/// must stay hidden when a project opens instead of appearing next to it.
+pub(super) fn show_preview_window(main: &MainWindow) {
+    if main.get_merged_workspace() {
+        let _ = main.hide();
+    } else {
+        let _ = show_and_redraw(main);
+    }
+}
+
 /// Grows the timeline window when the merged layout needs more height than a
 /// saved geometry provides, so the preview's transport bar is not clipped.
 pub(super) fn ensure_timeline_height_for_preview(timeline: &TimelineWindow) {
@@ -294,6 +306,11 @@ impl LifecycleUi {
             if !matches!(step, LifecycleStep::ConfirmSave { .. }) {
                 if let Some(main) = self.main.upgrade() {
                     main.set_save_confirmation_visible(false);
+                    // A confirmation raised before switching to the merged
+                    // layout must not leave the preview window behind.
+                    if main.get_merged_workspace() {
+                        let _ = main.hide();
+                    }
                 }
                 // The timeline window carries its own menu bar; the items that act
                 // on the project have to grey out with the preview window's.
@@ -311,7 +328,7 @@ impl LifecycleUi {
                     self.sync();
                     if let Some(main) = self.main.upgrade() {
                         main.set_save_confirmation_visible(true);
-                        let _ = show_and_redraw(&main);
+                        show_preview_window(&main);
                     }
                     if let Some(dialog) = self.save_confirmation.upgrade() {
                         let preview = self.main.upgrade();
@@ -427,7 +444,7 @@ impl LifecycleUi {
             Err(status) => show_error_dialog(&status),
         }
         if let Some(main) = self.main.upgrade() {
-            let _ = show_and_redraw(&main);
+            show_preview_window(&main);
         }
         if let Some(timeline) = self.timeline.upgrade() {
             let _ = show_and_redraw(&timeline);
@@ -612,7 +629,7 @@ impl LifecycleUi {
                 self.hydrate_audio_plugins();
                 self.sync();
                 if let Some(main) = self.main.upgrade() {
-                    let _ = show_and_redraw(&main);
+                    show_preview_window(&main);
                 }
                 if let Some(timeline) = self.timeline.upgrade() {
                     // Media ids belong to a project. Keeping the selection across a load would let
@@ -706,6 +723,12 @@ impl LifecycleUi {
             crate::dialogs::apply_native_window_appearance(window.window(), dark);
         }
         if let Some(window) = self.recovery.upgrade() {
+            window
+                .global::<AppTheme>()
+                .set_preference_index(theme_index);
+            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        }
+        if let Some(window) = self.save_confirmation.upgrade() {
             window
                 .global::<AppTheme>()
                 .set_preference_index(theme_index);

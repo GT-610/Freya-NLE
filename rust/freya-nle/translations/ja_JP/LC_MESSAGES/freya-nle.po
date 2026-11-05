@@ -309,10 +309,10 @@ msgstr "現在: "
 msgid "Current: Default"
 msgstr "現在: デフォルト"
 
-msgctxt "edit-menu-cut"
 msgid "Custom"
 msgstr "カスタム"
 
+msgctxt "edit-menu-cut"
 msgid "Cut"
 msgstr "カット"
 

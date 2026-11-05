@@ -606,13 +606,26 @@ export component ObjectSettingRow inherits Rectangle {
         padding-right: 6px;
         spacing: 7px;
         // The label sits in the same column as every other setting, so a
-        // column of booleans lines up with the choices and text fields.
-        Text {
-            text: root.row-data.label;
+        // column of booleans lines up with the choices and text fields. It is
+        // part of the toggle target, as the whole row used to be.
+        Rectangle {
             width: AppTheme.setting-label-width;
-            overflow: elide;
-            vertical-alignment: center;
-            color: root.row-data.interactive ? AppTheme.foreground : AppTheme.muted-foreground;
+            height: 100%;
+            background: transparent;
+            Text {
+                text: root.row-data.label;
+                width: 100%;
+                overflow: elide;
+                vertical-alignment: center;
+                color: root.row-data.interactive ? AppTheme.foreground : AppTheme.muted-foreground;
+            }
+            label-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                enabled: root.row-data.interactive;
+                mouse-cursor: pointer;
+                clicked => { root.toggle-bool(); }
+            }
         }
         // A mixed boolean is a third state, not "unchecked": clicking it must
         // write one value to every object instead of leaving them disagreeing.

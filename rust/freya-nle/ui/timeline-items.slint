@@ -61,10 +61,10 @@ export component LayerHeaderItem inherits Rectangle {
     callback command(string, int);
     callback scroll-requested(length) -> bool;
     height: AppTheme.layer-height;
-    background: !root.layer.visible
-        ? AppTheme.layer-disabled
-        : root.layer.selected
-            ? AppTheme.layer-selected
+    background: root.layer.selected
+        ? AppTheme.layer-selected
+        : !root.layer.visible
+            ? AppTheme.layer-disabled
             : header-touch.has-hover ? AppTheme.layer-hover : AppTheme.layer-header-background;
     border-width: 0px;
     animate background { duration: 120ms; }

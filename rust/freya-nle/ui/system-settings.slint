@@ -388,6 +388,16 @@ export component SystemSettingsWindow inherits Window {
                                     if (value == 0) { root.timeline-track-height = 24; }
                                     else if (value == 1) { root.timeline-track-height = 32; }
                                     else if (value == 2) { root.timeline-track-height = 48; }
+                                    else {
+                                        // "Custom" only names a hand-typed
+                                        // height; snap back to the value that
+                                        // matches the current height.
+                                        root.layer-density-index = root.timeline-track-height == 24
+                                            ? 0
+                                            : root.timeline-track-height == 32
+                                                ? 1
+                                                : root.timeline-track-height == 48 ? 2 : 3;
+                                    }
                                 }
                             }
                         }

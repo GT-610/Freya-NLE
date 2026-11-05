@@ -58,9 +58,14 @@ fn main() {
     // `UI_SNAPSHOT_SIZE=680x600` renders a specific window size, which is how
     // the minimum-width layouts are checked.
     if let Ok(value) = std::env::var("UI_SNAPSHOT_SIZE") {
-        let parsed = value
-            .split_once('x')
-            .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)));
+        let parsed = value.split_once('x').and_then(|(w, h)| {
+            let width: u32 = w.trim().parse().ok()?;
+            let height: u32 = h.trim().parse().ok()?;
+            // A zero edge or an overflowing pixel count would make the render
+            // allocation meaningless; reject both like a malformed value.
+            (width > 0 && height > 0 && width.checked_mul(height).is_some())
+                .then_some((width, height))
+        });
         match parsed {
             Some(value) => size = value,
             None => {
@@ -109,9 +114,11 @@ fn main() {
         "packages" => {
             let ui = PackageManagerWindow::new().expect("create the package manager window");
             ui.global::<AppTheme>().set_preference_index(preference);
-            if std::env::var("UI_SNAPSHOT_BUSY").is_ok() {
+            if let Ok(kind) = std::env::var("UI_SNAPSHOT_BUSY") {
                 ui.set_busy(true);
-                ui.set_progress(0.42);
+                // "indeterminate" exercises the case where the sync is busy
+                // before it knows a percentage.
+                ui.set_progress(if kind == "indeterminate" { 0.0 } else { 0.42 });
                 ui.set_status_text("Syncing repositories…".into());
             }
             ui.show().expect("show the package manager window");
@@ -154,6 +161,33 @@ fn output_name(window: &str, preference: i32) -> String {
     }
 }
 
+/// Frames are written under the crate's own `target/`, so the files live in a
+/// directory the checkout already owns instead of predictable names in the
+/// system temp directory.
+fn output_dir() -> std::path::PathBuf {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("ui-snapshot");
+    match std::fs::symlink_metadata(&dir) {
+        Ok(metadata) => {
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "{} must not be a symlink",
+                dir.display()
+            );
+            assert!(metadata.is_dir(), "{} is not a directory", dir.display());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("cannot inspect {}: {error}", dir.display()),
+    }
+    std::fs::create_dir_all(&dir).expect("create the snapshot output directory");
+    // Writing proves the directory is ours to use before a frame is written.
+    let probe = dir.join(".probe");
+    std::fs::write(&probe, b"").expect("write probe into the snapshot directory");
+    let _ = std::fs::remove_file(probe);
+    dir
+}
+
 fn save(window: &Rc<MinimalSoftwareWindow>, width: u32, height: u32, name: &str) {
     // A component needs a few event-loop turns before its layout and images
     // settle; the first frames can otherwise be blank.
@@ -185,10 +219,15 @@ fn save(window: &Rc<MinimalSoftwareWindow>, width: u32, height: u32, name: &str)
         rgba.extend_from_slice(&[unp(pixel.red), unp(pixel.green), unp(pixel.blue), alpha]);
     }
 
-    let path = format!("/tmp/{name}.rgba");
+    let dir = output_dir();
+    let path = dir.join(format!("{name}.rgba"));
     std::fs::write(&path, rgba).expect("write the RGBA frame");
-    std::fs::write(format!("/tmp/{name}.size"), format!("{width} {height}")).expect("write size");
-    println!("{name}\t{width}x{height}\t{path}");
+    std::fs::write(
+        dir.join(format!("{name}.size")),
+        format!("{width} {height}"),
+    )
+    .expect("write size");
+    println!("{name}\t{width}x{height}\t{}", path.display());
 }
 
 fn populate_main(ui: &MainWindow) {
@@ -289,7 +328,7 @@ fn row(kind: &str, label: &str, button: &str) -> ObjectSettingRowData {
         effect_enabled: true,
         header_toggle_visible: false,
         selected: kind == "effect",
-        removable: kind == "effect",
+        removable: false,
         interactive: true,
         checked: kind == "boolean",
         keyframed: false,

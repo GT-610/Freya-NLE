@@ -1058,7 +1058,7 @@ pub(super) fn install_callbacks(
         create_model.borrow_mut().create_project(defaults);
         sync_weak_windows(&create_main, &create_timeline, &create_model);
         if let Some(main) = create_main.upgrade() {
-            let _ = show_and_redraw(&main);
+            crate::lifecycle::show_preview_window(&main);
         }
         if let Some(timeline) = create_timeline.upgrade() {
             let _ = show_and_redraw(&timeline);
@@ -1270,7 +1270,7 @@ pub(super) fn install_callbacks(
                     }
                     recover_ui.sync();
                     if let Some(window) = recover_ui.main.upgrade() {
-                        let _ = show_and_redraw(&window);
+                        crate::lifecycle::show_preview_window(&window);
                     }
                     if let Some(window) = recover_ui.timeline.upgrade() {
                         let _ = show_and_redraw(&window);

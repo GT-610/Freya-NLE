@@ -1325,16 +1325,22 @@ fn scene_frame_rate_rounds_for_the_timecode() {
 fn clip_colours_follow_the_aviutl2_object_groups() {
     // AviUtl2 colours audio and control objects; media objects stay on the
     // theme's video blue, which is why they have no explicit colour.
-    let (audio, _) = timeline_clip_style("audio").expect("audio colour");
+    let (audio, audio_dark_text) = timeline_clip_style("audio").expect("audio colour");
     assert_eq!(audio, slint::Color::from_rgb_u8(0xd0, 0x40, 0x30));
+    assert!(!audio_dark_text, "audio clips keep white text");
     for control in ["camera", "camera_control", "scene"] {
-        let (colour, _) = timeline_clip_style(control).expect("control colour");
+        let (colour, dark_text) = timeline_clip_style(control).expect("control colour");
         assert_eq!(
             colour,
             slint::Color::from_rgb_u8(0x30, 0xb0, 0xc0),
             "{control}"
         );
+        // Cyan is light enough that white text fails contrast.
+        assert!(dark_text, "{control} should use dark text");
     }
+    let (shape, shape_dark_text) = timeline_clip_style("star").expect("shape colour");
+    assert_eq!(shape, slint::Color::from_rgb_u8(0x3b, 0x82, 0xf6));
+    assert!(!shape_dark_text, "the shape blue keeps white text");
     assert!(timeline_clip_style("video").is_none());
     assert!(timeline_clip_style("text").is_none());
     assert!(timeline_clip_style("image").is_none());

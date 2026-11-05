@@ -167,10 +167,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     timeline.set_preview_visible(merged_workspace);
     main.set_merged_workspace(merged_workspace);
     timeline.set_preview_pane_height(
-        settings
-            .borrow()
-            .i32_value("timelinePreviewHeight", 320)
-            .clamp(120, 720) as f32,
+        settings::preview_pane_height(&timeline, &settings.borrow()) as f32
     );
     // A saved geometry from before the merged layout can be shorter than the
     // pane needs; grow it so the transport bar is not clipped on launch.
@@ -260,10 +257,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         VecModel::<SystemShortcutSettingData>::default(),
     ));
     sync_system_settings(&system_settings, &settings.borrow());
+    timeline.set_preview_image(preview_image.clone());
     main.set_preview_image(preview_image);
     main.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     main.set_missing_media(ModelRc::new(VecModel::<MissingMediaData>::default()));
     recovery.set_recoveries(ModelRc::new(VecModel::<RecoveryEntryData>::default()));
+    timeline.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     timeline.set_scene_tabs(ModelRc::new(VecModel::<SceneTabData>::default()));
     timeline.set_clips(ModelRc::new(VecModel::<TimelineClipData>::default()));
     timeline.set_layers(ModelRc::new(VecModel::<LayerData>::default()));
@@ -750,6 +749,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .preview_updates
                     .set(animation_stats.preview_updates.get() + 1);
                 main.window().request_redraw();
+                // The merged layout shows the same frame in the timeline.
+                if let Some(timeline) = &timeline {
+                    timeline.window().request_redraw();
+                }
             }
         }
         update_export(

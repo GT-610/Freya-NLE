@@ -11,7 +11,7 @@ use freya_nle_app::{
     ApplicationModel, MAX_TIMELINE_LAYERS, ProjectDefaults, ProjectSettingsInput,
     SceneSettingsInput,
 };
-use slint::{Model, SharedString};
+use slint::{ComponentHandle, Model, SharedString};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -141,17 +141,27 @@ pub(super) fn sync_timeline_runtime_settings(
     // The preview window's View menu names the layout action, so it has to
     // know what the timeline is doing.
     main.set_merged_workspace(timeline.get_preview_visible());
-    timeline.set_preview_pane_height(
-        settings
-            .i32_value("timelinePreviewHeight", 320)
-            .clamp(120, 720) as f32,
-    );
+    timeline.set_preview_pane_height(preview_pane_height(&timeline, settings) as f32);
     let skimming_enabled = settings.bool_value("enableTimelineSkimming", true);
     timeline.set_timeline_skimming_enabled(skimming_enabled);
     if !skimming_enabled {
         timeline.set_skimmer_visible(false);
     }
     object_settings.set_sidebar_on_right(settings.bool_value("settingDialogSidebarRight", false));
+}
+
+/// Height for the merged preview pane.
+///
+/// The saved value, bounded by the window like the divider drag is: at least
+/// 120px, at most 720px, and never more than the window height minus the 240px
+/// the divider keeps for the layer area.
+pub(super) fn preview_pane_height(timeline: &TimelineWindow, settings: &SettingsStore) -> i32 {
+    let requested = settings
+        .i32_value("timelinePreviewHeight", 320)
+        .clamp(120, 720);
+    let window = timeline.window();
+    let available = window.size().to_logical(window.scale_factor()).height as i32 - 240;
+    requested.min(available.max(120))
 }
 
 /// Persists the merged-preview preferences.

@@ -309,10 +309,10 @@ msgstr "当前："
 msgid "Current: Default"
 msgstr "当前：默认"
 
-msgctxt "edit-menu-cut"
 msgid "Custom"
 msgstr "自定义"
 
+msgctxt "edit-menu-cut"
 msgid "Cut"
 msgstr "剪切"
 
