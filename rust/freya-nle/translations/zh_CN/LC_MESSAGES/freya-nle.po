@@ -1501,3 +1501,15 @@ msgstr "复制场景"
 
 msgid "Close Scene"
 msgstr "关闭场景"
+
+msgid "Label:"
+msgstr "标签："
+
+msgid "Optional label for filtering"
+msgstr "用于筛选的标签（可选）"
+
+msgid "Filter scenes by label"
+msgstr "按标签筛选场景"
+
+msgid "All labels"
+msgstr "所有标签"

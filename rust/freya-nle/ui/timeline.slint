@@ -43,6 +43,10 @@ export component TimelineWindow inherits Window {
     in property <int> current-project: -1;
     in property <int> project-tab-height: 28;
     in property <[SceneTabData]> scene-tabs;
+    // Scene label filter: an empty string shows every scene, otherwise the
+    // label is matched exactly (and the current scene always stays visible).
+    in property <[string]> scene-label-names;
+    in-out property <string> scene-label-filter: "";
     in property <[TimelineClipData]> clips;
     in property <[LayerData]> layers;
     // Frame marks of the edited scene, already ordered by frame.
@@ -858,6 +862,12 @@ export component TimelineWindow inherits Window {
                         accessible-label: @tr("Scene");
                         for scene in root.scene-tabs: SceneTab {
                             scene: scene;
+                            // The current scene stays visible even when it does
+                            // not match, so filtering never hides where editing
+                            // happens.
+                            visible: root.scene-label-filter == ""
+                                || scene.selected
+                                || scene.label == root.scene-label-filter;
                             height: root.timeline-header-height * 1px;
                             activate(scene-id) => { root.scene-selected(scene-id); }
                             settings(scene-id) => { root.scene-settings(scene-id); }
@@ -867,6 +877,39 @@ export component TimelineWindow inherits Window {
                     }
                 }
                 TabAddButton { accessible-name: @tr("Create New Scene"); clicked => { root.show-scene-settings(); } }
+                // A compact flag button instead of a combo box: the header
+                // also carries the scene tabs, both docks and the tool picker,
+                // and a 104px combo squeezed the tabs out at 760px.
+                if root.scene-label-names.length > 0 : label-menu := ContextMenuArea {
+                    width: 28px;
+                    height: 100%;
+                    Menu {
+                        MenuItem { title: @tr("All labels"); activated => { root.scene-label-filter = ""; } }
+                        MenuSeparator { }
+                        for label in root.scene-label-names : MenuItem {
+                            title: label;
+                            activated => { root.scene-label-filter = label; }
+                        }
+                    }
+                    Rectangle {
+                        width: parent.width;
+                        height: parent.height;
+                        background: label-touch.has-hover ? AppTheme.hover-background : transparent;
+                        Text {
+                            text: "⚑";
+                            color: root.scene-label-filter == ""
+                                ? AppTheme.muted-foreground
+                                : AppTheme.accent;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        label-touch := TouchArea {
+                            accessible-label: @tr("Filter scenes by label");
+                            accessible-role: button;
+                            clicked => { label-menu.show({ x: 0px, y: self.height }); }
+                        }
+                    }
+                }
                 Button {
                     width: 64px;
                     text: root.media-bin-visible ? "◀ " + @tr("Media") : "▶ " + @tr("Media");

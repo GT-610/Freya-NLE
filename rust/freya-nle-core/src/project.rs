@@ -22,6 +22,8 @@ const MAX_MAGNETIC_SNAP_RANGE: i32 = 100;
 /// Longest note a frame mark may carry, counted in characters so a note made of
 /// multi-byte text cannot exceed it by accident.
 pub const MAX_MARK_NOTE_CHARS: usize = 512;
+/// Longest label a scene may carry; backslash-separated paths fit in this too.
+pub const MAX_SCENE_LABEL_CHARS: usize = 64;
 /// Longest name a layer setting may carry, counted the same way.
 pub const MAX_LAYER_NAME_CHARS: usize = 64;
 /// Largest per-layer coordinate offset, in pixels. AviUtl2's layer settings are
@@ -66,6 +68,10 @@ pub struct ProjectSettings {
 pub struct SceneDocument {
     pub id: i32,
     pub name: String,
+    /// Optional organisational label. AviUtl2 lets a scene sit under a
+    /// backslash-separated label path so the scene list can be filtered.
+    #[serde(default)]
+    pub label: String,
     pub width: i32,
     pub height: i32,
     pub fps: f64,
@@ -450,6 +456,11 @@ fn normalize_scenes(
             let mut scene = object(Some(&scene));
             let id = integer(scene.get("id"), 0);
             let name = string(scene.get("name"), "");
+            let label = string(scene.get("label"), "")
+                .trim()
+                .chars()
+                .take(MAX_SCENE_LABEL_CHARS)
+                .collect::<String>();
             let width = bounded_positive(
                 integer(scene.get("width"), project_width),
                 MAX_DIMENSION,
@@ -521,6 +532,7 @@ fn normalize_scenes(
 
             set_integer(&mut scene, "id", id);
             set_string(&mut scene, "name", name);
+            set_string(&mut scene, "label", label);
             set_integer(&mut scene, "width", width);
             set_integer(&mut scene, "height", height);
             set_floating(&mut scene, "fps", fps);
@@ -870,6 +882,22 @@ mod tests {
         assert_eq!(layers[1]["background"], "#aabbcc");
         assert_eq!(layers[1]["volumePercent"], 50.0);
         assert_eq!(layers[1]["layerExtension"], "kept");
+    }
+
+    #[test]
+    fn scene_labels_are_trimmed_bounded_and_default_to_empty() {
+        let input = r#"{
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+            "scenes": [
+                {"id": 1, "name": "Root", "label": "  B-roll\\day  "},
+                {"id": 2, "name": "Other"}
+            ],
+            "clips": []
+        }"#;
+        let normalized = normalize(input);
+        assert_eq!(normalized["scenes"][0]["label"], "B-roll\\day");
+        assert_eq!(normalized["scenes"][1]["label"], "");
     }
 
     #[test]

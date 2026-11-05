@@ -10,6 +10,7 @@ export component SceneSettingsWindow inherits Window {
     in-out property <bool> creation-mode: false;
     in-out property <int> target-scene-id: -1;
     in-out property <string> scene-name: "";
+    in-out property <string> scene-label: "";
     in-out property <int> scene-width: 1920;
     in-out property <int> scene-height: 1080;
     in-out property <string> scene-fps: "60";
@@ -36,6 +37,14 @@ export component SceneSettingsWindow inherits Window {
                     Row {
                         Text { text: @tr("Scene Name:"); vertical-alignment: center; }
                         LineEdit { text <=> root.scene-name; accessible-label: @tr("Scene Name:"); }
+                    }
+                    Row {
+                        Text { text: @tr("Label:"); vertical-alignment: center; }
+                        LineEdit {
+                            text <=> root.scene-label;
+                            placeholder-text: @tr("Optional label for filtering");
+                            accessible-label: @tr("Label:");
+                        }
                     }
                     Row {
                         Text { text: @tr("settings-width" => "Width:"); vertical-alignment: center; }

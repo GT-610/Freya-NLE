@@ -24,7 +24,11 @@ export component SceneTab inherits Rectangle {
         padding-right: AppTheme.spacing-xs;
         spacing: AppTheme.spacing-xs;
         Text {
-            text: root.scene.name;
+            // The label rides along with the name so a filtered or labelled
+            // scene is recognisable without another row in the 28px tab.
+            text: root.scene.label == ""
+                ? root.scene.name
+                : root.scene.name + "  ·  " + root.scene.label;
             color: AppTheme.foreground;
             vertical-alignment: center;
             horizontal-stretch: 1;
@@ -47,6 +51,7 @@ export component SceneTab inherits Rectangle {
             mouse-cursor: pointer;
             accessible-role: tab;
             accessible-label: root.scene.name;
+            accessible-description: root.scene.label;
             accessible-item-selectable: true;
             accessible-item-selected: root.scene.selected;
             accessible-action-default => { root.activate(root.scene.id); }

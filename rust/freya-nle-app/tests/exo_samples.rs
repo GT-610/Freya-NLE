@@ -49,6 +49,7 @@ fn scene_for(file: &ExoFile) -> SceneDocument {
     SceneDocument {
         id: 1,
         name: "Root".to_owned(),
+        label: String::new(),
         width: file.header.width,
         height: file.header.height,
         fps: file.header.rate,

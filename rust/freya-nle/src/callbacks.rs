@@ -1854,6 +1854,7 @@ pub(super) fn install_callbacks(
                         localized("Scene", "场景", "シーン"),
                         workspace.document().scenes.len() + 1
                     ),
+                    label: String::new(),
                     width: project.width,
                     height: project.height,
                     fps: project.fps,
@@ -2316,6 +2317,7 @@ pub(super) fn install_callbacks(
         };
         let input = SceneSettingsInput {
             name: window.get_scene_name().to_string(),
+            label: window.get_scene_label().to_string(),
             width: window.get_scene_width(),
             height: window.get_scene_height(),
             fps,

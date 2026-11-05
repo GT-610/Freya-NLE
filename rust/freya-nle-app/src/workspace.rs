@@ -16,13 +16,13 @@ use crate::transport::Transport;
 use freya_nle_core::api::{
     ClipDocument, ClipGeometryUpdate, EffectDocument, EffectInsertion, EffectMetadata,
     EffectPreset, LayerSettingDocument, MAX_LAYER_NAME_CHARS, MAX_LAYER_OFFSET,
-    MAX_LAYER_VOLUME_PERCENT, MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, MAX_TIMELINE_LAYERS,
-    MidpointOperation, ProjectDocument, ProjectSettings, SceneDocument, SceneMark, TimelineCommand,
-    TimelineTransaction, TrimEdge, clipboard_duration, evaluate_keyframe_track,
-    find_vacant_scene_frame, inspect_keyframe_track, normalize_hex_color, plan_clip_delta_move,
-    plan_clip_ripple_trim, plan_clip_roll, plan_clip_slide, plan_clip_slip, plan_clipboard_paste,
-    plan_effect_reorder, plan_scene_layer_insertion, plan_scene_layer_shift, snap_scene_frame,
-    timeline_duration as core_timeline_duration,
+    MAX_LAYER_VOLUME_PERCENT, MAX_MARK_NOTE_CHARS, MAX_SCENE_LABEL_CHARS, MAX_TIMELINE_LAYER,
+    MAX_TIMELINE_LAYERS, MidpointOperation, ProjectDocument, ProjectSettings, SceneDocument,
+    SceneMark, TimelineCommand, TimelineTransaction, TrimEdge, clipboard_duration,
+    evaluate_keyframe_track, find_vacant_scene_frame, inspect_keyframe_track, normalize_hex_color,
+    plan_clip_delta_move, plan_clip_ripple_trim, plan_clip_roll, plan_clip_slide, plan_clip_slip,
+    plan_clipboard_paste, plan_effect_reorder, plan_scene_layer_insertion, plan_scene_layer_shift,
+    snap_scene_frame, timeline_duration as core_timeline_duration,
 };
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -89,6 +89,7 @@ struct ContinuousEdit {
 pub struct SceneTab {
     pub id: i32,
     pub name: String,
+    pub label: String,
     pub selected: bool,
     pub root: bool,
 }
@@ -132,6 +133,7 @@ pub struct ProjectSettingsInput {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneSettingsInput {
     pub name: String,
+    pub label: String,
     pub width: i32,
     pub height: i32,
     pub fps: f64,
@@ -266,10 +268,26 @@ impl WorkspaceModel {
             .map(|scene| SceneTab {
                 id: scene.id,
                 name: scene.name.clone(),
+                label: scene.label.clone(),
                 selected: scene.id == self.selected_scene,
                 root: Some(scene.id) == root_scene,
             })
             .collect()
+    }
+
+    /// Distinct labels used by this project's scenes, in first-use order.
+    ///
+    /// Labels are free text; the scene list filter shows this list and matches
+    /// one label exactly, with the selected scene always staying visible.
+    pub fn scene_labels(&self) -> Vec<String> {
+        let mut labels = Vec::new();
+        for scene in &self.project.document.scenes {
+            let label = scene.label.trim();
+            if !label.is_empty() && !labels.iter().any(|existing: &String| existing == label) {
+                labels.push(label.to_owned());
+            }
+        }
+        labels
     }
 
     /// The interval handles are clip-local frame numbers, like AviUtl's midpoints.
@@ -2041,6 +2059,7 @@ impl WorkspaceModel {
         let scene = SceneDocument {
             id: scene_id,
             name: name.clone(),
+            label: input.label.clone(),
             width: defaults.width,
             height: defaults.height,
             fps: defaults.fps,
@@ -2196,6 +2215,7 @@ impl WorkspaceModel {
         };
         let input = normalized_scene_settings(input);
         scene.name = input.name;
+        scene.label = input.label;
         scene.width = input.width;
         scene.height = input.height;
         scene.fps = input.fps;
@@ -5338,6 +5358,7 @@ fn editable_keyframe_options_at(
 fn scene_settings_input(scene: &SceneDocument) -> SceneSettingsInput {
     SceneSettingsInput {
         name: scene.name.clone(),
+        label: scene.label.clone(),
         width: scene.width,
         height: scene.height,
         fps: scene.fps,
@@ -5353,6 +5374,12 @@ fn scene_settings_input(scene: &SceneDocument) -> SceneSettingsInput {
 }
 
 fn normalized_scene_settings(mut input: SceneSettingsInput) -> SceneSettingsInput {
+    input.label = input
+        .label
+        .trim()
+        .chars()
+        .take(MAX_SCENE_LABEL_CHARS)
+        .collect();
     input.width = bounded_positive_i32(input.width, 32_768, 1_920);
     input.height = bounded_positive_i32(input.height, 32_768, 1_080);
     input.fps = bounded_positive_f64(input.fps, 1_000.0, 60.0);
@@ -5731,6 +5758,9 @@ mod tests {
         let mut layer = LayerSettingsInput::defaults(0);
         layer.name = "Titles".to_owned();
         assert!(workspace.update_layer_settings(layer));
+        let mut settings = workspace.scene_settings(1).expect("scene settings");
+        settings.label = "Template".to_owned();
+        assert!(workspace.update_scene_settings(1, settings));
         let original = workspace.document().clone();
         let source = original
             .scenes
@@ -5755,6 +5785,7 @@ mod tests {
             .find(|scene| scene.id == new_id)
             .expect("the copy exists");
         assert_eq!(copy.name, "Root 2");
+        assert_eq!(copy.label, "Template");
         assert_eq!(copy.marks, source.marks);
         assert_eq!(copy.layer_settings, source.layer_settings);
         let copied = document
@@ -5773,6 +5804,29 @@ mod tests {
         // The scene and its clips leave together in one undo step.
         assert!(workspace.undo());
         assert_eq!(workspace.document(), &original);
+    }
+
+    #[test]
+    fn scene_labels_update_and_are_listed_once() {
+        let mut workspace = workspace();
+        assert!(workspace.scene_labels().is_empty());
+
+        let mut first = workspace.scene_settings(1).expect("scene 1 settings");
+        first.label = "  B-roll  ".to_owned();
+        assert!(workspace.update_scene_settings(1, first));
+        assert_eq!(workspace.scene_labels(), vec!["B-roll"]);
+        assert_eq!(workspace.scene_tabs()[0].label, "B-roll");
+
+        // The same label on another scene is listed once.
+        let mut second = workspace.scene_settings(2).expect("scene 2 settings");
+        second.label = "B-roll".to_owned();
+        assert!(workspace.update_scene_settings(2, second));
+        assert_eq!(workspace.scene_labels(), vec!["B-roll"]);
+
+        let mut third = workspace.scene_settings(2).expect("scene 2 settings");
+        third.label = "Music".to_owned();
+        assert!(workspace.update_scene_settings(2, third));
+        assert_eq!(workspace.scene_labels(), vec!["B-roll", "Music"]);
     }
 
     #[test]
@@ -8118,6 +8172,7 @@ mod tests {
                 },
                 SceneSettingsInput {
                     name: "Configured".to_owned(),
+                    label: String::new(),
                     width: 1_280,
                     height: 720,
                     fps: 30.0,
@@ -8143,6 +8198,7 @@ mod tests {
             scene_id,
             SceneSettingsInput {
                 name: "Updated".to_owned(),
+                label: "  Labelled  ".to_owned(),
                 width: 0,
                 height: 40_000,
                 fps: f64::INFINITY,
@@ -8183,6 +8239,7 @@ mod tests {
                 },
                 SceneSettingsInput {
                     name: String::new(),
+                    label: String::new(),
                     width: 1_280,
                     height: 720,
                     fps: 30.0,

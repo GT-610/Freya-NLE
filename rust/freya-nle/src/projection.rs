@@ -92,11 +92,28 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         .map(|scene| SceneTabData {
             id: scene.id,
             name: SharedString::from(scene.name),
+            label: SharedString::from(scene.label),
             selected: scene.selected,
             root: scene.root,
         })
         .collect::<Vec<_>>();
     update_vec_model(&timeline.get_scene_tabs(), scenes);
+    // The filter combo lists "All labels" first; a label that vanished (renamed
+    // or removed) resets the filter instead of hiding every scene.
+    let label_names = workspace
+        .scene_labels()
+        .into_iter()
+        .map(SharedString::from)
+        .collect::<Vec<_>>();
+    let filter = timeline.get_scene_label_filter();
+    if !filter.is_empty()
+        && !label_names
+            .iter()
+            .any(|label| label.as_str() == filter.as_str())
+    {
+        timeline.set_scene_label_filter(SharedString::default());
+    }
+    update_vec_model(&timeline.get_scene_label_names(), label_names);
     let clips = workspace
         .timeline_clips()
         .into_iter()

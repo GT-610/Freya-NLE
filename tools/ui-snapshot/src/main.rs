@@ -415,12 +415,14 @@ fn populate_timeline(ui: &TimelineWindow) {
         SceneTabData {
             id: 1,
             name: "Root".into(),
+            label: "".into(),
             selected: true,
             root: true,
         },
         SceneTabData {
             id: 2,
             name: "Scene 2".into(),
+            label: "B-roll".into(),
             selected: false,
             root: false,
         },
@@ -563,6 +565,7 @@ fn populate_timeline(ui: &TimelineWindow) {
         },
     ])));
     ui.set_current_project(0);
+    ui.set_scene_label_names(ModelRc::new(VecModel::from(vec!["B-roll".into()])));
     ui.set_scene_name("Root".into());
     ui.set_scene_resolution("1920x1080".into());
     ui.set_scene_frame_rate(30);

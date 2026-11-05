@@ -1501,3 +1501,15 @@ msgstr "シーンを複製"
 
 msgid "Close Scene"
 msgstr "シーンを閉じる"
+
+msgid "Label:"
+msgstr "ラベル:"
+
+msgid "Optional label for filtering"
+msgstr "絞り込み用のラベル(任意)"
+
+msgid "Filter scenes by label"
+msgstr "ラベルでシーンを絞り込む"
+
+msgid "All labels"
+msgstr "すべてのラベル"

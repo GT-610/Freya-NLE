@@ -8,8 +8,8 @@ use crate::policy::{
 use crate::project::{
     AudioPluginDocument, ClipDocument, DEFAULT_FPS, EffectDocument, ExtraFields,
     LayerSettingDocument, MAX_LAYER_NAME_CHARS, MAX_LAYER_OFFSET, MAX_LAYER_VOLUME_PERCENT,
-    MAX_MARK_NOTE_CHARS, MAX_TIMELINE_LAYER, ProjectDocument, ProjectError, ProjectSettings,
-    SceneDocument, SceneMark,
+    MAX_MARK_NOTE_CHARS, MAX_SCENE_LABEL_CHARS, MAX_TIMELINE_LAYER, ProjectDocument, ProjectError,
+    ProjectSettings, SceneDocument, SceneMark,
 };
 use crate::timeline_domain::allocate_id;
 use crate::types::IdAllocation;
@@ -1246,6 +1246,10 @@ struct Patch {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
+// Patch operations carry whole documents by value by design: they are the
+// transaction log, not a hot path, and boxing the scene variant would add an
+// allocation to every scene edit for a few hundred saved bytes.
+#[allow(clippy::large_enum_variant)]
 enum PatchOperation {
     ReplaceProjectSettings {
         before: ProjectSettings,
@@ -1942,6 +1946,8 @@ fn validate_document(document: &ProjectDocument) -> Result<(), StateError> {
     if document.scenes.iter().any(|scene| {
         scene.id < 0
             || !scene_ids.insert(scene.id)
+            || scene.label.chars().count() > MAX_SCENE_LABEL_CHARS
+            || scene.label.contains(['\n', '\r'])
             || !valid_scene_marks(&scene.marks)
             || !valid_layer_settings(&scene.layer_settings)
     }) {
@@ -2436,6 +2442,16 @@ mod tests {
     fn document_validation_rejects_out_of_order_marks() {
         let mut document = document();
         document.scenes[0].marks = vec![mark(4, ""), mark(2, "")];
+        assert_eq!(
+            TimelineState::new(document, 2, 1).err(),
+            Some(StateError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn document_validation_rejects_multiline_scene_labels() {
+        let mut document = document();
+        document.scenes[0].label = "line\nbreak".to_owned();
         assert_eq!(
             TimelineState::new(document, 2, 1).err(),
             Some(StateError::InvalidArgument)

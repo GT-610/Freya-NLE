@@ -97,6 +97,7 @@ mod tests {
             scenes: vec![SceneDocument {
                 id: 1,
                 name: "Root".to_owned(),
+                label: String::new(),
                 width: 1920,
                 height: 1080,
                 fps: 60.0,

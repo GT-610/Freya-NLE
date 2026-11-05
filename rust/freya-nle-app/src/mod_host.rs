@@ -960,6 +960,7 @@ fn apply_command(
                 .selected_scene_settings()
                 .map(|scene| crate::SceneSettingsInput {
                     name: name.clone(),
+                    label: String::new(),
                     width: scene.width,
                     height: scene.height,
                     fps: scene.fps,
@@ -974,6 +975,7 @@ fn apply_command(
                 })
                 .unwrap_or(crate::SceneSettingsInput {
                     name: name.clone(),
+                    label: String::new(),
                     width: project.width,
                     height: project.height,
                     fps: project.fps,

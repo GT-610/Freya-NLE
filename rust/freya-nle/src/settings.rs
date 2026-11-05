@@ -241,6 +241,7 @@ pub(super) fn sync_scene_settings(
     window.set_creation_mode(creation_mode);
     window.set_target_scene_id(scene_id);
     window.set_scene_name(SharedString::from(input.name.clone()));
+    window.set_scene_label(SharedString::from(input.label.clone()));
     window.set_scene_width(input.width);
     window.set_scene_height(input.height);
     window.set_scene_fps(SharedString::from(input.fps.to_string()));

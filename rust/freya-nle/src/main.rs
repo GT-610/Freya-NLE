@@ -282,6 +282,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     recovery.set_recoveries(ModelRc::new(VecModel::<RecoveryEntryData>::default()));
     timeline.set_project_tabs(ModelRc::new(VecModel::<ProjectTabData>::default()));
     timeline.set_scene_tabs(ModelRc::new(VecModel::<SceneTabData>::default()));
+    timeline.set_scene_label_names(ModelRc::new(VecModel::<SharedString>::default()));
     timeline.set_clips(ModelRc::new(VecModel::<TimelineClipData>::default()));
     timeline.set_marks(ModelRc::new(VecModel::<TimelineMarkData>::default()));
     timeline.set_objects(ModelRc::new(VecModel::<TimelineObjectData>::default()));
