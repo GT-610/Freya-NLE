@@ -89,6 +89,23 @@ pub(super) fn ensure_timeline_height_for_preview(timeline: &TimelineWindow) {
     }
 }
 
+/// Reconciles which window presents the workspace after the merged layout flips.
+///
+/// The merged shape keeps the preview window hidden, because the picture, the
+/// transport and the project strip all live in the timeline; the separate shape
+/// brings it back. Every path that flips `preview-visible` ends here, so the two
+/// windows cannot disagree about the mode they are in.
+pub(super) fn sync_workspace_presentation(main: &MainWindow, timeline: &TimelineWindow) {
+    let merged = timeline.get_preview_visible();
+    main.set_merged_workspace(merged);
+    if merged {
+        ensure_timeline_height_for_preview(timeline);
+        let _ = main.hide();
+    } else {
+        let _ = show_and_redraw(main);
+    }
+}
+
 pub(super) struct WindowRefs<'a> {
     pub(super) launcher: &'a ProjectLauncherWindow,
     pub(super) recovery: &'a ProjectRecoveryWindow,
@@ -224,22 +241,11 @@ impl LifecycleUi {
         if action == "merged" || action == "separate" {
             let merged = action == "merged";
             timeline.set_preview_visible(merged);
-            main.set_merged_workspace(merged);
-            if merged {
-                let window = timeline.window();
-                let logical = window.size().to_logical(window.scale_factor());
-                if logical.height < 640.0 {
-                    window.set_size(slint::LogicalSize::new(logical.width, 720.0));
-                }
-            }
+            sync_workspace_presentation(&main, &timeline);
             let mut settings = self.settings.borrow().snapshot();
             settings.insert("timelinePreviewVisible".into(), serde_json::json!(merged));
             if let Err(message) = self.settings.borrow_mut().apply(settings) {
                 crate::dialogs::show_error_dialog(&message);
-            }
-            let preview = if merged { main.hide() } else { main.show() };
-            if let Err(error) = preview {
-                eprintln!("Could not switch the preview window: {error}");
             }
             return;
         }
@@ -326,21 +332,27 @@ impl LifecycleUi {
                 LifecycleStep::None | LifecycleStep::Cancelled => return,
                 LifecycleStep::ConfirmSave { project_name, .. } => {
                     self.sync();
+                    let mut merged = false;
                     if let Some(main) = self.main.upgrade() {
+                        merged = main.get_merged_workspace();
                         main.set_save_confirmation_visible(true);
                         show_preview_window(&main);
                     }
                     if let Some(dialog) = self.save_confirmation.upgrade() {
-                        let preview = self.main.upgrade();
                         dialog.set_project_name(project_name.into());
-                        match preview {
-                            Some(main) => {
-                                let _ = show_centered_and_redraw(&dialog, &main);
+                        // The merged layout hides the preview window, so the
+                        // timeline is the window the dialog belongs over there;
+                        // everywhere else it stays over the preview window.
+                        let centered = match (merged, self.timeline.upgrade()) {
+                            (true, Some(timeline)) if timeline.window().is_visible() => {
+                                show_centered_and_redraw(&dialog, &timeline)
                             }
-                            None => {
-                                let _ = show_and_redraw(&dialog);
-                            }
-                        }
+                            _ => match self.main.upgrade() {
+                                Some(main) => show_centered_and_redraw(&dialog, &main),
+                                None => show_and_redraw(&dialog),
+                            },
+                        };
+                        let _ = centered;
                     }
                     if let Some(timeline) = self.timeline.upgrade() {
                         timeline.set_save_confirmation_visible(true);
@@ -709,7 +721,21 @@ impl LifecycleUi {
             self.timeline.upgrade(),
             self.object_settings.upgrade(),
         ) {
+            let merged_before = timeline.get_preview_visible();
             sync_timeline_runtime_settings(&main, &timeline, &object_settings, &settings);
+            // Preferences can flip the merged layout too, and that has to move
+            // the preview window like the View-menu toggle does. Only a real
+            // change reconciles, so an unrelated Apply does not reopen a preview
+            // window the user closed.
+            if timeline.get_preview_visible() != merged_before {
+                // The launcher screen has no workspace to present, so only the
+                // flag that decides what a later project open shows is updated.
+                if self.model.borrow().launcher_visible() {
+                    main.set_merged_workspace(timeline.get_preview_visible());
+                } else {
+                    sync_workspace_presentation(&main, &timeline);
+                }
+            }
         }
         let theme_index = system_theme_index(&settings);
         // Native window chrome follows the same choice as the Slint palette, so

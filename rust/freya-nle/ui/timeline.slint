@@ -86,6 +86,18 @@ export component TimelineWindow inherits Window {
     // updates the value; a fixed length keeps the binding out of the layout's
     // own height calculation (a ratio read of `root.height` there forms a loop).
     in-out property <length> preview-pane-height: 320px;
+    // The pane keeps its height while the window is resized, so a window that
+    // got shorter would otherwise leave the ruler and the layers with less than
+    // the 240px the layout reserves for them.
+    changed height => {
+        if (root.preview-visible) {
+            root.preview-pane-height = clamp(
+                root.preview-pane-height,
+                120px,
+                root.preview-height-ceiling()
+            );
+        }
+    }
     // Footer readings. The host projects the selected scene alongside the
     // playhead, mirroring AviUtl2's footer format (style.conf [Format]):
     // time/frame on the left, scene/resolution/rate on the right.
@@ -188,10 +200,19 @@ export component TimelineWindow inherits Window {
             ? 2
             : root.ruler-tick-pixels >= 18 ? 4 : 8;
 
+    // Tallest the merged preview pane may get. It shares the window with the
+    // ruler and the layer area, which keep 240px, and is capped at 720px on its
+    // own; the 120px floor holds even in a window too short for the subtraction.
+    // Only event handlers call this: a binding that read `root.height` here would
+    // feed the layout's own height calculation.
+    pure function preview-height-ceiling() -> length {
+        return clamp(root.height - 240px, 120px, 720px);
+    }
+
     pure function footer-left-text() -> string {
         return TimeFormat.timecode(root.playhead, root.scene-frame-rate)
-            + "  /  " + TimeFormat.timecode(root.duration, root.scene-frame-rate)
-            + "   |   " + "\{root.playhead} / \{root.duration}";
+            + "  /  " + TimeFormat.timecode(root.playback-duration, root.scene-frame-rate)
+            + "   |   " + "\{root.playhead} / \{root.playback-duration}";
     }
 
     pure function footer-right-text() -> string {
@@ -359,7 +380,11 @@ export component TimelineWindow inherits Window {
                 title: @tr("Taller preview");
                 enabled: root.preview-visible;
                 activated => {
-                    root.preview-pane-height = clamp(root.preview-pane-height + 40px, 120px, 720px);
+                    root.preview-pane-height = clamp(
+                        root.preview-pane-height + 40px,
+                        120px,
+                        root.preview-height-ceiling()
+                    );
                     root.preview-height-changed(root.preview-pane-height / 1px);
                 }
             }
@@ -835,7 +860,7 @@ export component TimelineWindow inherits Window {
                                 self.start-height
                                     + (self.absolute-position.y + self.mouse-y - self.start-y),
                                 120px,
-                                max(120px, root.height - 240px)
+                                root.preview-height-ceiling()
                             );
                         }
                         if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {

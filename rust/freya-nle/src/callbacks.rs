@@ -24,8 +24,8 @@ use crate::playback::AudioPlaybackRuntime;
 use crate::projection::{sync_transport_weak, sync_weak_windows, update_vec_model};
 use crate::settings::{
     apply_system_settings, parse_finite_f64, parse_i32_unbounded, parse_required_f64,
-    parse_required_i32, project_defaults, save_timeline_preview_settings, sync_project_settings,
-    sync_scene_settings, sync_system_settings, timeline_last_layer,
+    parse_required_i32, preview_pane_max_height, project_defaults, save_timeline_preview_settings,
+    sync_project_settings, sync_scene_settings, sync_system_settings, timeline_last_layer,
 };
 use crate::shortcuts::sync_timeline_zoom_settings;
 use crate::{MainWindow, TimelineMediaDropResult, TimelineWindow};
@@ -2813,7 +2813,10 @@ pub(super) fn install_callbacks(
         let Some(timeline) = adjust_preview_timeline.upgrade() else {
             return;
         };
-        let next = (timeline.get_preview_pane_height() + delta).clamp(120.0, 720.0);
+        // The pane cannot take the room the ruler and the layers need, so the
+        // ceiling follows the window like the divider drag does.
+        let ceiling = preview_pane_max_height(&timeline) as f32;
+        let next = (timeline.get_preview_pane_height() + delta).clamp(120.0, ceiling);
         timeline.set_preview_pane_height(next);
         if let Err(error) =
             save_timeline_preview_settings(&adjust_preview_settings, None, Some(next))
@@ -2870,10 +2873,11 @@ pub(super) fn install_callbacks(
         };
         let visible = !timeline.get_preview_visible();
         timeline.set_preview_visible(visible);
+        // Flipping the pane is also a workspace switch, so the preview window
+        // follows the same path the merged/separate actions use.
         if let Some(main) = preview_toggle_main.upgrade() {
-            main.set_merged_workspace(visible);
+            crate::lifecycle::sync_workspace_presentation(&main, &timeline);
         }
-        crate::lifecycle::ensure_timeline_height_for_preview(&timeline);
         // The menu toggle is the quick path, so it writes the preference the
         // settings dialog uses instead of keeping a session-only state.
         if let Err(error) =

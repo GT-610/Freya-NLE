@@ -166,12 +166,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .bool_value("timelinePreviewVisible", false);
     timeline.set_preview_visible(merged_workspace);
     main.set_merged_workspace(merged_workspace);
+    // A saved geometry from before the merged layout can be shorter than the
+    // pane needs; grow it first, so the height below is bounded by the window
+    // the user actually gets instead of the saved short one.
+    lifecycle::ensure_timeline_height_for_preview(&timeline);
     timeline.set_preview_pane_height(
         settings::preview_pane_height(&timeline, &settings.borrow()) as f32
     );
-    // A saved geometry from before the merged layout can be shorter than the
-    // pane needs; grow it so the transport bar is not clipped on launch.
-    lifecycle::ensure_timeline_height_for_preview(&timeline);
     restore_window_geometry(
         save_confirmation.window(),
         &settings.borrow(),

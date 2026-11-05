@@ -150,18 +150,24 @@ pub(super) fn sync_timeline_runtime_settings(
     object_settings.set_sidebar_on_right(settings.bool_value("settingDialogSidebarRight", false));
 }
 
-/// Height for the merged preview pane.
+/// Tallest the merged preview pane may get in this window.
 ///
-/// The saved value, bounded by the window like the divider drag is: at least
-/// 120px, at most 720px, and never more than the window height minus the 240px
-/// the divider keeps for the layer area.
-pub(super) fn preview_pane_height(timeline: &TimelineWindow, settings: &SettingsStore) -> i32 {
-    let requested = settings
-        .i32_value("timelinePreviewHeight", 320)
-        .clamp(120, 720);
+/// The pane competes with the ruler and the layer area for one window, so the
+/// ceiling is 720px and never more than the window height minus the 240px the
+/// rest of the timeline needs. The 120px floor wins in a window too short for
+/// the subtraction, because the pane cannot be smaller than that either.
+pub(super) fn preview_pane_max_height(timeline: &TimelineWindow) -> i32 {
     let window = timeline.window();
     let available = window.size().to_logical(window.scale_factor()).height as i32 - 240;
-    requested.min(available.max(120))
+    available.clamp(120, 720)
+}
+
+/// Height for the merged preview pane.
+///
+/// The saved value, bounded by the window like the divider drag is.
+pub(super) fn preview_pane_height(timeline: &TimelineWindow, settings: &SettingsStore) -> i32 {
+    let requested = settings.i32_value("timelinePreviewHeight", 320);
+    requested.clamp(120, preview_pane_max_height(timeline))
 }
 
 /// Persists the merged-preview preferences.
