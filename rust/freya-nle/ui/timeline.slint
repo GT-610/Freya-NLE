@@ -10,6 +10,7 @@ import {
     ObjectCatalogMenuCategoryData,
     MediaBinEntryData,
     MediaBinGroupData,
+    TimelineMarkData,
     TimelineToolFeedback,
 } from "models.slint";
 import { FooterBar, PanelHeader, TimeFormat } from "chrome.slint";
@@ -42,6 +43,9 @@ export component TimelineWindow inherits Window {
     in property <[SceneTabData]> scene-tabs;
     in property <[TimelineClipData]> clips;
     in property <[LayerData]> layers;
+    // Frame marks of the edited scene, already ordered by frame.
+    in property <[TimelineMarkData]> marks;
+    in property <bool> mark-at-playhead: false;
     in property <[MediaBinEntryData]> media-entries;
     in property <[MediaBinGroupData]> media-groups;
     in property <[string]> media-group-names;
@@ -232,6 +236,13 @@ export component TimelineWindow inherits Window {
     // Emitted when the merged preview height settles, so the host can keep it.
     callback preview-height-changed(float);
     callback seek(float);
+    callback toggle-mark();
+    callback remove-mark();
+    callback edit-mark-note();
+    callback next-mark();
+    callback previous-mark();
+    callback clear-marks();
+    callback seek-to-mark(int);
     callback toggle-preview();
     callback previous-frame();
     callback toggle-playback();
@@ -360,6 +371,54 @@ export component TimelineWindow inherits Window {
             MenuItem { title: @tr("Roll Edit"); checkable: true; checked: root.edit-tool == "roll"; activated => { root.edit-tool = "roll"; } }
             MenuItem { title: @tr("Slide Clip"); checkable: true; checked: root.edit-tool == "slide"; activated => { root.edit-tool = "slide"; } }
             MenuItem { title: @tr("Slip Media"); checkable: true; checked: root.edit-tool == "slip"; activated => { root.edit-tool = "slip"; } }
+            MenuSeparator { }
+            // AviUtl2 keeps marks on the layer-edit ruler and has a mark list
+            // that jumps between them. The list doubles as this submenu so a
+            // mark never needs a second window to be reached.
+            Menu {
+                title: @tr("Marks");
+                MenuItem {
+                    title: @tr("Mark Current Frame");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[34] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible && !root.mark-at-playhead;
+                    activated => { root.toggle-mark(); }
+                }
+                MenuItem {
+                    title: @tr("Remove Mark");
+                    enabled: !root.save-confirmation-visible && root.mark-at-playhead;
+                    activated => { root.remove-mark(); }
+                }
+                MenuItem {
+                    title: @tr("Edit Mark Note...");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[35] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible && root.mark-at-playhead;
+                    activated => { root.edit-mark-note(); }
+                }
+                MenuSeparator { }
+                MenuItem {
+                    title: @tr("Next Mark");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[36] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.next-mark(); }
+                }
+                MenuItem {
+                    title: @tr("Previous Mark");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[37] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.previous-mark(); }
+                }
+                MenuSeparator { }
+                MenuItem {
+                    title: @tr("Clear Marks");
+                    enabled: !root.save-confirmation-visible && root.marks.length > 0;
+                    activated => { root.clear-marks(); }
+                }
+                for mark in root.marks : MenuItem {
+                    title: mark.label;
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.seek-to-mark(mark.frame); }
+                }
+            }
         }
         Menu {
             title: @tr("Settings");
@@ -976,6 +1035,22 @@ export component TimelineWindow inherits Window {
                         font-family: "Monospace";
                         font-size: 0.72rem;
                         vertical-alignment: center;
+                    }
+                }
+                // Marks sit above the ticks but below the playhead: a short bar
+                // at the top edge plus a faint rule so both the exact frame and
+                // the marked position stay readable at any zoom.
+                for mark in root.marks : Rectangle {
+                    x: mark.frame * root.pixels-per-frame * 1px;
+                    width: 1px;
+                    height: 100%;
+                    background: AppTheme.mark.transparentize(0.58);
+                    Rectangle {
+                        x: -2px;
+                        y: 0px;
+                        width: 5px;
+                        height: 4px;
+                        background: AppTheme.mark;
                     }
                 }
                 Rectangle {

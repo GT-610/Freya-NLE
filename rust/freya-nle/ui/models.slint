@@ -14,6 +14,14 @@ export struct MissingMediaData {
     name: string,
 }
 
+// One frame mark. `label` is the preformatted `HH:MM:SS.FF · note` reading the
+// menus show; the ruler only needs `frame`.
+export struct TimelineMarkData {
+    frame: int,
+    label: string,
+    note: string,
+}
+
 export struct SystemPluginSettingData {
     format-name: string,
     enabled: bool,

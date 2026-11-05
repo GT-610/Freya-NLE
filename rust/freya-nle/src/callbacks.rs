@@ -50,6 +50,61 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+/// What the mark menu and its shortcuts can do to the edited scene.
+#[derive(Clone, Copy)]
+enum MarkCommand {
+    Toggle,
+    Remove,
+    Next,
+    Previous,
+    Clear,
+    Seek(i32),
+}
+
+/// The workspace plus the two windows whose menus render the mark state.
+///
+/// Both windows own the same menu bar, so every command is wired twice; keeping
+/// the handles in one copyable value avoids fourteen near-identical closures.
+#[derive(Clone)]
+struct MarkActions {
+    model: Rc<RefCell<ApplicationModel>>,
+    main: slint::Weak<MainWindow>,
+    timeline: slint::Weak<TimelineWindow>,
+}
+
+impl MarkActions {
+    fn run(&self, command: MarkCommand) {
+        {
+            let mut model = self.model.borrow_mut();
+            let Some(workspace) = model.current_workspace_mut() else {
+                return;
+            };
+            match command {
+                MarkCommand::Toggle => {
+                    workspace.toggle_mark_at_playhead();
+                }
+                MarkCommand::Remove => {
+                    let frame = workspace.playhead();
+                    workspace.remove_mark(frame);
+                }
+                MarkCommand::Next => {
+                    workspace.seek_to_next_mark();
+                }
+                MarkCommand::Previous => {
+                    workspace.seek_to_previous_mark();
+                }
+                MarkCommand::Clear => {
+                    workspace.clear_marks();
+                }
+                MarkCommand::Seek(frame) => {
+                    workspace.seek_to_mark(frame);
+                }
+            }
+        }
+        sync_weak_windows(&self.main, &self.timeline, &self.model);
+    }
+}
+
 pub(super) fn install_timeline_file_drop(
     main: &MainWindow,
     timeline: &TimelineWindow,
@@ -370,6 +425,7 @@ pub(super) fn install_callbacks(
         main,
         timeline,
         save_confirmation,
+        mark_note,
         object_settings,
         easing,
         project_settings,
@@ -379,6 +435,70 @@ pub(super) fn install_callbacks(
         plugin_permissions,
         about,
     } = windows;
+    // Frame marks: both windows carry the menu, so both forward the same
+    // commands. The note dialog is shared and edits the mark under the playhead.
+    let mark_actions = MarkActions {
+        model: model.clone(),
+        main: main.as_weak(),
+        timeline: timeline.as_weak(),
+    };
+    let main_mark = mark_actions.clone();
+    main.on_toggle_mark(move || main_mark.run(MarkCommand::Toggle));
+    let main_mark = mark_actions.clone();
+    main.on_remove_mark(move || main_mark.run(MarkCommand::Remove));
+    let main_mark = mark_actions.clone();
+    main.on_next_mark(move || main_mark.run(MarkCommand::Next));
+    let main_mark = mark_actions.clone();
+    main.on_previous_mark(move || main_mark.run(MarkCommand::Previous));
+    let main_mark = mark_actions.clone();
+    main.on_clear_marks(move || main_mark.run(MarkCommand::Clear));
+    let main_mark = mark_actions.clone();
+    main.on_seek_to_mark(move |frame| main_mark.run(MarkCommand::Seek(frame)));
+    let timeline_mark = mark_actions.clone();
+    timeline.on_toggle_mark(move || timeline_mark.run(MarkCommand::Toggle));
+    let timeline_mark = mark_actions.clone();
+    timeline.on_remove_mark(move || timeline_mark.run(MarkCommand::Remove));
+    let timeline_mark = mark_actions.clone();
+    timeline.on_next_mark(move || timeline_mark.run(MarkCommand::Next));
+    let timeline_mark = mark_actions.clone();
+    timeline.on_previous_mark(move || timeline_mark.run(MarkCommand::Previous));
+    let timeline_mark = mark_actions.clone();
+    timeline.on_clear_marks(move || timeline_mark.run(MarkCommand::Clear));
+    let timeline_mark = mark_actions;
+    timeline.on_seek_to_mark(move |frame| timeline_mark.run(MarkCommand::Seek(frame)));
+
+    let note_ui = lifecycle_ui.clone();
+    main.on_edit_mark_note(move || note_ui.edit_mark_note());
+    let note_ui = lifecycle_ui.clone();
+    timeline.on_edit_mark_note(move || note_ui.edit_mark_note());
+
+    let note_save_model = model.clone();
+    let note_save_main = main.as_weak();
+    let note_save_timeline = timeline.as_weak();
+    let note_save_window = mark_note.as_weak();
+    mark_note.on_save_note(move |frame, note| {
+        if let Some(workspace) = note_save_model.borrow_mut().current_workspace_mut() {
+            workspace.set_mark_note(frame, note.as_str());
+        }
+        if let Some(window) = note_save_window.upgrade() {
+            let _ = window.hide();
+        }
+        sync_weak_windows(&note_save_main, &note_save_timeline, &note_save_model);
+    });
+    let note_cancel_window = mark_note.as_weak();
+    mark_note.on_cancel_note(move || {
+        if let Some(window) = note_cancel_window.upgrade() {
+            let _ = window.hide();
+        }
+    });
+    let note_close_window = mark_note.as_weak();
+    mark_note.window().on_close_requested(move || {
+        if let Some(window) = note_close_window.upgrade() {
+            let _ = window.hide();
+        }
+        CloseRequestResponse::HideWindow
+    });
+
     let object_settings_ui = ObjectSettingsUi {
         main: main.as_weak(),
         timeline: timeline.as_weak(),

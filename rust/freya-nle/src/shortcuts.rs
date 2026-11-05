@@ -47,6 +47,10 @@ pub(super) enum ShortcutAction {
     RemoveScene,
     ToggleLayerLock,
     ToggleLayerVisibility,
+    ToggleMark,
+    MarkNote,
+    NextMark,
+    PreviousMark,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +237,7 @@ fn configured_shortcut_action(
     input: &ShortcutInput,
     editor_window: bool,
 ) -> Option<ShortcutAction> {
-    const BINDINGS: [(ShortcutAction, &str, &str, bool); 34] = [
+    const BINDINGS: [(ShortcutAction, &str, &str, bool); 38] = [
         (ShortcutAction::NewProject, "project.new", "Ctrl+N", false),
         (ShortcutAction::OpenProject, "project.open", "Ctrl+O", false),
         (
@@ -353,6 +357,25 @@ fn configured_shortcut_action(
             false,
         ),
         (ShortcutAction::JumpEnd, "transport.jumpEnd", "End", false),
+        (ShortcutAction::ToggleMark, "timeline.toggleMark", "M", true),
+        (
+            ShortcutAction::MarkNote,
+            "timeline.markNote",
+            "Shift+M",
+            true,
+        ),
+        (
+            ShortcutAction::NextMark,
+            "timeline.nextMark",
+            "Ctrl+Alt+Right",
+            true,
+        ),
+        (
+            ShortcutAction::PreviousMark,
+            "timeline.previousMark",
+            "Ctrl+Alt+Left",
+            true,
+        ),
     ];
 
     BINDINGS
@@ -674,6 +697,7 @@ fn dispatch_shortcut(
             };
             step_timeline_zoom(&timeline_window, &settings.borrow(), direction);
         }
+        ShortcutAction::MarkNote => timeline_window.invoke_edit_mark_note(),
         ShortcutAction::Copy
         | ShortcutAction::Cut
         | ShortcutAction::Paste
@@ -688,7 +712,10 @@ fn dispatch_shortcut(
         | ShortcutAction::NudgeRight
         | ShortcutAction::RemoveScene
         | ShortcutAction::ToggleLayerLock
-        | ShortcutAction::ToggleLayerVisibility => {
+        | ShortcutAction::ToggleLayerVisibility
+        | ShortcutAction::ToggleMark
+        | ShortcutAction::NextMark
+        | ShortcutAction::PreviousMark => {
             if let Some(workspace) = model.borrow_mut().current_workspace_mut() {
                 let skimmer_targets = use_skimmer && timeline_window.get_skimmer_visible();
                 let maximum_layers = timeline_window.get_maximum_layers();
@@ -771,6 +798,21 @@ fn dispatch_shortcut(
                     }
                     ShortcutAction::ToggleLayerVisibility => {
                         workspace.toggle_layer_visibility(selected_layer);
+                    }
+                    ShortcutAction::ToggleMark => {
+                        workspace.toggle_mark_at_playhead();
+                    }
+                    ShortcutAction::NextMark => {
+                        // A mark jump can cross the whole scene, so the queued
+                        // audio has to restart from the new position.
+                        if workspace.seek_to_next_mark() {
+                            audio_playback.borrow_mut().reset_queue();
+                        }
+                    }
+                    ShortcutAction::PreviousMark => {
+                        if workspace.seek_to_previous_mark() {
+                            audio_playback.borrow_mut().reset_queue();
+                        }
                     }
                     _ => unreachable!("direct timeline shortcut is exhaustively matched"),
                 }

@@ -226,6 +226,10 @@ export component SystemSettingsWindow inherits Window {
         if action-id == "timeline.removeScene" { return @tr("Delete Current Scene"); }
         if action-id == "timeline.layerLock" { return @tr("Lock/Unlock Current Layer"); }
         if action-id == "timeline.layerHide" { return @tr("Show/Hide Current Layer"); }
+        if action-id == "timeline.toggleMark" { return @tr("Mark Current Frame"); }
+        if action-id == "timeline.markNote" { return @tr("Edit Mark Note"); }
+        if action-id == "timeline.nextMark" { return @tr("Next Mark"); }
+        if action-id == "timeline.previousMark" { return @tr("Previous Mark"); }
         return action-id;
     }
 

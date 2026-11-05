@@ -143,6 +143,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let main = MainWindow::new()?;
     let timeline = TimelineWindow::new()?;
     let save_confirmation = SaveConfirmationWindow::new()?;
+    let mark_note = MarkNoteWindow::new()?;
     launcher
         .window()
         .set_size(slint::LogicalSize::new(700.0, 500.0));
@@ -178,6 +179,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &settings.borrow(),
         "saveConfirmation",
         WindowGeometry::new(400, 300, 460, 200),
+    );
+    restore_window_geometry(
+        mark_note.window(),
+        &settings.borrow(),
+        "markNote",
+        WindowGeometry::new(400, 320, 440, 190),
     );
     let object_settings = ObjectSettingsWindow::new()?;
     let easing = EasingConfigWindow::new()?;
@@ -322,6 +329,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         main: main.as_weak(),
         timeline: timeline.as_weak(),
         save_confirmation: save_confirmation.as_weak(),
+        mark_note: mark_note.as_weak(),
         object_settings: object_settings.as_weak(),
         easing: easing.as_weak(),
         project_settings: project_settings.as_weak(),
@@ -349,6 +357,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             main: &main,
             timeline: &timeline,
             save_confirmation: &save_confirmation,
+            mark_note: &mark_note,
             object_settings: &object_settings,
             easing: &easing,
             project_settings: &project_settings,

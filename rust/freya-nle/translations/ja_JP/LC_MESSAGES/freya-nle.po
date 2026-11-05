@@ -1423,3 +1423,33 @@ msgstr "{} 個のオブジェクトを選択"
 
 msgid "‹ Back"
 msgstr "‹ 戻る"
+
+msgid "Marks"
+msgstr "マーク"
+
+msgid "Mark Current Frame"
+msgstr "現在のフレームをマーク"
+
+msgid "Remove Mark"
+msgstr "マークを削除"
+
+msgid "Edit Mark Note..."
+msgstr "マークのメモを変更..."
+
+msgid "Edit Mark Note"
+msgstr "マークのメモを変更"
+
+msgid "Next Mark"
+msgstr "次のマークに移動"
+
+msgid "Previous Mark"
+msgstr "前のマークに移動"
+
+msgid "Clear Marks"
+msgstr "マークをすべて削除"
+
+msgid "Mark Note"
+msgstr "マークのメモ"
+
+msgid "Note for this mark (optional)"
+msgstr "このマークのメモ(任意)"

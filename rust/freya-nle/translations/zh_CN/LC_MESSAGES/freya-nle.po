@@ -1423,3 +1423,33 @@ msgstr "已选 {} 个对象"
 
 msgid "‹ Back"
 msgstr "‹ 返回"
+
+msgid "Marks"
+msgstr "标记"
+
+msgid "Mark Current Frame"
+msgstr "标记当前帧"
+
+msgid "Remove Mark"
+msgstr "删除标记"
+
+msgid "Edit Mark Note..."
+msgstr "编辑标记备注..."
+
+msgid "Edit Mark Note"
+msgstr "编辑标记备注"
+
+msgid "Next Mark"
+msgstr "下一个标记"
+
+msgid "Previous Mark"
+msgstr "上一个标记"
+
+msgid "Clear Marks"
+msgstr "清除所有标记"
+
+msgid "Mark Note"
+msgstr "标记备注"
+
+msgid "Note for this mark (optional)"
+msgstr "该标记的备注（可选）"

@@ -60,6 +60,9 @@ export global AppTheme {
     out property <brush> grid-line: dark ? #ffffff16 : #00000012;
     out property <brush> timecode: dark ? #e8e8ec : #23252b;
     out property <brush> playhead: dark ? #c83030 : #b82828;
+    // AviUtl2 paints frame marks green (`style.conf` [Color] MarkFrame); the
+    // light value is darkened so the tick stays readable on a light ruler.
+    out property <brush> mark: dark ? #68c868 : #1f7a33;
     out property <brush> footer-background: dark ? #304080 : #dce3f2;
     out property <brush> footer-foreground: dark ? #e8ebf7 : #1d2433;
     out property <brush> footer-progress: dark ? #b84848 : #9c3a3a;

@@ -1,4 +1,4 @@
-import { ProjectTabData, MissingMediaData } from "models.slint";
+import { ProjectTabData, MissingMediaData, TimelineMarkData } from "models.slint";
 import { Button, ScrollView } from "std-widgets.slint";
 import { FooterBar } from "chrome.slint";
 import { AppTheme } from "theme.slint";
@@ -16,6 +16,10 @@ export component MainWindow inherits Window {
     forward-focus: main-shortcuts;
 
     in property <[ProjectTabData]> project-tabs;
+    // Both windows carry the same menu bar, so the mark list is projected to
+    // both instead of disappearing when focus moves to the preview window.
+    in property <[TimelineMarkData]> marks;
+    in property <bool> mark-at-playhead: false;
     in property <[keys]> menu-shortcuts;
     in property <[MissingMediaData]> missing-media;
     in property <int> current-project: -1;
@@ -55,6 +59,13 @@ export component MainWindow inherits Window {
     callback quit-requested();
     callback undo();
     callback redo();
+    callback toggle-mark();
+    callback remove-mark();
+    callback edit-mark-note();
+    callback next-mark();
+    callback previous-mark();
+    callback clear-marks();
+    callback seek-to-mark(int);
     callback show-project-settings();
     callback show-system-settings();
     callback show-timeline();
@@ -112,6 +123,53 @@ export component MainWindow inherits Window {
             MenuItem { title: @tr("Roll Edit"); activated => { root.choose-edit-tool("roll"); } }
             MenuItem { title: @tr("Slide Clip"); activated => { root.choose-edit-tool("slide"); } }
             MenuItem { title: @tr("Slip Media"); activated => { root.choose-edit-tool("slip"); } }
+            MenuSeparator { }
+            // The timeline owns the mark commands; this window forwards them so
+            // the menu bar reads the same whichever editor window has focus.
+            Menu {
+                title: @tr("Marks");
+                MenuItem {
+                    title: @tr("Mark Current Frame");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[34] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible && !root.mark-at-playhead;
+                    activated => { root.toggle-mark(); }
+                }
+                MenuItem {
+                    title: @tr("Remove Mark");
+                    enabled: !root.save-confirmation-visible && root.mark-at-playhead;
+                    activated => { root.remove-mark(); }
+                }
+                MenuItem {
+                    title: @tr("Edit Mark Note...");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[35] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible && root.mark-at-playhead;
+                    activated => { root.edit-mark-note(); }
+                }
+                MenuSeparator { }
+                MenuItem {
+                    title: @tr("Next Mark");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[36] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.next-mark(); }
+                }
+                MenuItem {
+                    title: @tr("Previous Mark");
+                    shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[37] : root.no-shortcut;
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.previous-mark(); }
+                }
+                MenuSeparator { }
+                MenuItem {
+                    title: @tr("Clear Marks");
+                    enabled: !root.save-confirmation-visible && root.marks.length > 0;
+                    activated => { root.clear-marks(); }
+                }
+                for mark in root.marks : MenuItem {
+                    title: mark.label;
+                    enabled: !root.save-confirmation-visible;
+                    activated => { root.seek-to-mark(mark.frame); }
+                }
+            }
         }
         Menu {
             title: @tr("Settings");

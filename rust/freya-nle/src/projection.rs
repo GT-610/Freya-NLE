@@ -4,7 +4,7 @@ use crate::localization::{localized, localized_effect_metadata, status_line};
 use crate::object_settings::finite_f32;
 use crate::{
     LayerData, MainWindow, MediaBinEntryData, MediaBinGroupData, MissingMediaData, ProjectTabData,
-    SceneTabData, TimelineClipData, TimelineWindow,
+    SceneTabData, TimelineClipData, TimelineMarkData, TimelineWindow,
 };
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::{ApplicationModel, MAX_TIMELINE_LAYERS};
@@ -53,6 +53,9 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         update_vec_model(&timeline.get_layers(), Vec::new());
         update_vec_model(&timeline.get_media_entries(), Vec::new());
         update_vec_model(&timeline.get_media_groups(), Vec::new());
+        // No project means no marks: both menus would otherwise keep the last
+        // project's list and offer commands that cannot run.
+        sync_marks(main, timeline, model);
         timeline.set_playhead(0);
         timeline.set_duration(0);
         timeline.set_playback_duration(0);
@@ -310,6 +313,37 @@ pub(super) fn update_vec_model<T: Clone + 'static>(model: &ModelRc<T>, rows: Vec
     }
 }
 
+/// Projects the edited scene's frame marks and whether the playhead sits on one.
+///
+/// Both windows own the same menu bar, so both get the list; the ruler reads the
+/// frame numbers and the mark submenu reads the preformatted labels.
+fn sync_marks(main: &MainWindow, timeline: &TimelineWindow, model: &ApplicationModel) {
+    let Some(workspace) = model.current_workspace() else {
+        update_vec_model(&main.get_marks(), Vec::<TimelineMarkData>::new());
+        update_vec_model(&timeline.get_marks(), Vec::<TimelineMarkData>::new());
+        main.set_mark_at_playhead(false);
+        timeline.set_mark_at_playhead(false);
+        return;
+    };
+    let rate = workspace
+        .scene_settings(workspace.selected_scene())
+        .map_or(60, |scene| scene_frame_rate(scene.fps));
+    let marks = workspace
+        .scene_marks()
+        .into_iter()
+        .map(|mark| TimelineMarkData {
+            frame: mark.frame,
+            label: SharedString::from(mark_label(mark.frame, rate, &mark.note)),
+            note: SharedString::from(mark.note),
+        })
+        .collect::<Vec<_>>();
+    let at_playhead = workspace.mark_at_playhead().is_some();
+    update_vec_model(&main.get_marks(), marks.clone());
+    update_vec_model(&timeline.get_marks(), marks);
+    main.set_mark_at_playhead(at_playhead);
+    timeline.set_mark_at_playhead(at_playhead);
+}
+
 pub(super) fn sync_transport(
     main: &MainWindow,
     timeline: &TimelineWindow,
@@ -365,6 +399,9 @@ pub(super) fn sync_transport(
         timeline.set_scene_frame_rate(60);
         main.set_frame_rate(60);
     }
+    // Mark state follows the playhead, so it belongs to the transport sync
+    // rather than to the project-wide sync.
+    sync_marks(main, timeline, model);
 }
 
 /// Nominal frame rate for the timecode readings.
@@ -404,4 +441,40 @@ pub(super) fn frame_counter_text(playhead: i32, duration: i32) -> String {
     let current = playhead.max(0);
     let width = total.to_string().len();
     format!("{current:0>width$} / {total}")
+}
+
+/// `HH:MM:SS.FF` for a mark, matching `TimeFormat.timecode` in the ruler.
+///
+/// The mark menu and the note dialog show this reading instead of a raw frame
+/// number, so a mark is recognisable away from the ruler.
+pub(super) fn mark_timecode(frame: i32, rate: i32) -> String {
+    let rate = rate.max(1);
+    let frame = frame.max(0);
+    let total_seconds = frame / rate;
+    format!(
+        "{:02}:{:02}:{:02}.{:02}",
+        total_seconds / 3600,
+        (total_seconds / 60) % 60,
+        total_seconds % 60,
+        frame % rate
+    )
+}
+
+/// Menu label for one mark: its timecode, then the note when there is one.
+///
+/// Long notes are clipped because a menu entry has no ellipsis of its own; the
+/// full note stays in the document and in the note dialog.
+pub(super) fn mark_label(frame: i32, rate: i32, note: &str) -> String {
+    const NOTE_CHARS: usize = 40;
+    let time = mark_timecode(frame, rate);
+    let note = note.trim();
+    if note.is_empty() {
+        return time;
+    }
+    let mut label = format!("{time} · ");
+    label.extend(note.chars().take(NOTE_CHARS));
+    if note.chars().count() > NOTE_CHARS {
+        label.push('…');
+    }
+    label
 }

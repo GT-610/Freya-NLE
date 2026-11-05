@@ -46,11 +46,12 @@ fn main() {
         "settings" => (900u32, 650u32),
         "system" => (760u32, 680u32),
         "confirm" => (460u32, 200u32),
+        "mark" => (440u32, 190u32),
         "export" => (700u32, 700u32),
         "packages" => (760u32, 520u32),
         other => {
             eprintln!(
-                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export` or `packages`"
+                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm` or `mark`"
             );
             std::process::exit(2);
         }
@@ -124,8 +125,16 @@ fn main() {
             ui.show().expect("show the package manager window");
             save(&window, width, height, &output_name("packages", preference));
         }
-        "system" => {
-            let ui = SystemSettingsWindow::new().expect("create the system settings window");
+        "mark" => {
+            let ui = MarkNoteWindow::new().expect("create the mark note window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_frame(240);
+            ui.set_frame_text("Frame 240  ·  00:00:08.00".into());
+            ui.set_note("chorus begins".into());
+            ui.show().expect("show the mark note window");
+            save(&window, width, height, &output_name("mark", preference));
+        }
+        "system" => {            let ui = SystemSettingsWindow::new().expect("create the system settings window");
             ui.global::<AppTheme>().set_preference_index(preference);
             ui.set_tab_index(2);
             ui.show().expect("show the system settings window");
@@ -480,6 +489,26 @@ fn populate_timeline(ui: &TimelineWindow) {
     ui.set_duration(900);
     ui.set_playback_duration(600);
     ui.set_playhead(240);
+    // Three marks, one of them under the playhead, so the ruler ticks and the
+    // checked "mark at playhead" state are both visible in the snapshot.
+    ui.set_marks(ModelRc::new(VecModel::from(vec![
+        TimelineMarkData {
+            frame: 120,
+            label: "00:00:04.00 · intro".into(),
+            note: "intro".into(),
+        },
+        TimelineMarkData {
+            frame: 240,
+            label: "00:00:08.00 · chorus".into(),
+            note: "chorus".into(),
+        },
+        TimelineMarkData {
+            frame: 420,
+            label: "00:00:14.00 · outro".into(),
+            note: "outro".into(),
+        },
+    ])));
+    ui.set_mark_at_playhead(true);
     ui.set_selected_layer(0);
     ui.set_selected_clip_count(1);
     ui.set_pixels_per_frame(1.6);

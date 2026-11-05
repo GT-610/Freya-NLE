@@ -174,8 +174,8 @@ use crate::playback::{
     audio_queue_lead_frames, samples_for_timeline_frame, scene_fps, stereo_levels,
 };
 use crate::projection::{
-    frame_counter_text, scene_frame_rate, scene_resolution_text, speed_multiplier_text,
-    timeline_clip_style,
+    frame_counter_text, mark_label, mark_timecode, scene_frame_rate, scene_resolution_text,
+    speed_multiplier_text, timeline_clip_style,
 };
 use crate::settings::{
     SYSTEM_AUDIO_BLOCK_SIZES, SYSTEM_EXPORT_AUDIO_CODECS, SYSTEM_EXPORT_VIDEO_CODECS,
@@ -346,7 +346,17 @@ fn system_settings_choices_and_plugin_paths_match_the_qt_schema() {
         json!(["/plugins/one", "/plugins/two"])
     );
     assert_eq!(SYSTEM_PLUGIN_FORMATS.len(), 11);
-    assert_eq!(SYSTEM_SHORTCUT_ROWS.len(), 34);
+    assert_eq!(SYSTEM_SHORTCUT_ROWS.len(), 38);
+}
+
+#[test]
+fn mark_menu_accelerators_point_at_the_mark_rows() {
+    // The menu bars read accelerators by index, so the rows appended for marks
+    // must stay at the indices both windows use.
+    assert_eq!(SYSTEM_SHORTCUT_ROWS[34].0, "timeline.toggleMark");
+    assert_eq!(SYSTEM_SHORTCUT_ROWS[35].0, "timeline.markNote");
+    assert_eq!(SYSTEM_SHORTCUT_ROWS[36].0, "timeline.nextMark");
+    assert_eq!(SYSTEM_SHORTCUT_ROWS[37].0, "timeline.previousMark");
 }
 
 #[test]
@@ -1303,6 +1313,26 @@ fn frame_counter_zero_pads_like_qt() {
     assert_eq!(frame_counter_text(5, 0), "5 / 0");
     // A playhead past the duration never renders a negative number.
     assert_eq!(frame_counter_text(-3, 100), "000 / 100");
+}
+
+#[test]
+fn mark_timecodes_and_labels_follow_the_ruler_reading() {
+    assert_eq!(mark_timecode(0, 60), "00:00:00.00");
+    assert_eq!(mark_timecode(72, 60), "00:00:01.12");
+    // 3661 frames at 30 fps is 2 minutes 2 seconds and one frame.
+    assert_eq!(mark_timecode(3661, 30), "00:02:02.01");
+    // Negative frames and a zero rate clamp instead of producing nonsense.
+    assert_eq!(mark_timecode(-5, 0), "00:00:00.00");
+
+    assert_eq!(mark_label(30, 30, "  "), "00:00:01.00");
+    assert_eq!(mark_label(30, 30, "intro"), "00:00:01.00 · intro");
+    let long = "x".repeat(60);
+    let label = mark_label(0, 60, &long);
+    assert!(label.ends_with('…'), "a long note is clipped: {label}");
+    assert_eq!(
+        label.chars().filter(|character| *character == 'x').count(),
+        40
+    );
 }
 
 #[test]

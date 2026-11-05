@@ -37,7 +37,7 @@ pub(super) const SYSTEM_PLUGIN_FORMATS: [&str; 11] = [
     "LADSPA", "DSSI", "LV2", "VST2", "VST3", "CLAP", "SF2", "SFZ", "JSFX", "Effects", "Objects",
 ];
 
-pub(super) const SYSTEM_SHORTCUT_ROWS: [(&str, &str); 34] = [
+pub(super) const SYSTEM_SHORTCUT_ROWS: [(&str, &str); 38] = [
     ("project.new", "Ctrl+N"),
     ("project.open", "Ctrl+O"),
     ("project.save", "Ctrl+S"),
@@ -72,6 +72,10 @@ pub(super) const SYSTEM_SHORTCUT_ROWS: [(&str, &str); 34] = [
     ("timeline.removeScene", "Ctrl+Shift+Delete"),
     ("timeline.layerLock", "Ctrl+L"),
     ("timeline.layerHide", "Ctrl+H"),
+    ("timeline.toggleMark", "M"),
+    ("timeline.markNote", "Shift+M"),
+    ("timeline.nextMark", "Ctrl+Alt+Right"),
+    ("timeline.previousMark", "Ctrl+Alt+Left"),
 ];
 
 pub(super) fn system_theme_index(settings: &SettingsStore) -> i32 {

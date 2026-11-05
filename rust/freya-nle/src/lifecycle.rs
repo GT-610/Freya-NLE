@@ -16,10 +16,10 @@ use crate::playback::PreviewRuntime;
 use crate::projection::{sync_windows, update_vec_model};
 use crate::settings::{project_defaults, sync_timeline_runtime_settings, system_theme_index};
 use crate::{
-    AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, MainWindow, ObjectSettingsWindow,
-    PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow, ProjectRecoveryWindow,
-    ProjectSettingsWindow, RecentProjectData, RecoveryEntryData, SaveConfirmationWindow,
-    SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
+    AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, MainWindow, MarkNoteWindow,
+    ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow,
+    ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData, RecoveryEntryData,
+    SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::effect_catalog::EffectCatalog;
@@ -47,6 +47,7 @@ pub(super) struct LifecycleUi {
     pub(super) main: slint::Weak<MainWindow>,
     pub(super) timeline: slint::Weak<TimelineWindow>,
     pub(super) save_confirmation: slint::Weak<SaveConfirmationWindow>,
+    pub(super) mark_note: slint::Weak<MarkNoteWindow>,
     pub(super) object_settings: slint::Weak<ObjectSettingsWindow>,
     pub(super) easing: slint::Weak<EasingConfigWindow>,
     pub(super) project_settings: slint::Weak<ProjectSettingsWindow>,
@@ -112,6 +113,7 @@ pub(super) struct WindowRefs<'a> {
     pub(super) main: &'a MainWindow,
     pub(super) timeline: &'a TimelineWindow,
     pub(super) save_confirmation: &'a SaveConfirmationWindow,
+    pub(super) mark_note: &'a MarkNoteWindow,
     pub(super) object_settings: &'a ObjectSettingsWindow,
     pub(super) easing: &'a EasingConfigWindow,
     pub(super) project_settings: &'a ProjectSettingsWindow,
@@ -185,6 +187,53 @@ pub(super) enum WorkspaceOrigin {
 }
 
 impl LifecycleUi {
+    /// Shows the note editor for the mark under the playhead.
+    ///
+    /// The frame travels in the window, so the save path always edits the mark
+    /// the dialog displays rather than whatever is under the playhead later.
+    pub(super) fn edit_mark_note(&self) {
+        let Some(dialog) = self.mark_note.upgrade() else {
+            return;
+        };
+        let target = {
+            let model = self.model.borrow();
+            model.current_workspace().and_then(|workspace| {
+                workspace.mark_at_playhead().map(|mark| {
+                    let rate = workspace
+                        .scene_settings(workspace.selected_scene())
+                        .map_or(60, |scene| crate::projection::scene_frame_rate(scene.fps));
+                    (mark.frame, mark.note, rate)
+                })
+            })
+        };
+        let Some((frame, note, rate)) = target else {
+            return;
+        };
+        dialog.set_frame(frame);
+        let timecode = crate::projection::mark_timecode(frame, rate);
+        dialog.set_frame_text(SharedString::from(match current_ui_language() {
+            crate::localization::UiLanguage::English => format!("Frame {frame}  ·  {timecode}"),
+            crate::localization::UiLanguage::SimplifiedChinese => {
+                format!("帧 {frame}  ·  {timecode}")
+            }
+            crate::localization::UiLanguage::Japanese => {
+                format!("フレーム {frame}  ·  {timecode}")
+            }
+        }));
+        dialog.set_note(SharedString::from(note));
+        // The dialog belongs over whichever editor window is in front: the
+        // merged layout hides the preview window, so the timeline is the parent.
+        if let Some(timeline) = self.timeline.upgrade()
+            && timeline.window().is_visible()
+        {
+            let _ = show_centered_and_redraw(&dialog, &timeline);
+        } else if let Some(main) = self.main.upgrade() {
+            let _ = show_centered_and_redraw(&dialog, &main);
+        } else {
+            let _ = show_and_redraw(&dialog);
+        }
+    }
+
     pub(super) fn workspace_action(&self, action: &str, origin: WorkspaceOrigin) {
         let (Some(main), Some(timeline), Some(objects)) = (
             self.main.upgrade(),
@@ -324,6 +373,11 @@ impl LifecycleUi {
                     timeline.set_save_confirmation_visible(false);
                 }
                 if let Some(dialog) = self.save_confirmation.upgrade() {
+                    let _ = dialog.hide();
+                }
+                // A mark note belongs to the project it was opened for, so a save
+                // question or a project switch must not leave it on screen.
+                if let Some(dialog) = self.mark_note.upgrade() {
                     let _ = dialog.hide();
                 }
             }

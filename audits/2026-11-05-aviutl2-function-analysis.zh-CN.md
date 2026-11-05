@@ -315,7 +315,33 @@ B1 的边界：只加场景级数据与时间线呈现，不碰渲染管线、�
 
 ## 7. B1 实施记录
 
-（本轮完成后补齐：改动位置、验证命令与结果。）
+本轮在 `feat/aviutl2-function-parity` 上实现帧标记。数据、命令、呈现三层一起落地，
+没有改渲染管线与既有命令语义。
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| core | `freya-nle-core/src/project.rs` | `SceneDocument.marks` 与 `SceneMark`；归一化按帧排序、去重、丢弃负帧、备注上限 512 字符，标记上的扩展字段照常保留 |
+| core | `freya-nle-core/src/timeline_state.rs` | `SetSceneMarks` 请求：场景必须存在、帧非负且严格升序；相同列表被拒绝，不产生空事务。补丁沿用 `ReplaceScene`，一次操作一条撤销 |
+| app | `freya-nle-app/src/workspace.rs` | `scene_marks`、`mark_at_playhead`、`toggle_mark_at_playhead`、`set_mark_note`、`remove_mark`、`clear_marks`、`seek_to_mark`、`seek_to_next_mark`、`seek_to_previous_mark`，状态行三语 |
+| ui | `models.slint`、`theme.slint`、`timeline.slint`、`main.slint` | `TimelineMarkData`；标尺标记（顶部 5×4 绿色小条 + 半透明竖线）；两个窗口的 Edit → Marks 子菜单（打点、删除、备注、前后跳转、清空、标记列表）；快捷键 `M`、`Shift+M`、`Ctrl+Alt+←/→` |
+| ui | `mark-note.slint`（新增） | 备注窗口：帧号 + 时间码、单行输入、Esc 取消、回车保存 |
+| ui | `projection.rs` | 标记投影（`HH:MM:SS.FF` 标签，备注超过 40 字符截断）与"播放头处有标记"状态 |
+| ui | `lifecycle.rs`、`callbacks.rs`、`main.rs` | 备注窗口的创建、居中、保存/取消/关闭路径；两个窗口的标记命令共用 `MarkActions` |
+| i18n | `translations/{ja_JP,zh_CN}` | 10 条新文案 |
+
+验证：
+
+- `cargo test --workspace --all-features` 通过（core 162、app 252、desktop 56）；
+- 本 crate 的 `cargo clippy --all-targets --no-deps -- -D warnings` 与
+  `cargo fmt --all -- --check` 干净；
+- `tools/ui-snapshot` 新增 `mark` 模式，渲染深色与浅色时间线：第 120、240、420 帧
+  三处标记可见，播放头在 240 帧时"当前帧已有标记"为真；备注窗口在两种主题下
+  标题、帧号/时间码、输入框与按钮均完整；
+- 备注窗口沿用保存确认窗口的创建与居中路径，离屏工具不覆盖真实窗口事件，
+  实机需要手动确认一次 Esc/回车与关闭按钮。
+
+边界：标记只属于场景，不参与导出章节；备注不参与搜索或排序。渲染管线、编辑命令
+语义与既有快捷键未改，只新增了四条可配置快捷键。
 
 ## 8. 验收与风险
 
