@@ -1519,3 +1519,15 @@ msgstr "分组"
 
 msgid "Ungroup"
 msgstr "解除分组"
+
+msgid "Backup History"
+msgstr "备份历史"
+
+msgid "Backup History..."
+msgstr "备份历史..."
+
+msgid "Open"
+msgstr "打开"
+
+msgid "No saved versions yet"
+msgstr "还没有已保存的版本"

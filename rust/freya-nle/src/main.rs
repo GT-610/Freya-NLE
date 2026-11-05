@@ -138,6 +138,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         mod_host.borrow().plugin_count()
     );
     let launcher = ProjectLauncherWindow::new()?;
+    let backup_history = BackupHistoryWindow::new()?;
     select_bundled_ui_translation(&settings.borrow())?;
     let recovery = ProjectRecoveryWindow::new()?;
     let main = MainWindow::new()?;
@@ -230,6 +231,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             scene_settings.window(),
             "sceneSettings",
             WindowGeometry::new(300, 200, 450, 550),
+        ),
+        (
+            backup_history.window(),
+            "backupHistory",
+            WindowGeometry::new(500, 260, 520, 420),
         ),
         (
             layer_settings.window(),
@@ -343,6 +349,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         timeline: timeline.as_weak(),
         save_confirmation: save_confirmation.as_weak(),
         mark_note: mark_note.as_weak(),
+        backup_history: backup_history.as_weak(),
         object_settings: object_settings.as_weak(),
         easing: easing.as_weak(),
         project_settings: project_settings.as_weak(),
@@ -372,6 +379,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             timeline: &timeline,
             save_confirmation: &save_confirmation,
             mark_note: &mark_note,
+            backup_history: &backup_history,
             object_settings: &object_settings,
             easing: &easing,
             project_settings: &project_settings,
@@ -415,6 +423,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         scene_settings.as_weak(),
         settings.clone(),
         "sceneSettings",
+    );
+    install_window_geometry_close_handler(
+        backup_history.as_weak(),
+        settings.clone(),
+        "backupHistory",
     );
     install_window_geometry_close_handler(
         layer_settings.as_weak(),

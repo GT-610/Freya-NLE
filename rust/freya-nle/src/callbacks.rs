@@ -427,6 +427,7 @@ pub(super) fn install_callbacks(
         timeline,
         save_confirmation,
         mark_note,
+        backup_history,
         layer_settings,
         object_settings,
         easing,
@@ -500,6 +501,59 @@ pub(super) fn install_callbacks(
         }
         CloseRequestResponse::HideWindow
     });
+
+    // Saved-version history: the window lists the current project's backups and
+    // restores one as an unsaved copy.
+    let backup_open_ui = lifecycle_ui.clone();
+    backup_history.on_open_entry(move |file_name| {
+        let restored = {
+            let mut model = backup_open_ui.model.borrow_mut();
+            let Some(index) = model.current_project_index() else {
+                return;
+            };
+            model.open_backup_as_project(index, file_name.as_str())
+        };
+        match restored {
+            Ok(_) => {
+                backup_open_ui.sync();
+                if let Some(window) = backup_open_ui.backup_history.upgrade() {
+                    let _ = window.hide();
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    });
+    let backup_delete_ui = lifecycle_ui.clone();
+    backup_history.on_delete_entry(move |file_name| {
+        let removed = {
+            let mut model = backup_delete_ui.model.borrow_mut();
+            let Some(index) = model.current_project_index() else {
+                return;
+            };
+            model.remove_backup(index, file_name.as_str())
+        };
+        match removed {
+            Ok(()) => backup_delete_ui.sync_backup_history(),
+            Err(error) => show_error_dialog(&error),
+        }
+    });
+    let backup_close_window = backup_history.as_weak();
+    backup_history.on_close_window(move || {
+        if let Some(window) = backup_close_window.upgrade() {
+            let _ = window.hide();
+        }
+    });
+    let backup_close_window = backup_history.as_weak();
+    backup_history.window().on_close_requested(move || {
+        if let Some(window) = backup_close_window.upgrade() {
+            let _ = window.hide();
+        }
+        CloseRequestResponse::HideWindow
+    });
+    let backup_menu_ui = lifecycle_ui.clone();
+    main.on_show_backup_history(move || backup_menu_ui.open_backup_history());
+    let backup_menu_ui = lifecycle_ui.clone();
+    timeline.on_show_backup_history(move || backup_menu_ui.open_backup_history());
 
     let object_settings_ui = ObjectSettingsUi {
         main: main.as_weak(),

@@ -388,7 +388,7 @@ fn default_recovery_root() -> PathBuf {
     application_data_root().join("recovery")
 }
 
-fn iso_timestamp(time: SystemTime) -> String {
+pub(crate) fn iso_timestamp(time: SystemTime) -> String {
     let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
     let seconds = i64::try_from(duration.as_secs()).unwrap_or(i64::MAX);
     let days = seconds / 86_400;

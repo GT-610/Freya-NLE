@@ -327,6 +327,7 @@ export component TimelineWindow inherits Window {
     callback open-project();
     callback save-project();
     callback save-project-as();
+    callback show-backup-history();
     callback import-fragment();
     callback export-fragment();
     callback new-project-from-exo-file();
@@ -368,6 +369,11 @@ export component TimelineWindow inherits Window {
                 title: @tr("Manage Missing Media");
                 enabled: !root.save-confirmation-visible && root.has-missing-media;
                 activated => { root.manage-missing-media(); }
+            }
+            MenuItem {
+                title: @tr("Backup History...");
+                enabled: !root.save-confirmation-visible;
+                activated => { root.show-backup-history(); }
             }
             MenuSeparator { }
             MenuItem { title: @tr("Insert Fragment..."); enabled: !root.save-confirmation-visible; activated => { root.import-fragment(); } }

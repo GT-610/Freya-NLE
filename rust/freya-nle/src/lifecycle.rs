@@ -16,11 +16,11 @@ use crate::playback::PreviewRuntime;
 use crate::projection::{sync_windows, update_vec_model};
 use crate::settings::{project_defaults, sync_timeline_runtime_settings, system_theme_index};
 use crate::{
-    AboutWindow, AppTheme, EasingConfigWindow, ExportWindow, LayerSettingsWindow, MainWindow,
-    MarkNoteWindow, ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow,
-    ProjectLauncherWindow, ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData,
-    RecoveryEntryData, SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow,
-    TimelineWindow,
+    AboutWindow, AppTheme, BackupEntryData, BackupHistoryWindow, EasingConfigWindow, ExportWindow,
+    LayerSettingsWindow, MainWindow, MarkNoteWindow, ObjectSettingsWindow, PackageManagerWindow,
+    PluginPermissionWindow, ProjectLauncherWindow, ProjectRecoveryWindow, ProjectSettingsWindow,
+    RecentProjectData, RecoveryEntryData, SaveConfirmationWindow, SceneSettingsWindow,
+    SystemSettingsWindow, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::effect_catalog::EffectCatalog;
@@ -28,7 +28,7 @@ use freya_nle_app::fragment::FRAGMENT_EXTENSION;
 use freya_nle_app::settings::SettingsStore;
 use freya_nle_app::{ApplicationModel, LifecycleStep, WorkspaceModel};
 use slint::winit_030::WinitWindowAccessor;
-use slint::{ComponentHandle, LogicalSize, SharedString};
+use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -49,6 +49,7 @@ pub(super) struct LifecycleUi {
     pub(super) timeline: slint::Weak<TimelineWindow>,
     pub(super) save_confirmation: slint::Weak<SaveConfirmationWindow>,
     pub(super) mark_note: slint::Weak<MarkNoteWindow>,
+    pub(super) backup_history: slint::Weak<BackupHistoryWindow>,
     pub(super) object_settings: slint::Weak<ObjectSettingsWindow>,
     pub(super) easing: slint::Weak<EasingConfigWindow>,
     pub(super) project_settings: slint::Weak<ProjectSettingsWindow>,
@@ -116,6 +117,7 @@ pub(super) struct WindowRefs<'a> {
     pub(super) timeline: &'a TimelineWindow,
     pub(super) save_confirmation: &'a SaveConfirmationWindow,
     pub(super) mark_note: &'a MarkNoteWindow,
+    pub(super) backup_history: &'a BackupHistoryWindow,
     pub(super) object_settings: &'a ObjectSettingsWindow,
     pub(super) easing: &'a EasingConfigWindow,
     pub(super) project_settings: &'a ProjectSettingsWindow,
@@ -202,6 +204,27 @@ fn layer_number_text(value: f64) -> String {
     }
 }
 
+/// `2026-11-06T02:30:00.000Z` shown as `2026-11-06 02:30:00`.
+fn backup_time_text(saved_at: &str) -> String {
+    let date = saved_at.get(0..10).unwrap_or_default();
+    let time = saved_at.get(11..19).unwrap_or_default();
+    if date.is_empty() || time.is_empty() {
+        saved_at.to_owned()
+    } else {
+        format!("{date} {time}")
+    }
+}
+
+fn backup_size_text(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 impl LifecycleUi {
     /// Shows the note editor for the mark under the playhead.
     ///
@@ -282,6 +305,52 @@ impl LifecycleUi {
         } else {
             let _ = show_and_redraw(&dialog);
         }
+    }
+
+    /// Shows the saved-version history of the current project.
+    pub(super) fn open_backup_history(&self) {
+        self.sync_backup_history();
+        let Some(window) = self.backup_history.upgrade() else {
+            return;
+        };
+        if let Some(timeline) = self.timeline.upgrade()
+            && timeline.window().is_visible()
+        {
+            let _ = show_centered_and_redraw(&window, &timeline);
+        } else if let Some(main) = self.main.upgrade() {
+            let _ = show_centered_and_redraw(&window, &main);
+        } else {
+            let _ = show_and_redraw(&window);
+        }
+    }
+
+    /// Re-reads the current project's backup list into the open window.
+    pub(super) fn sync_backup_history(&self) {
+        let Some(window) = self.backup_history.upgrade() else {
+            return;
+        };
+        let model = self.model.borrow();
+        let Some(index) = model.current_project_index() else {
+            window.set_project_name(SharedString::default());
+            window.set_entries(ModelRc::new(VecModel::from(Vec::<BackupEntryData>::new())));
+            return;
+        };
+        let project_name = model
+            .tabs()
+            .get(index)
+            .map(|tab| tab.name.clone())
+            .unwrap_or_default();
+        let entries = model
+            .backup_entries(index)
+            .into_iter()
+            .map(|entry| BackupEntryData {
+                file_name: SharedString::from(entry.file_name),
+                saved_at: SharedString::from(backup_time_text(&entry.saved_at)),
+                size_text: SharedString::from(backup_size_text(entry.size)),
+            })
+            .collect::<Vec<_>>();
+        window.set_project_name(SharedString::from(project_name));
+        window.set_entries(ModelRc::new(VecModel::from(entries)));
     }
 
     pub(super) fn workspace_action(&self, action: &str, origin: WorkspaceOrigin) {

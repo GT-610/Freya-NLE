@@ -1,6 +1,7 @@
 //! Framework-neutral application state shared by desktop frontends.
 
 pub mod audio_plugin;
+pub mod backup;
 pub mod clip_insert;
 pub mod easing;
 pub mod effect_catalog;
@@ -36,6 +37,7 @@ pub use project_io::{PROJECT_EXTENSION, ProjectDefaults, ProjectSession};
 pub use recovery::RecoveryEntry;
 pub use workspace::{LayerSettingsInput, ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
 
+use backup::{BackupEntry, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT};
 use lifecycle::{LifecycleContinuation, PendingLifecycle};
 use recovery::{
     DEFAULT_BACKUP_INTERVAL, RecoveryOperation, RecoveryStore, RecoveryWrite, generate_recovery_id,
@@ -64,6 +66,10 @@ pub struct ApplicationModel {
     undo_limit: usize,
     suppressed_recovery_ids: HashSet<String>,
     recovery_errors: Vec<String>,
+    backup_store: BackupStore,
+    backup_limit: usize,
+    backup_enabled: bool,
+    backup_errors: Vec<String>,
 }
 
 struct ProjectEntry {
@@ -105,17 +111,21 @@ impl ProjectRecoveryState {
 
 impl Default for ApplicationModel {
     fn default() -> Self {
-        let recovery_store = {
+        let (recovery_store, backup_store) = {
             #[cfg(test)]
             {
-                RecoveryStore::with_root(std::env::temp_dir().join(format!(
+                let root = std::env::temp_dir().join(format!(
                     "freya-nle-app-model-test-{}",
                     generate_recovery_id()
-                )))
+                ));
+                (
+                    RecoveryStore::with_root(root.clone()),
+                    BackupStore::with_root(root.join("backups")),
+                )
             }
             #[cfg(not(test))]
             {
-                RecoveryStore::new()
+                (RecoveryStore::new(), BackupStore::new())
             }
         };
         Self {
@@ -130,6 +140,10 @@ impl Default for ApplicationModel {
             undo_limit: 32,
             suppressed_recovery_ids: HashSet::new(),
             recovery_errors: Vec::new(),
+            backup_store,
+            backup_limit: DEFAULT_BACKUP_HISTORY_LIMIT,
+            backup_enabled: true,
+            backup_errors: Vec::new(),
         }
     }
 }
@@ -143,12 +157,16 @@ impl ApplicationModel {
             next_project_instance_id: 1,
             next_untitled_number: 1,
             pending_lifecycle: None,
+            backup_store: BackupStore::with_root(root.join("backups")),
             recovery_store: RecoveryStore::with_root(root),
             recovery_interval: DEFAULT_BACKUP_INTERVAL,
             auto_backup_enabled: true,
             undo_limit: 32,
             suppressed_recovery_ids: HashSet::new(),
             recovery_errors: Vec::new(),
+            backup_limit: DEFAULT_BACKUP_HISTORY_LIMIT,
+            backup_enabled: true,
+            backup_errors: Vec::new(),
         }
     }
 
@@ -484,6 +502,7 @@ impl ApplicationModel {
         {
             Ok(()) => {
                 self.clear_project_recovery(project_index);
+                self.record_backup(project_index);
                 continuation.map_or(
                     LifecycleStep::ProjectSaved { project_index },
                     |continuation| self.complete_continuation(continuation),
@@ -493,6 +512,87 @@ impl ApplicationModel {
                 project_index,
                 message,
             },
+        }
+    }
+
+    /// Saved versions of one open project, newest first.
+    pub fn backup_entries(&self, project_index: usize) -> Vec<BackupEntry> {
+        let Some(path) = self
+            .projects
+            .get(project_index)
+            .and_then(|project| project.workspace.project().path.clone())
+        else {
+            return Vec::new();
+        };
+        self.backup_store.entries(&path)
+    }
+
+    pub fn remove_backup(&mut self, project_index: usize, file_name: &str) -> Result<(), String> {
+        let path = self
+            .projects
+            .get(project_index)
+            .and_then(|project| project.workspace.project().path.clone())
+            .ok_or_else(|| "save the project once before managing its backups".to_owned())?;
+        self.backup_store.remove(&path, file_name)
+    }
+
+    /// Opens a saved version as a new unsaved project.
+    ///
+    /// Like recovery, the restored copy has no path and starts dirty, so saving
+    /// it cannot overwrite the project it came from.
+    pub fn open_backup_as_project(
+        &mut self,
+        project_index: usize,
+        file_name: &str,
+    ) -> Result<usize, String> {
+        let path = self
+            .projects
+            .get(project_index)
+            .and_then(|project| project.workspace.project().path.clone())
+            .ok_or_else(|| "save the project once before restoring a backup".to_owned())?;
+        let backup_path = self.backup_store.path_for(&path, file_name)?;
+        let project = ProjectSession::load_recovery(&backup_path, &path.to_string_lossy())?;
+        let name = path.file_stem().map_or_else(
+            || "Restored backup".to_owned(),
+            |stem| format!("{} (backup)", stem.to_string_lossy()),
+        );
+        Ok(self.add_project_entry(project, name))
+    }
+
+    pub fn backup_errors(&self) -> &[String] {
+        &self.backup_errors
+    }
+
+    /// Turns saved-version history on or off and bounds how many copies are kept.
+    pub fn set_backup_history(&mut self, enabled: bool, limit: usize) {
+        self.backup_enabled = enabled;
+        self.backup_limit = limit.clamp(1, 100);
+    }
+
+    fn record_backup(&mut self, project_index: usize) {
+        if !self.backup_enabled {
+            return;
+        }
+        let Some(path) = self
+            .projects
+            .get(project_index)
+            .and_then(|project| project.workspace.project().path.clone())
+        else {
+            return;
+        };
+        let bytes = match self.projects[project_index]
+            .workspace
+            .project()
+            .snapshot_bytes()
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.backup_errors.push(error);
+                return;
+            }
+        };
+        if let Err(error) = self.backup_store.record(&path, &bytes, self.backup_limit) {
+            self.backup_errors.push(error);
         }
     }
 
@@ -588,6 +688,7 @@ impl ApplicationModel {
         match self.projects[project_index].workspace.project_mut().save() {
             Ok(()) => {
                 self.clear_project_recovery(project_index);
+                self.record_backup(project_index);
                 continuation.map_or(
                     LifecycleStep::ProjectSaved { project_index },
                     |continuation| self.complete_continuation(continuation),
@@ -869,6 +970,58 @@ mod tests {
                 .project()
                 .dirty
         );
+
+        std::fs::remove_file(path).expect("saved project removes");
+    }
+
+    #[test]
+    fn saving_keeps_version_history_and_restores_a_copy() {
+        let mut app = ApplicationModel::default();
+        app.create_project(ProjectDefaults::default());
+        let path = temporary_project_path("backup-history");
+        assert!(matches!(
+            app.request_save_current_project(),
+            LifecycleStep::ChooseSavePath { .. }
+        ));
+        assert_eq!(
+            app.complete_save_path(Some(&path)),
+            LifecycleStep::ProjectSaved { project_index: 0 }
+        );
+        assert_eq!(app.backup_entries(0).len(), 1);
+
+        // A second save records another version.
+        app.current_workspace_mut()
+            .expect("project exists")
+            .project_mut()
+            .dirty = true;
+        assert_eq!(
+            app.request_save_current_project(),
+            LifecycleStep::ProjectSaved { project_index: 0 }
+        );
+        let entries = app.backup_entries(0);
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].saved_at >= entries[1].saved_at);
+        assert!(entries[0].size > 0);
+
+        // Restoring opens an unsaved copy instead of overwriting the source.
+        let restored = app
+            .open_backup_as_project(0, &entries[1].file_name)
+            .expect("backup restores");
+        assert_eq!(app.tabs().len(), 2);
+        assert_eq!(app.current_project_index(), Some(restored));
+        let project = app
+            .current_workspace()
+            .expect("restored project is current")
+            .project();
+        assert!(project.path.is_none());
+        assert!(project.dirty);
+        assert!(app.tabs().iter().any(|tab| tab.name.contains("(backup)")));
+
+        // Removing one entry leaves the other.
+        app.remove_backup(0, &entries[0].file_name)
+            .expect("backup removes");
+        assert_eq!(app.backup_entries(0).len(), 1);
+        assert!(app.backup_errors().is_empty());
 
         std::fs::remove_file(path).expect("saved project removes");
     }

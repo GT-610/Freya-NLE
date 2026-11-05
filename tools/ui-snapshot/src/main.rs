@@ -48,11 +48,12 @@ fn main() {
         "confirm" => (460u32, 200u32),
         "mark" => (440u32, 190u32),
         "layer" => (460u32, 430u32),
+        "backup" => (520u32, 420u32),
         "export" => (700u32, 700u32),
         "packages" => (760u32, 520u32),
         other => {
             eprintln!(
-                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm`, `mark` or `layer`"
+                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm`, `mark`, `layer` or `backup`"
             );
             std::process::exit(2);
         }
@@ -134,6 +135,25 @@ fn main() {
             ui.set_note("chorus begins".into());
             ui.show().expect("show the mark note window");
             save(&window, width, height, &output_name("mark", preference));
+        }
+        "backup" => {
+            let ui = BackupHistoryWindow::new().expect("create the backup history window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_project_name("harbor_trip.freya".into());
+            ui.set_entries(ModelRc::new(VecModel::from(vec![
+                BackupEntryData {
+                    file_name: "1762300000000.freya".into(),
+                    saved_at: "2026-11-05 18:42:10".into(),
+                    size_text: "184.2 KB".into(),
+                },
+                BackupEntryData {
+                    file_name: "1762200000000.freya".into(),
+                    saved_at: "2026-11-04 09:15:03".into(),
+                    size_text: "181.7 KB".into(),
+                },
+            ])));
+            ui.show().expect("show the backup history window");
+            save(&window, width, height, &output_name("backup", preference));
         }
         "layer" => {
             let ui = LayerSettingsWindow::new().expect("create the layer settings window");

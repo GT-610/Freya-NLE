@@ -1,0 +1,109 @@
+import { Button, ScrollView } from "std-widgets.slint";
+import { BackupEntryData } from "models.slint";
+import { AppTheme } from "theme.slint";
+
+// AviUtl2's バックアップ履歴: the versions of this project that were saved.
+//
+// Opening a version creates an unsaved copy, so the original project is never
+// overwritten by a restore.
+export component BackupHistoryWindow inherits Window {
+    title: @tr("Backup History");
+    preferred-width: 520px;
+    preferred-height: 420px;
+    min-width: 420px;
+    min-height: 300px;
+    background: AppTheme.dialog-background;
+
+    in property <string> project-name: "";
+    in property <[BackupEntryData]> entries;
+
+    callback open-entry(string);
+    callback delete-entry(string);
+    callback close-window();
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: AppTheme.dialog-background;
+        VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+            Text {
+                text: @tr("Backup History");
+                color: AppTheme.dialog-foreground;
+                font-size: 1.1rem;
+                font-weight: 700;
+            }
+            Text {
+                text: root.project-name;
+                color: AppTheme.dialog-muted;
+                overflow: elide;
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                border-width: 1px;
+                border-color: AppTheme.subtle-border;
+                border-radius: 4px;
+                ScrollView {
+                    viewport-width: self.visible-width;
+                    viewport-height: entry-list.preferred-height;
+                    entry-list := VerticalLayout {
+                        width: parent.width;
+                        spacing: 1px;
+                        for entry in root.entries : Rectangle {
+                            height: 42px;
+                            background: transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                VerticalLayout {
+                                    spacing: 1px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: entry.saved-at;
+                                        color: AppTheme.dialog-foreground;
+                                        font-size: 0.82rem;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: entry.size-text;
+                                        color: AppTheme.dialog-muted;
+                                        font-size: 0.72rem;
+                                    }
+                                }
+                                Button {
+                                    text: @tr("Open");
+                                    clicked => { root.open-entry(entry.file-name); }
+                                }
+                                Button {
+                                    text: @tr("Delete");
+                                    clicked => { root.delete-entry(entry.file-name); }
+                                }
+                            }
+                        }
+                        if root.entries.length == 0 : Rectangle {
+                            height: 52px;
+                            Text {
+                                x: 10px;
+                                y: 10px;
+                                width: parent.width - 20px;
+                                text: @tr("No saved versions yet");
+                                color: AppTheme.dialog-muted;
+                                font-size: 0.82rem;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: @tr("Close");
+                    clicked => { root.close-window(); }
+                }
+            }
+        }
+    }
+}

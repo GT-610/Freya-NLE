@@ -1519,3 +1519,15 @@ msgstr "グループ化"
 
 msgid "Ungroup"
 msgstr "グループ解除"
+
+msgid "Backup History"
+msgstr "バックアップ履歴"
+
+msgid "Backup History..."
+msgstr "バックアップ履歴..."
+
+msgid "Open"
+msgstr "開く"
+
+msgid "No saved versions yet"
+msgstr "保存済みのバージョンはありません"

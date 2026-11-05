@@ -51,6 +51,7 @@ export component MainWindow inherits Window {
     callback open-project();
     callback save-project();
     callback save-project-as();
+    callback show-backup-history();
     callback export-media();
     callback import-exo-object-file();
     callback new-project-from-exo-file();
@@ -102,6 +103,11 @@ export component MainWindow inherits Window {
                 title: @tr("Manage Missing Media");
                 enabled: !root.save-confirmation-visible && root.missing-media.length > 0;
                 activated => { root.missing-media-dialog-visible = true; }
+            }
+            MenuItem {
+                title: @tr("Backup History...");
+                enabled: !root.save-confirmation-visible;
+                activated => { root.show-backup-history(); }
             }
             MenuSeparator { }
             MenuItem { title: @tr("Insert Fragment..."); enabled: !root.save-confirmation-visible; activated => { root.import-fragment(); } }
