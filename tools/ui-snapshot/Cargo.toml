@@ -13,4 +13,9 @@ slint = { version = "=1.17.1", default-features = false, features = ["std", "acc
 [build-dependencies]
 slint-build = "=1.17.1"
 
+# `geteuid` is the only portable way to ask which user owns this process; the
+# output-directory check compares against it.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [workspace]

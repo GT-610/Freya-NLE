@@ -181,17 +181,19 @@ fn output_dir() -> std::path::PathBuf {
         Err(error) => panic!("cannot inspect {}: {error}", dir.display()),
     }
     std::fs::create_dir_all(&dir).expect("create the snapshot output directory");
-    // The checkout belongs to the user running the tool, so its owner is the
-    // reference the output directory must match.
+    // The frames must belong to whoever runs the tool: a directory prepared by
+    // another user would let them hand us their own pictures.
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let owner = std::fs::metadata(checkout).expect("read the crate manifest").uid();
-        let actual = std::fs::metadata(&dir).expect("read the output directory").uid();
+        // SAFETY: `geteuid` reads the process credentials and cannot fail.
+        let effective = unsafe { libc::geteuid() };
+        let owner = std::fs::metadata(&dir)
+            .expect("read the output directory")
+            .uid();
         assert!(
-            actual == owner,
-            "{} is owned by uid {actual}, not by the user running the tool ({owner})",
+            owner == effective,
+            "{} is owned by uid {owner}, not by the user running the tool ({effective})",
             dir.display()
         );
     }
@@ -472,7 +474,11 @@ fn populate_timeline(ui: &TimelineWindow) {
             false,
         ),
     ])));
-    ui.set_duration(600);
+    // The ruler shows the padded view length while the footer and the transport
+    // report the project length, as the editor does; 600 frames in a 900-frame
+    // view exercises that difference.
+    ui.set_duration(900);
+    ui.set_playback_duration(600);
     ui.set_playhead(240);
     ui.set_selected_layer(0);
     ui.set_selected_clip_count(1);
