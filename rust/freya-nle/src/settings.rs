@@ -141,7 +141,7 @@ pub(super) fn sync_timeline_runtime_settings(
     // The preview window's View menu names the layout action, so it has to
     // know what the timeline is doing.
     main.set_merged_workspace(timeline.get_preview_visible());
-    timeline.set_preview_pane_height(preview_pane_height(&timeline, settings) as f32);
+    timeline.set_preview_pane_height(preview_pane_height(timeline, settings) as f32);
     let skimming_enabled = settings.bool_value("enableTimelineSkimming", true);
     timeline.set_timeline_skimming_enabled(skimming_enabled);
     if !skimming_enabled {
