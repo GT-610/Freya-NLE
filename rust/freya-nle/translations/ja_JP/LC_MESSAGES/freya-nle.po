@@ -766,6 +766,9 @@ msgstr "メディア"
 msgid "Media Library"
 msgstr "メディアライブラリ"
 
+msgid "Merged workspace"
+msgstr "統合ワークスペース"
+
 msgid "Memory and Cache"
 msgstr "メモリとキャッシュ"
 
@@ -1179,6 +1182,9 @@ msgstr "選択ツール"
 msgid "Sequence number digits"
 msgstr "連番桁数"
 
+msgid "Separate windows"
+msgstr "別ウィンドウ"
+
 msgid "Settings"
 msgstr "設定"
 
@@ -1196,6 +1202,9 @@ msgstr "設定は「適用」または「OK」で保存されます"
 
 msgid "Shortcuts"
 msgstr "ショートカット"
+
+msgid "Show Preview Window"
+msgstr "プレビューウィンドウを表示"
 
 msgid "Show Settings Dialog"
 msgstr "設定ダイアログの表示"

@@ -766,6 +766,9 @@ msgstr "媒体"
 msgid "Media Library"
 msgstr "媒体库"
 
+msgid "Merged workspace"
+msgstr "合并工作区"
+
 msgid "Memory and Cache"
 msgstr "内存与缓存"
 
@@ -1179,6 +1182,9 @@ msgstr "选择工具"
 msgid "Sequence number digits"
 msgstr "序列编号位数"
 
+msgid "Separate windows"
+msgstr "独立窗口"
+
 msgid "Settings"
 msgstr "设置"
 
@@ -1196,6 +1202,9 @@ msgstr "设置会在点击“应用”或“OK”后保存"
 
 msgid "Shortcuts"
 msgstr "快捷键"
+
+msgid "Show Preview Window"
+msgstr "显示预览窗口"
 
 msgid "Show Settings Dialog"
 msgstr "显示设置对话框"

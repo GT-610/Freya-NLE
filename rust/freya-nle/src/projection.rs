@@ -41,7 +41,7 @@ pub(super) fn sync_transport_weak(
 }
 
 pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: &ApplicationModel) {
-    sync_project_tabs(main, model);
+    sync_project_tabs(main, timeline, model);
 
     let Some(workspace) = model.current_workspace() else {
         update_vec_model(&main.get_missing_media(), Vec::new());
@@ -264,7 +264,11 @@ pub(super) fn timeline_clip_style(clip_type: &str) -> Option<(Color, bool)> {
     Some((Color::from_rgb_u8(red, green, blue), luma > 0.6 * 255.0))
 }
 
-pub(super) fn sync_project_tabs(main: &MainWindow, model: &ApplicationModel) {
+pub(super) fn sync_project_tabs(
+    main: &MainWindow,
+    timeline: &TimelineWindow,
+    model: &ApplicationModel,
+) {
     let tabs = model
         .tabs()
         .into_iter()
@@ -273,12 +277,15 @@ pub(super) fn sync_project_tabs(main: &MainWindow, model: &ApplicationModel) {
             dirty: tab.dirty,
         })
         .collect::<Vec<_>>();
-    update_vec_model(&main.get_project_tabs(), tabs);
-    main.set_current_project(
-        model
-            .current_project_index()
-            .map_or(-1, |index| index as i32),
-    );
+    let current = model
+        .current_project_index()
+        .map_or(-1, |index| index as i32);
+    update_vec_model(&main.get_project_tabs(), tabs.clone());
+    main.set_current_project(current);
+    // The merged timeline shows the same strip, so it can stand in for the
+    // preview window.
+    update_vec_model(&timeline.get_project_tabs(), tabs);
+    timeline.set_current_project(current);
 }
 
 pub(super) fn update_vec_model<T: Clone + 'static>(model: &ModelRc<T>, rows: Vec<T>) {

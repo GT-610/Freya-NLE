@@ -2794,6 +2794,39 @@ pub(super) fn install_callbacks(
         }
     });
 
+    // The merged timeline carries the project strip too, so it forwards tab
+    // actions to the preview window that owns the project commands.
+    let own_preview_target = main.as_weak();
+    main.on_show_preview_window(move || {
+        if let Some(main) = own_preview_target.upgrade() {
+            if let Err(error) = main.show() {
+                eprintln!("Could not show the preview window: {error}");
+            }
+        }
+    });
+    let preview_window_target = main.as_weak();
+    timeline.on_show_preview_window(move || {
+        if let Some(main) = preview_window_target.upgrade() {
+            // The merged layout lets the preview window be closed; this is the
+            // way back from the timeline's View menu.
+            if let Err(error) = main.show() {
+                eprintln!("Could not show the preview window: {error}");
+            }
+        }
+    });
+    let tab_select_target = main.as_weak();
+    timeline.on_select_project(move |index| {
+        if let Some(main) = tab_select_target.upgrade() {
+            main.invoke_select_project(index);
+        }
+    });
+    let tab_close_target = main.as_weak();
+    timeline.on_close_project(move |index| {
+        if let Some(main) = tab_close_target.upgrade() {
+            main.invoke_close_project(index);
+        }
+    });
+
     let preview_toggle_timeline = timeline.as_weak();
     let preview_toggle_settings = settings.clone();
     timeline.on_toggle_preview(move || {

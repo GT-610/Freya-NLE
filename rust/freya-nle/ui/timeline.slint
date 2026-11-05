@@ -1,4 +1,5 @@
 import {
+    ProjectTabData,
     SceneTabData,
     TimelineClipData,
     LayerData,
@@ -16,7 +17,7 @@ import { TransportBar } from "transport-bar.slint";
 import { MediaBinPanel } from "media-bin.slint";
 import { Button, ComboBox, LineEdit, RadioGroup, ScrollView, SpinBox } from "std-widgets.slint";
 import { AppTheme, TimelineMetrics } from "theme.slint";
-import { SceneTab, LayerHeaderItem, TimelineClipItem } from "timeline-items.slint";
+import { ProjectTab, SceneTab, LayerHeaderItem, TimelineClipItem } from "timeline-items.slint";
 import { TabAddButton } from "widgets.slint";
 
 export component TimelineWindow inherits Window {
@@ -33,6 +34,11 @@ export component TimelineWindow inherits Window {
     private property <bool> drag-active: false;
     private property <TimelineDragFeedback> drag-feedback;
     callback preview-clip-drag(string, int, float, float, bool) -> TimelineDragFeedback;
+    // Project tabs mirror the preview window's strip. They appear in the
+    // merged layout so the timeline can act as the only workspace window.
+    in property <[ProjectTabData]> project-tabs;
+    in property <int> current-project: -1;
+    in property <int> project-tab-height: 28;
     in property <[SceneTabData]> scene-tabs;
     in property <[TimelineClipData]> clips;
     in property <[LayerData]> layers;
@@ -196,6 +202,9 @@ export component TimelineWindow inherits Window {
 
     // The preview pane controls the same transport as the preview window; the
     // host forwards these to the window that owns the commands.
+    callback show-preview-window();
+    callback select-project(int);
+    callback close-project(int);
     callback seek(float);
     callback toggle-preview();
     callback previous-frame();
@@ -341,10 +350,14 @@ export component TimelineWindow inherits Window {
                 title: root.preview-visible ? @tr("Hide preview in Timeline") : @tr("Show preview in Timeline");
                 activated => { root.toggle-preview(); }
             }
+            MenuItem { title: @tr("Show Preview Window"); icon: @image-url("icons/timeline.svg"); activated => { root.show-preview-window(); } }
             MenuItem { title: @tr("Show Timeline"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[21] : root.no-shortcut; icon: @image-url("icons/timeline.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-timeline(); } }
             MenuItem { title: @tr("Show Settings Dialog"); shortcut: root.menu-accelerators-enabled ? root.menu-shortcuts[22] : root.no-shortcut; icon: @image-url("icons/settings.svg"); enabled: !root.save-confirmation-visible; activated => { root.show-object-settings(); } }
             Menu {
                 title: @tr("Workspace");
+                MenuItem { title: @tr("Merged workspace"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("merged"); } }
+                MenuItem { title: @tr("Separate windows"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("separate"); } }
+                MenuSeparator { }
                 MenuItem { title: @tr("Editing layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("editing"); } }
                 MenuItem { title: @tr("Animation layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("animation"); } }
                 MenuItem { title: @tr("Audio layout"); enabled: !root.save-confirmation-visible; activated => { root.workspace-action("audio"); } }
@@ -672,7 +685,34 @@ export component TimelineWindow inherits Window {
             VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 0px;
-                Rectangle {
+                if root.preview-visible && root.project-tabs.length > 1 : Rectangle {
+                height: root.project-tab-height * 1px;
+                background: AppTheme.raised-background;
+                HorizontalLayout {
+                    spacing: 0px;
+                    project-tab-scroll := ScrollView {
+                        horizontal-stretch: 1;
+                        height: 100%;
+                        viewport-width: max(project-tab-list.preferred-width, self.visible-width);
+                        viewport-height: self.visible-height;
+                        mouse-drag-pan-enabled: false;
+                        project-tab-list := HorizontalLayout {
+                            spacing: 0px;
+                            accessible-role: tab-list;
+                            accessible-label: @tr("Project");
+                            for tab[index] in root.project-tabs: ProjectTab {
+                                label: tab.name + (tab.dirty ? " *" : "");
+                                selected: root.current-project == index;
+                                tab-height: root.project-tab-height * 1px;
+                                activate => { root.select-project(index); }
+                                close => { root.close-project(index); }
+                            }
+                        }
+                    }
+                    TabAddButton { accessible-name: @tr("New Project"); clicked => { root.new-project(); } }
+                }
+            }
+            Rectangle {
             height: root.timeline-header-height * 1px;
             background: AppTheme.raised-background;
             HorizontalLayout {

@@ -190,6 +190,30 @@ impl LifecycleUi {
             }
             return;
         }
+        // AviUtl2's layout is one window with the preview above the layer area.
+        // These two actions switch between that shape and separate windows
+        // without changing the saved geometry of either form.
+        if action == "merged" || action == "separate" {
+            let merged = action == "merged";
+            timeline.set_preview_visible(merged);
+            if merged {
+                let window = timeline.window();
+                let logical = window.size().to_logical(window.scale_factor());
+                if logical.height < 640.0 {
+                    window.set_size(slint::LogicalSize::new(logical.width, 720.0));
+                }
+            }
+            let mut settings = self.settings.borrow().snapshot();
+            settings.insert("timelinePreviewVisible".into(), serde_json::json!(merged));
+            if let Err(message) = self.settings.borrow_mut().apply(settings) {
+                crate::dialogs::show_error_dialog(&message);
+            }
+            let preview = if merged { main.hide() } else { main.show() };
+            if let Err(error) = preview {
+                eprintln!("Could not switch the preview window: {error}");
+            }
+            return;
+        }
         let defaults = editor_layout(screen, "editing");
         if action == "recover-screen" {
             for ((_, window), fallback) in windows.iter().zip(defaults) {
