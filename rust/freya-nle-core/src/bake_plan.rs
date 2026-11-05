@@ -5,6 +5,7 @@ use crate::project::{
     AudioPluginDocument, ClipDocument, EffectDocument, ExtraFields, LayerSettingDocument,
     ProjectDocument,
 };
+use crate::text_control::{TextBaseStyle, TextRun};
 use crate::timeline::{bake_audio, bake_render};
 use crate::types::{AudioBakeInput, AudioBakeOutput, RenderBakeInput};
 use serde_json::Value;
@@ -253,7 +254,12 @@ pub enum TextAlignment {
 /// Fully evaluated parameters for AviQtl's built-in text object.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRenderPlan {
+    /// The raw content, control characters included. Layout uses `runs`.
     pub content: String,
+    /// Styled runs after control characters; empty when the producer did not
+    /// parse the text (the renderer then falls back to `content` and the base
+    /// style below).
+    pub runs: Vec<TextRun>,
     pub font_family: String,
     pub font_size: f32,
     pub bold: bool,
@@ -1426,18 +1432,30 @@ fn text_render_plan(
     let value = |name| effect.params.get(name);
     if clip_type == "counter" {
         let outline_width = value_as_f64(value("outlineWidth"), 2.0).clamp(0.0, 512.0) as f32;
+        let content = counter_text(&effect.params, relative_frame, duration_frames, fps);
+        let font_family = value_as_string(value("fontFamily"), "sans-serif");
+        let font_size = value_as_f64(value("fontSize"), 64.0).clamp(1.0, 4_096.0) as f32;
+        let color = value_as_color(value("color"), "#ffffff");
+        let outline_color = value_as_color(value("outlineColor"), "#000000");
         return Some(TextRenderPlan {
-            content: counter_text(&effect.params, relative_frame, duration_frames, fps),
-            font_family: value_as_string(value("fontFamily"), "sans-serif"),
-            font_size: value_as_f64(value("fontSize"), 64.0).clamp(1.0, 4_096.0) as f32,
+            runs: vec![TextRun {
+                text: content.clone(),
+                color,
+                outline_color,
+                font_size,
+                letter_spacing: 0.0,
+            }],
+            content,
+            font_family,
+            font_size,
             bold: false,
             italic: false,
             letter_spacing: 0.0,
             line_spacing: 0.0,
             alignment: TextAlignment::Center,
-            color: value_as_color(value("color"), "#ffffff"),
+            color,
             outline_enabled: outline_width > 0.0,
-            outline_color: value_as_color(value("outlineColor"), "#000000"),
+            outline_color,
             outline_width,
             shadow_enabled: false,
             shadow_color: value_as_color(None, "#00000000"),
@@ -1460,18 +1478,34 @@ fn text_render_plan(
         8 => TextAlignment::Justify,
         _ => TextAlignment::Center,
     };
+    let content = value_as_string(value("text"), "テキスト");
+    let font_family = value_as_string(value("fontFamily"), "sans-serif");
+    let font_size = value_as_f64(value("fontSize"), 48.0).clamp(1.0, 4_096.0) as f32;
+    let letter_spacing = value_as_f64(value("letterSpacing"), 0.0) as f32;
+    let color = value_as_color(value("color"), "#ffffff");
+    let outline_color = value_as_color(value("outlineColor"), "#000000");
+    let runs = crate::text_control::parse_text_runs(
+        &content,
+        TextBaseStyle {
+            color,
+            outline_color,
+            font_size,
+            letter_spacing,
+        },
+    );
     Some(TextRenderPlan {
-        content: value_as_string(value("text"), "テキスト"),
-        font_family: value_as_string(value("fontFamily"), "sans-serif"),
-        font_size: value_as_f64(value("fontSize"), 48.0).clamp(1.0, 4_096.0) as f32,
+        runs,
+        content,
+        font_family,
+        font_size,
         bold: value_as_bool(value("fontBold"), false),
         italic: value_as_bool(value("fontItalic"), false),
-        letter_spacing: value_as_f64(value("letterSpacing"), 0.0) as f32,
+        letter_spacing,
         line_spacing: value_as_f64(value("lineSpacing"), 0.0).max(0.0) as f32,
         alignment,
-        color: value_as_color(value("color"), "#ffffff"),
+        color,
         outline_enabled: value_as_bool(value("outlineEnabled"), false),
-        outline_color: value_as_color(value("outlineColor"), "#000000"),
+        outline_color,
         outline_width: value_as_f64(value("outlineWidth"), 2.0).clamp(0.0, 512.0) as f32,
         shadow_enabled: value_as_bool(value("shadowEnabled"), false),
         shadow_color: value_as_color(value("shadowColor"), "#80000000"),
@@ -2175,6 +2209,74 @@ mod tests {
             "control objects are never moved by layer settings"
         );
         assert!(frame.camera.is_some(), "the camera still reaches the scene");
+    }
+
+    #[test]
+    fn text_control_characters_become_styled_runs_in_the_frame_plan() {
+        let input = json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Scene", "duration": 120}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 60,
+                "layer": 0,
+                "params": {},
+                "audioPlugins": [],
+                "effects": [{
+                    "id": "text",
+                    "name": "Text",
+                    "enabled": true,
+                    "params": {
+                        "text": "A<#ff0000>red<s96>big",
+                        "fontSize": 48,
+                        "color": "#ffffff"
+                    }
+                }]
+            }]
+        });
+        let bytes = serde_json::to_vec(&input).expect("serialize project fixture");
+        let document = crate::project::parse_project_document(&bytes).expect("project parses");
+        let mut plan = SceneRenderPlan::from_document(&document, 1).expect("scene plan builds");
+        let frame = plan.evaluate(0);
+        let text = frame
+            .layers
+            .iter()
+            .find(|layer| layer.clip_id == 1)
+            .and_then(|layer| layer.text.as_ref())
+            .expect("text layer renders");
+
+        assert_eq!(text.content, "A<#ff0000>red<s96>big");
+        assert_eq!(text.runs.len(), 3);
+        assert_eq!(text.runs[0].text, "A");
+        assert_eq!(
+            (
+                text.runs[0].color.red,
+                text.runs[0].color.green,
+                text.runs[0].color.blue
+            ),
+            (0xff, 0xff, 0xff)
+        );
+        assert_eq!(text.runs[1].text, "red");
+        assert_eq!(
+            (
+                text.runs[1].color.red,
+                text.runs[1].color.green,
+                text.runs[1].color.blue
+            ),
+            (0xff, 0x00, 0x00)
+        );
+        assert_eq!(text.runs[2].text, "big");
+        assert_eq!(text.runs[2].font_size, 96.0);
+        // The style directives are not part of the drawn text.
+        assert!(
+            text.runs
+                .iter()
+                .all(|run| !run.text.contains('<') && !run.text.contains('>'))
+        );
     }
 
     #[test]

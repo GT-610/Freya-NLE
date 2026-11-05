@@ -32,7 +32,7 @@ pub(super) const VALIDATION_PROJECT: &str = r##"{
         {"id": 2, "sceneId": 1, "type": "text", "start": 120, "duration": 100, "layer": 1,
          "effects": [
                 {"enabled": true, "id": "transform", "params": {"backfaceVisible": true, "blendMode": "通常", "cx": 0, "cy": 0, "cz": 0, "opacity": 1.0, "rotationX": 0, "rotationY": 0, "rotationZ": 0, "scale": 100, "x": 0, "y": 0, "z": 0}},
-                {"enabled": true, "id": "text", "params": {"alignment": 4, "backgroundColor": "#80000000", "backgroundPaddingX": 20, "backgroundPaddingY": 10, "backgroundRadius": 10, "bgEnabled": false, "color": "#ffffff", "fontBold": false, "fontFamily": "sans-serif", "fontItalic": false, "fontSize": 48, "letterSpacing": 0, "lineSpacing": 0, "outlineColor": "#000000", "outlineEnabled": false, "outlineWidth": 2, "shadowColor": "#80000000", "shadowEnabled": false, "shadowOffsetX": 5, "shadowOffsetY": 5, "text": "テキスト"}}
+                {"enabled": true, "id": "text", "params": {"alignment": 4, "backgroundColor": "#80000000", "backgroundPaddingX": 20, "backgroundPaddingY": 10, "backgroundRadius": 10, "bgEnabled": false, "color": "#ffffff", "fontBold": false, "fontFamily": "sans-serif", "fontItalic": false, "fontSize": 48, "letterSpacing": 0, "lineSpacing": 0, "outlineColor": "#000000", "outlineEnabled": false, "outlineWidth": 2, "shadowColor": "#80000000", "shadowEnabled": false, "shadowOffsetX": 5, "shadowOffsetY": 5, "text": "<#ff8800>テ<#88ccff>キスト"}}
          ]},
         {"id": 3, "sceneId": 1, "type": "audio", "start": 60, "duration": 240, "layer": 3,
          "effects": [

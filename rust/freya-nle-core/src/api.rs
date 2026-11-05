@@ -61,6 +61,7 @@ pub use crate::script_runtime::{
     ScriptRuntime, ScriptRuntimeError,
 };
 pub use crate::settings::{SettingsError, SettingsMutation, SettingsState};
+pub use crate::text_control::TextRun;
 pub use crate::timeline_edit::TrimEdge;
 pub use crate::timeline_state::MidpointOperation;
 pub use crate::timeline_state::{

@@ -247,6 +247,12 @@ fn rasterize_with_face(
     face_index: u32,
 ) -> Result<VideoFrame, TextRasterError> {
     let face = Face::from_slice(data, face_index).ok_or(TextRasterError::InvalidFont)?;
+    // Text with control characters carries more than one styled run. The
+    // single-style path below stays in charge of plain text so its layout,
+    // justification and metrics do not change for existing projects.
+    if plan.runs.len() > 1 {
+        return rasterize_runs(plan, timestamp_seconds, &face);
+    }
     let units_per_em = face.units_per_em().max(1) as f32;
     let scale = plan.font_size / units_per_em;
     let ascent = (f32::from(face.ascender()) * scale).max(plan.font_size * 0.5);
@@ -429,6 +435,294 @@ fn rasterize_with_face(
             );
         }
         fill_path(&mut pixmap, path, plan.color, transform);
+    }
+
+    Ok(VideoFrame {
+        width,
+        height,
+        rgba: straight_alpha_rgba(pixmap.data()),
+        timestamp_seconds,
+    })
+}
+
+/// One styled run reduced to what the layout needs.
+struct RunSegment {
+    text: String,
+    color: RgbaColor,
+    outline_color: RgbaColor,
+    font_size: f32,
+    letter_spacing: f32,
+}
+
+struct ShapedSegment {
+    glyphs: Vec<GlyphPlacement>,
+    width: f32,
+    scale: f32,
+    color: RgbaColor,
+    outline_color: RgbaColor,
+}
+
+struct ShapedRunLine {
+    segments: Vec<ShapedSegment>,
+    width: f32,
+}
+
+struct RunPath {
+    path: Path,
+    color: RgbaColor,
+    outline_color: RgbaColor,
+}
+
+/// Lays out and rasterizes text that carries more than one styled run.
+///
+/// AviUtl's control characters can change size and colour mid-line. The runs
+/// share one face (the font directive is a later batch), so each segment is
+/// shaped at its own scale and placed on a common baseline; line metrics come
+/// from the tallest run so mixed sizes stay aligned. Justification is left to
+/// the single-style path: spreading words across runs with different advances
+/// needs a per-segment distribution that this batch does not claim.
+fn rasterize_runs(
+    plan: &TextRenderPlan,
+    timestamp_seconds: f64,
+    face: &Face<'_>,
+) -> Result<VideoFrame, TextRasterError> {
+    let units_per_em = face.units_per_em().max(1) as f32;
+    let segments = plan
+        .runs
+        .iter()
+        .map(|run| RunSegment {
+            text: run.text.clone(),
+            color: run.color,
+            outline_color: run.outline_color,
+            font_size: run.font_size.max(1.0),
+            letter_spacing: run.letter_spacing,
+        })
+        .collect::<Vec<_>>();
+    let mut ascent = 0.0_f32;
+    let mut descent = 0.0_f32;
+    let mut natural_advance = 0.0_f32;
+    let mut maximum_font_size = 0.0_f32;
+    for segment in &segments {
+        let scale = segment.font_size / units_per_em;
+        let segment_ascent = (f32::from(face.ascender()) * scale).max(segment.font_size * 0.5);
+        let segment_descent = (-f32::from(face.descender()) * scale).max(segment.font_size * 0.1);
+        let line_height = (segment_ascent + segment_descent).max(segment.font_size);
+        ascent = ascent.max(segment_ascent);
+        descent = descent.max(segment_descent);
+        maximum_font_size = maximum_font_size.max(segment.font_size);
+        natural_advance = natural_advance
+            .max((line_height + f32::from(face.line_gap()) * scale).max(line_height));
+    }
+    let glyph_line_height = (ascent + descent).max(maximum_font_size);
+    let line_advance = if plan.line_spacing > 0.0 {
+        plan.line_spacing
+    } else {
+        natural_advance
+    };
+
+    // Split every run on newlines, appending to the current logical line so a
+    // directive can straddle one without moving the text that follows it.
+    let mut line_runs: Vec<Vec<(usize, String)>> = vec![Vec::new()];
+    for (index, segment) in segments.iter().enumerate() {
+        let mut parts = segment.text.split('\n');
+        let first = parts.next().unwrap_or_default();
+        if !first.is_empty() {
+            line_runs
+                .last_mut()
+                .expect("at least one line")
+                .push((index, first.to_owned()));
+        }
+        for part in parts {
+            line_runs.push(Vec::new());
+            if !part.is_empty() {
+                line_runs
+                    .last_mut()
+                    .expect("a line was just pushed")
+                    .push((index, part.to_owned()));
+            }
+        }
+    }
+
+    let mut lines = Vec::with_capacity(line_runs.len());
+    for line in line_runs {
+        let mut shaped_segments = Vec::with_capacity(line.len());
+        let mut width = 0.0_f32;
+        for (index, text) in line {
+            let segment = &segments[index];
+            let scale = segment.font_size / units_per_em;
+            let layout = shape_line(face, &text, scale, segment.letter_spacing);
+            width += layout.width;
+            shaped_segments.push(ShapedSegment {
+                glyphs: layout.glyphs,
+                width: layout.width,
+                scale,
+                color: segment.color,
+                outline_color: segment.outline_color,
+            });
+        }
+        lines.push(ShapedRunLine {
+            segments: shaped_segments,
+            width,
+        });
+    }
+    let logical_width = lines.iter().map(|line| line.width).fold(0.0_f32, f32::max);
+    let logical_height = glyph_line_height + line_advance * (lines.len().saturating_sub(1) as f32);
+    if !logical_width.is_finite() || !logical_height.is_finite() {
+        return Err(TextRasterError::InvalidDimensions);
+    }
+
+    let mut paths = Vec::new();
+    let mut outlined_glyphs = 0_usize;
+    for (line_index, line) in lines.iter().enumerate() {
+        let line_x = alignment_offset(plan.alignment, logical_width, line.width);
+        let baseline = ascent + line_index as f32 * line_advance;
+        let mut segment_x = line_x;
+        for segment in &line.segments {
+            let mut builder = PathBuilder::new();
+            for glyph in &segment.glyphs {
+                let mut outline = GlyphOutline {
+                    path: &mut builder,
+                    origin_x: segment_x + glyph.x,
+                    baseline_y: baseline - glyph.y_offset,
+                    scale: segment.scale,
+                };
+                if face
+                    .outline_glyph(GlyphId(glyph.glyph_id), &mut outline)
+                    .is_some()
+                {
+                    outlined_glyphs += 1;
+                }
+            }
+            if let Some(path) = builder.finish() {
+                paths.push(RunPath {
+                    path,
+                    color: segment.color,
+                    outline_color: segment.outline_color,
+                });
+            }
+            segment_x += segment.width;
+        }
+    }
+    let has_visible_text = segments.iter().any(|segment| {
+        segment
+            .text
+            .chars()
+            .any(|character| !ignorable_for_font_matching(character))
+    });
+    if has_visible_text && outlined_glyphs == 0 {
+        return Err(TextRasterError::InvalidPath);
+    }
+
+    let mut visual_left = 0.0_f32;
+    let mut visual_top = 0.0_f32;
+    let mut visual_right = logical_width;
+    let mut visual_bottom = logical_height;
+    for run_path in &paths {
+        let bounds = run_path.path.bounds();
+        visual_left = visual_left.min(bounds.left());
+        visual_top = visual_top.min(bounds.top());
+        visual_right = visual_right.max(bounds.right());
+        visual_bottom = visual_bottom.max(bounds.bottom());
+    }
+    let visual_width = (visual_right - visual_left).max(0.0);
+    let visual_height = (visual_bottom - visual_top).max(0.0);
+    let outline_padding = if plan.outline_enabled {
+        plan.outline_width.ceil() + 2.0
+    } else {
+        2.0
+    };
+    let background_padding_x = if plan.background_enabled {
+        plan.background_padding_x
+    } else {
+        0.0
+    };
+    let background_padding_y = if plan.background_enabled {
+        plan.background_padding_y
+    } else {
+        0.0
+    };
+    let base_width = visual_width + (outline_padding + background_padding_x) * 2.0;
+    let base_height = visual_height + (outline_padding + background_padding_y) * 2.0;
+    let shadow_left = if plan.shadow_enabled {
+        (-plan.shadow_offset_x).max(0.0)
+    } else {
+        0.0
+    };
+    let shadow_right = if plan.shadow_enabled {
+        plan.shadow_offset_x.max(0.0)
+    } else {
+        0.0
+    };
+    let shadow_top = if plan.shadow_enabled {
+        (-plan.shadow_offset_y).max(0.0)
+    } else {
+        0.0
+    };
+    let shadow_bottom = if plan.shadow_enabled {
+        plan.shadow_offset_y.max(0.0)
+    } else {
+        0.0
+    };
+    let raster_width = (base_width + shadow_left + shadow_right).ceil().max(1.0);
+    let raster_height = (base_height + shadow_top + shadow_bottom).ceil().max(1.0);
+    if !raster_width.is_finite()
+        || !raster_height.is_finite()
+        || raster_width > MAX_RASTER_DIMENSION
+        || raster_height > MAX_RASTER_DIMENSION
+    {
+        return Err(TextRasterError::InvalidDimensions);
+    }
+
+    let width = raster_width as u32;
+    let height = raster_height as u32;
+    let mut pixmap = Pixmap::new(width, height).ok_or(TextRasterError::AllocationFailed)?;
+    if plan.background_enabled {
+        let background = rounded_rect_path(
+            shadow_left,
+            shadow_top,
+            base_width,
+            base_height,
+            plan.background_radius,
+        )
+        .ok_or(TextRasterError::InvalidPath)?;
+        fill_path(
+            &mut pixmap,
+            &background,
+            plan.background_color,
+            Transform::identity(),
+        );
+    }
+
+    let translate_x = shadow_left + outline_padding + background_padding_x - visual_left;
+    let translate_y = shadow_top + outline_padding + background_padding_y - visual_top;
+    for run_path in &paths {
+        if plan.shadow_enabled {
+            let transform = Transform::from_translate(
+                translate_x + plan.shadow_offset_x,
+                translate_y + plan.shadow_offset_y,
+            );
+            if plan.outline_enabled && plan.outline_width > 0.0 {
+                stroke_path(
+                    &mut pixmap,
+                    &run_path.path,
+                    plan.shadow_color,
+                    plan.outline_width * 2.0,
+                    transform,
+                );
+            }
+            fill_path(&mut pixmap, &run_path.path, plan.shadow_color, transform);
+        }
+        let transform = Transform::from_translate(translate_x, translate_y);
+        if plan.outline_enabled && plan.outline_width > 0.0 {
+            stroke_path(
+                &mut pixmap,
+                &run_path.path,
+                run_path.outline_color,
+                plan.outline_width * 2.0,
+                transform,
+            );
+        }
+        fill_path(&mut pixmap, &run_path.path, run_path.color, transform);
     }
 
     Ok(VideoFrame {
@@ -669,6 +963,7 @@ mod tests {
     fn plan() -> TextRenderPlan {
         TextRenderPlan {
             content: "\u{ea01}\n\u{ea02}".to_owned(),
+            runs: Vec::new(),
             font_family: "remixicon".to_owned(),
             font_size: 64.0,
             bold: false,
@@ -747,6 +1042,71 @@ mod tests {
                 .iter()
                 .any(|pixel| pixel[3] == 160)
         );
+    }
+
+    #[test]
+    fn styled_runs_rasterize_with_their_own_colours_and_sizes() {
+        use freya_nle_core::api::TextRun;
+
+        let mut plan = plan();
+        plan.content = "<#ff0000>\u{ea01}<#00ff00>\u{ea02}".to_owned();
+        plan.outline_enabled = false;
+        plan.shadow_enabled = false;
+        plan.background_enabled = false;
+        plan.line_spacing = 0.0;
+        plan.alignment = TextAlignment::Left;
+        let red = RgbaColor {
+            red: 255,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        let green = RgbaColor {
+            red: 0,
+            green: 255,
+            blue: 0,
+            alpha: 255,
+        };
+        plan.runs = vec![
+            TextRun {
+                text: "\u{ea01}".to_owned(),
+                color: red,
+                outline_color: red,
+                font_size: 64.0,
+                letter_spacing: 0.0,
+            },
+            TextRun {
+                text: "\u{ea02}".to_owned(),
+                color: green,
+                outline_color: green,
+                font_size: 128.0,
+                letter_spacing: 0.0,
+            },
+        ];
+        let frame = test_rasterizer()
+            .rasterize(&plan, 0.0)
+            .expect("styled runs rasterize");
+        let pixels = frame.rgba.as_chunks::<4>().0;
+        assert!(
+            pixels
+                .iter()
+                .any(|pixel| pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0),
+            "the first run keeps its red fill"
+        );
+        assert!(
+            pixels
+                .iter()
+                .any(|pixel| pixel[0] == 0 && pixel[1] == 255 && pixel[2] == 0),
+            "the second run keeps its green fill"
+        );
+
+        // The taller run raises the line, so the frame grows with it.
+        let mut short = plan.clone();
+        short.runs[1].font_size = 64.0;
+        let short_frame = test_rasterizer()
+            .rasterize(&short, 0.0)
+            .expect("uniform runs rasterize");
+        assert!(frame.height > short_frame.height);
     }
 
     #[test]

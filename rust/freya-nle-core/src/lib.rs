@@ -20,6 +20,7 @@ mod recovery;
 mod script;
 mod script_runtime;
 mod settings;
+mod text_control;
 mod timeline;
 mod timeline_domain;
 mod timeline_edit;
