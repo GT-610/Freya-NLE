@@ -2380,10 +2380,22 @@ impl WorkspaceModel {
             index: Some(source_index + 1),
             scene,
         }];
+        // A copied group keeps its shape but gets a fresh id per source group,
+        // so the copy never becomes one group with the scene it came from.
+        let mut next_group = self.next_group_id();
+        let mut group_map = std::collections::BTreeMap::new();
         for (clip, new_id) in clips.into_iter().zip(new_clip_ids) {
             let mut clip = clip;
             clip.id = new_id;
             clip.scene_id = new_scene_id;
+            if let Some(group) = clip.group {
+                let mapped = *group_map.entry(group).or_insert_with(|| {
+                    let id = next_group;
+                    next_group = next_group.saturating_add(1);
+                    id
+                });
+                clip.group = Some(mapped);
+            }
             commands.push(TimelineCommand::InsertClip { index: None, clip });
         }
         if !self.execute_batch(commands) {
@@ -6293,6 +6305,10 @@ mod tests {
         let mut settings = workspace.scene_settings(1).expect("scene settings");
         settings.label = "Template".to_owned();
         assert!(workspace.update_scene_settings(1, settings));
+        // Two grouped objects, so the copy's group remapping is covered.
+        workspace.click_clip(1, false);
+        workspace.click_clip(2, true);
+        assert!(workspace.group_selected_clips());
         let original = workspace.document().clone();
         let source = original
             .scenes
@@ -6332,6 +6348,14 @@ mod tests {
                 .all(|clip| !source_clip_ids.contains(&clip.id)),
             "copies get fresh clip IDs"
         );
+        // A group keeps its shape but the copy gets its own id, so it never
+        // becomes one group with the scene it came from.
+        let groups = copied
+            .iter()
+            .filter_map(|clip| clip.group)
+            .collect::<Vec<_>>();
+        assert_eq!(groups.len(), 2, "the fixture has two grouped objects");
+        assert!(groups.iter().all(|group| *group == groups[0]));
 
         // The scene and its clips leave together in one undo step.
         assert!(workspace.undo());
