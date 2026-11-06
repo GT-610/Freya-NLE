@@ -13,6 +13,9 @@
 //!   with `<s>` restoring the object size;
 //! - `<gwNN>`: letter spacing, with `<gw>` restoring the object spacing;
 //! - `<ghNN>`: line spacing, with `<gh>` restoring the object's line spacing;
+//! - `<pX,Y>`: starts a positioned line at (`X`,`Y`) instead of following the
+//!   previous character; `<p>` returns to the normal flow. A number with a
+//!   sign is relative to the previous position.
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -47,6 +50,20 @@ pub struct TextRun {
     pub strikethrough: bool,
     /// Line spacing for the gap after this run's line, when `<gh...>` set one.
     pub line_spacing: Option<f32>,
+    /// Where `<p...>` put the text that starts with this run.
+    pub anchor: TextAnchor,
+}
+
+/// The text's position after a `<p...>` directive.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TextAnchor {
+    /// Keep flowing from the previous character.
+    #[default]
+    Flow,
+    /// Start a line at this point, measured in pixels from the text origin.
+    At { x: f32, y: f32 },
+    /// `<p>`: return to the object's normal flow.
+    Reset,
 }
 
 /// The values a run starts from when no directive has changed them.
@@ -62,6 +79,8 @@ pub struct TextBaseStyle {
     pub italic: bool,
     /// Line spacing requested by `<gh...>`; `None` keeps the object's value.
     pub line_spacing: Option<f32>,
+    /// The object's own anchor, restored by `<p>`.
+    pub anchor: TextAnchor,
 }
 
 /// The font half of a run: family and the three style switches.
@@ -88,6 +107,7 @@ const MIN_FONT_SIZE: f32 = 1.0;
 const MAX_FONT_SIZE: f32 = 4_096.0;
 const MAX_LETTER_SPACING: f32 = 1_000.0;
 const MAX_LINE_SPACING: f32 = 4_096.0;
+const MAX_POSITION: f32 = 32_768.0;
 const MAX_SPEED: f32 = 1_000.0;
 const MAX_WAIT_SECONDS: f32 = 3_600.0;
 
@@ -205,6 +225,7 @@ impl Parser {
             '#' => self.apply_color(&directive[1..]),
             's' => self.apply_size(&directive[1..]),
             '@' => self.apply_font(&directive[1..]),
+            'p' => self.apply_position(&directive[1..]),
             'g' => self.apply_spacing(&directive[1..]),
             'r' => self.apply_speed(&directive[1..]),
             'w' => self.apply_wait(&directive[1..]),
@@ -283,6 +304,46 @@ impl Parser {
             self.font.italic = italic;
             self.font.strikethrough = strikethrough;
         }
+        true
+    }
+
+    /// `<pX,Y[,Z]>`: start a positioned line; `<p>` returns to the flow.
+    ///
+    /// A coordinate with an explicit sign is relative to the position in
+    /// effect, so `<p+10>` nudges the text ten pixels right; an empty field
+    /// keeps the previous value, which lets `<p,40>` move only vertically.
+    fn apply_position(&mut self, value: &str) -> bool {
+        let value = value.trim();
+        if value.is_empty() {
+            self.style.anchor = TextAnchor::Reset;
+            return true;
+        }
+        let mut fields = value.split(',');
+        let x_field = fields.next().unwrap_or_default();
+        let y_field = fields.next().unwrap_or_default();
+        let z_field = fields.next();
+        if fields.next().is_some() {
+            return false;
+        }
+        let (current_x, current_y) = match self.style.anchor {
+            TextAnchor::At { x, y } => (x, y),
+            _ => (0.0, 0.0),
+        };
+        let Some(x) = position_coordinate(x_field, current_x) else {
+            return false;
+        };
+        let Some(y) = position_coordinate(y_field, current_y) else {
+            return false;
+        };
+        if let Some(z) = z_field
+            && position_coordinate(z, 0.0).is_none()
+        {
+            return false;
+        }
+        self.style.anchor = TextAnchor::At {
+            x: x.unwrap_or(current_x),
+            y: y.unwrap_or(current_y),
+        };
         true
     }
 
@@ -501,6 +562,7 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             font_size: run.style.font_size,
             letter_spacing: run.style.letter_spacing,
             line_spacing: run.style.line_spacing,
+            anchor: run.style.anchor,
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -556,6 +618,22 @@ fn parse_decoration(spec: &str) -> Option<(bool, bool, bool)> {
         }
     }
     Some(styles)
+}
+
+/// Parses one `<p>` coordinate; `None` means "keep the previous value", the
+/// outer `Option` is the parse result.
+fn position_coordinate(field: &str, current: f32) -> Option<Option<f32>> {
+    let field = field.trim();
+    if field.is_empty() {
+        return Some(None);
+    }
+    let (text, relative) = match field.strip_prefix('+') {
+        Some(value) => (value.trim(), true),
+        None => (field, false),
+    };
+    let value = text.parse::<f32>().ok().filter(|value| value.is_finite())?;
+    let value = if relative { current + value } else { value };
+    Some(Some(value.clamp(-MAX_POSITION, MAX_POSITION)))
 }
 
 fn parse_scaled_seconds(value: &str, displayed: usize) -> Option<f32> {
@@ -657,6 +735,7 @@ mod tests {
             font_size: 48.0,
             letter_spacing: 0.0,
             line_spacing: None,
+            anchor: TextAnchor::Flow,
             font_family: None,
             bold: false,
             italic: false,
@@ -862,6 +941,25 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn position_directives_anchor_the_text_that_follows() {
+        let runs = parse_text_runs("<p20,40>a", base());
+        assert_eq!(runs[0].anchor, TextAnchor::At { x: 20.0, y: 40.0 });
+
+        let runs = parse_text_runs("<p+10,0>a<p+5>b<p>c", base());
+        assert_eq!(runs[0].anchor, TextAnchor::At { x: 10.0, y: 0.0 });
+        assert_eq!(runs[1].anchor, TextAnchor::At { x: 15.0, y: 0.0 });
+        assert_eq!(runs[2].anchor, TextAnchor::Reset);
+
+        // An empty field keeps the previous coordinate.
+        let runs = parse_text_runs("<p20>a<p,40>b", base());
+        assert_eq!(runs[1].anchor, TextAnchor::At { x: 20.0, y: 40.0 });
+
+        // A malformed position stays literal.
+        assert_eq!(text(&parse_text_runs("<px>", base())), "<px>");
+        assert_eq!(text(&parse_text_runs("<p1,2,3,4>", base())), "<p1,2,3,4>");
     }
 
     #[test]

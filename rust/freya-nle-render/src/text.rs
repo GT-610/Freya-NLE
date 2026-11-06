@@ -1,5 +1,5 @@
 use fontdb::{Database, Family, ID, Query, Stretch, Style, Weight};
-use freya_nle_core::api::{RgbaColor, TextAlignment, TextRenderPlan};
+use freya_nle_core::api::{RgbaColor, TextAlignment, TextAnchor, TextRenderPlan};
 use freya_nle_media::VideoFrame;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::{Face, UnicodeBuffer};
@@ -506,6 +506,8 @@ struct RunSegment {
     letter_spacing: f32,
     /// Line spacing this run requests for the gap after its line.
     line_spacing: Option<f32>,
+    /// `<p...>` directive carried by the run.
+    anchor: TextAnchor,
     /// Index into the per-run faces passed to the layout.
     face_index: usize,
     strikethrough: bool,
@@ -535,6 +537,22 @@ struct ShapedSegment {
 struct ShapedRunLine {
     segments: Vec<ShapedSegment>,
     width: f32,
+    anchor: Option<LineAnchor>,
+}
+
+/// Where an anchored line starts. `y` is explicit on the line a `<p...>`
+/// opened and `None` on the lines that continue below it.
+#[derive(Clone, Copy)]
+struct LineAnchor {
+    x: f32,
+    y: Option<f32>,
+}
+
+/// A line being assembled, before its segments are shaped.
+#[derive(Default)]
+struct DraftLine {
+    segments: Vec<(usize, String)>,
+    anchor: Option<LineAnchor>,
 }
 
 struct RunPath {
@@ -577,6 +595,7 @@ fn rasterize_runs(
             font_size: run.font_size.max(1.0),
             letter_spacing: run.letter_spacing,
             line_spacing: run.line_spacing,
+            anchor: run.anchor,
             face_index: index,
             strikethrough: run.strikethrough,
         })
@@ -598,32 +617,58 @@ fn rasterize_runs(
     }
     // Split every run on newlines, appending to the current logical line so a
     // directive can straddle one without moving the text that follows it.
-    let mut line_runs: Vec<Vec<(usize, String)>> = vec![Vec::new()];
+    // Every draft line remembers an anchor when `<p...>` started it; a
+    // continuation line inside an anchored block only remembers its x, so its
+    // baseline can follow the previous line's advance.
+    let mut drafts: Vec<DraftLine> = vec![DraftLine::default()];
+    let mut anchor_x: Option<f32> = None;
     for (index, segment) in segments.iter().enumerate() {
+        if !matches!(segment.anchor, TextAnchor::Flow) {
+            if !drafts.last().is_some_and(|line| line.segments.is_empty()) {
+                drafts.push(DraftLine::default());
+            }
+            let line = drafts.last_mut().expect("a draft line exists");
+            match segment.anchor {
+                TextAnchor::At { x, y } => {
+                    line.anchor = Some(LineAnchor { x, y: Some(y) });
+                    anchor_x = Some(x);
+                }
+                TextAnchor::Reset => {
+                    line.anchor = None;
+                    anchor_x = None;
+                }
+                TextAnchor::Flow => {}
+            }
+        }
         let mut parts = segment.text.split('\n');
         let first = parts.next().unwrap_or_default();
         if !first.is_empty() {
-            line_runs
+            drafts
                 .last_mut()
                 .expect("at least one line")
+                .segments
                 .push((index, first.to_owned()));
         }
         for part in parts {
-            line_runs.push(Vec::new());
+            drafts.push(DraftLine {
+                segments: Vec::new(),
+                anchor: anchor_x.map(|x| LineAnchor { x, y: None }),
+            });
             if !part.is_empty() {
-                line_runs
+                drafts
                     .last_mut()
                     .expect("a line was just pushed")
+                    .segments
                     .push((index, part.to_owned()));
             }
         }
     }
 
-    let mut lines = Vec::with_capacity(line_runs.len());
-    for line in line_runs {
-        let mut shaped_segments = Vec::with_capacity(line.len());
+    let mut lines = Vec::with_capacity(drafts.len());
+    for draft in drafts {
+        let mut shaped_segments = Vec::with_capacity(draft.segments.len());
         let mut width = 0.0_f32;
-        for (index, text) in line {
+        for (index, text) in draft.segments {
             let segment = &segments[index];
             let face = &faces[segment.face_index];
             let units_per_em = face.units_per_em().max(1) as f32;
@@ -645,30 +690,65 @@ fn rasterize_runs(
         lines.push(ShapedRunLine {
             segments: shaped_segments,
             width,
+            anchor: draft.anchor,
         });
     }
-    let logical_width = lines.iter().map(|line| line.width).fold(0.0_f32, f32::max);
-    // Baselines accumulate, because `<gh...>` may change the advance from one
-    // line to the next; the value at the end of a line governs the gap after it.
-    let mut baselines = Vec::with_capacity(lines.len());
-    let mut baseline = ascent;
-    for line in &lines {
-        baselines.push(baseline);
-        let object_advance = if plan.line_spacing > 0.0 {
-            plan.line_spacing
-        } else {
-            natural_advance
-        };
-        let advance = line
-            .segments
+
+    let object_advance = if plan.line_spacing > 0.0 {
+        plan.line_spacing
+    } else {
+        natural_advance
+    };
+    let advance_after = |line: &ShapedRunLine| {
+        line.segments
             .iter()
             .rev()
             .find_map(|segment| segment.line_spacing)
             .filter(|spacing| *spacing > 0.0)
-            .unwrap_or(object_advance);
-        baseline += advance;
+            .unwrap_or(object_advance)
+    };
+    let normal_width = lines
+        .iter()
+        .filter(|line| line.anchor.is_none())
+        .map(|line| line.width)
+        .fold(0.0_f32, f32::max);
+    // Normal lines flow below each other; anchored lines start where `<p...>`
+    // put them and continue downwards at the same x.
+    let mut positions = Vec::with_capacity(lines.len());
+    let mut normal_baseline = ascent;
+    let mut anchor_baseline: Option<f32> = None;
+    for line in &lines {
+        let advance = advance_after(line);
+        match line.anchor {
+            None => {
+                positions.push((
+                    alignment_offset(plan.alignment, normal_width, line.width),
+                    normal_baseline,
+                ));
+                normal_baseline += advance;
+                anchor_baseline = None;
+            }
+            Some(LineAnchor { x, y: Some(y) }) => {
+                let baseline = y + ascent;
+                positions.push((x, baseline));
+                anchor_baseline = Some(baseline + advance);
+            }
+            Some(LineAnchor { x, y: None }) => {
+                let baseline = anchor_baseline.unwrap_or(ascent);
+                positions.push((x, baseline));
+                anchor_baseline = Some(baseline + advance);
+            }
+        }
     }
-    let logical_height = baselines.last().copied().unwrap_or(ascent) + descent;
+    let logical_width = lines
+        .iter()
+        .zip(&positions)
+        .map(|(line, (x, _))| x + line.width)
+        .fold(normal_width, f32::max);
+    let logical_height = positions
+        .iter()
+        .map(|(_, baseline)| baseline + descent)
+        .fold(ascent, f32::max);
     if !logical_width.is_finite() || !logical_height.is_finite() {
         return Err(TextRasterError::InvalidDimensions);
     }
@@ -677,8 +757,7 @@ fn rasterize_runs(
     let mut strikes = Vec::new();
     let mut outlined_glyphs = 0_usize;
     for (line_index, line) in lines.iter().enumerate() {
-        let line_x = alignment_offset(plan.alignment, logical_width, line.width);
-        let baseline = baselines[line_index];
+        let (line_x, baseline) = positions[line_index];
         let mut segment_x = line_x;
         for segment in &line.segments {
             let face = &faces[segment.face_index];
@@ -1154,6 +1233,7 @@ mod tests {
             font_size,
             letter_spacing: 0.0,
             line_spacing: None,
+            anchor: TextAnchor::Flow,
             font_family: None,
             bold: false,
             italic: false,
@@ -1183,6 +1263,27 @@ mod tests {
             .iter()
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn an_anchored_run_moves_the_text_and_grows_the_frame() {
+        let rasterizer = test_rasterizer();
+        let plain = plain_plan(vec![run("\u{ea01}\u{ea02}", 48.0)]);
+        let mut anchored_run = run("\u{ea02}", 48.0);
+        anchored_run.anchor = TextAnchor::At { x: 180.0, y: 160.0 };
+        let anchored = plain_plan(vec![run("\u{ea01}", 48.0), anchored_run]);
+        let plain_frame = rasterizer.rasterize(&plain, 0.0).expect("plain frame");
+        let anchored_frame = rasterizer
+            .rasterize(&anchored, 0.0)
+            .expect("anchored frame");
+        assert!(
+            anchored_frame.width > plain_frame.width + 100,
+            "the second glyph starts 180px to the right"
+        );
+        assert!(
+            anchored_frame.height > plain_frame.height + 100,
+            "the second glyph starts 160px lower"
+        );
     }
 
     #[test]
@@ -1297,6 +1398,7 @@ mod tests {
                 font_size: 64.0,
                 letter_spacing: 0.0,
                 line_spacing: None,
+                anchor: TextAnchor::Flow,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1309,6 +1411,7 @@ mod tests {
                 font_size: 128.0,
                 letter_spacing: 0.0,
                 line_spacing: None,
+                anchor: TextAnchor::Flow,
                 font_family: None,
                 bold: false,
                 italic: false,
