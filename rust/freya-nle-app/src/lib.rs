@@ -561,7 +561,13 @@ impl ApplicationModel {
     /// Opens one saved version addressed by its backup directory key.
     pub fn open_backup_entry(&mut self, key: &str, file_name: &str) -> Result<usize, String> {
         let backup_path = self.backup_store.path_for_key(key, file_name)?;
-        let project = ProjectSession::load_recovery(&backup_path, "")?;
+        // The manifest records the project the version came from; its directory
+        // is what relative media in the restored session resolves against.
+        let original = self
+            .backup_store
+            .project_manifest_path(key)
+            .unwrap_or_default();
+        let project = ProjectSession::load_recovery(&backup_path, &original)?;
         let name = self
             .backup_store
             .project_label(key)
@@ -630,11 +636,17 @@ impl ApplicationModel {
             .workspace
             .project()
             .snapshot_bytes()?;
-        self.backup_store
-            .record(&path, &bytes, self.backup_limit)
-            .map(|_| ())?;
-        self.enforce_backup_budget();
-        Ok(())
+        match self.backup_store.record(&path, &bytes, self.backup_limit)? {
+            Some(_) => {
+                self.enforce_backup_budget();
+                Ok(())
+            }
+            // Nothing was stored, so reporting success would refresh the list
+            // and show the user a version that does not exist.
+            None => Err(
+                "no version was recorded: saved-version history is off for this project".to_owned(),
+            ),
+        }
     }
 
     pub fn backup_errors(&self) -> &[String] {

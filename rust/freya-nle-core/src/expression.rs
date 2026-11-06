@@ -21,7 +21,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// The Qt host rejected anything longer before it reached the parser.
-const MAX_EXPRESSION_LENGTH: usize = 10_000;
+/// Longest expression the evaluator accepts. The edit path checks the same
+/// bound so a stored expression is always one the renderer can run.
+pub(crate) const MAX_EXPRESSION_BYTES: usize = 10_000;
+
+const MAX_EXPRESSION_LENGTH: usize = MAX_EXPRESSION_BYTES;
 /// Compiled expressions are retained per thread, so the cache is bounded.
 const MAX_COMPILED_EXPRESSIONS: usize = 1_000;
 const INSTRUCTION_BUDGET: i64 = 100_000;
@@ -275,6 +279,10 @@ impl TextScriptVm {
              return out"
         );
         let closure = self.vm.load(source.as_bytes(), b"=text-script").ok()?;
+        // The budget is per call, not per VM: this VM is reused for every text
+        // object on the thread, so without re-arming it the allowance would be
+        // spent by earlier scripts until a later one fails and stays literal.
+        self.vm.set_instr_budget(Some(INSTRUCTION_BUDGET));
         let values = self.vm.call_value(Value::Closure(closure), &[]).ok()?;
         // The chunk always returns a string; a block that printed nothing
         // yields the empty string.

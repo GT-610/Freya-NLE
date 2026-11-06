@@ -84,11 +84,22 @@ impl ExportPlannerRuntime {
         };
         if self.source_key.as_ref() != Some(&source_key) {
             if let Some(planner) = self.planner.as_mut() {
-                planner.rebuild(workspace.document(), workspace.project().path.as_deref());
+                planner.rebuild_with_media_directory(
+                    workspace.document(),
+                    workspace
+                        .project()
+                        .media_directory()
+                        .map(std::path::Path::to_path_buf),
+                );
                 planner.set_native_definitions(effect_catalog.native_definitions());
             } else {
-                let mut planner =
-                    PreviewPlanner::new(workspace.document(), workspace.project().path.as_deref());
+                let mut planner = PreviewPlanner::with_media_directory(
+                    workspace.document(),
+                    workspace
+                        .project()
+                        .media_directory()
+                        .map(std::path::Path::to_path_buf),
+                );
                 planner.set_native_definitions(effect_catalog.native_definitions());
                 self.planner = Some(planner);
             }
@@ -696,29 +707,55 @@ fn begin_batch_item(
     batch: &Rc<RefCell<BatchQueue>>,
     index: usize,
 ) {
-    if let Some(scene) = batch.borrow().scene_of(index)
-        && let Some(workspace) = model.borrow_mut().current_workspace_mut()
-        && workspace.selected_scene() != scene
-    {
-        let _ = workspace.switch_scene(scene);
+    // A queued item names a scene, and that scene may have been deleted since
+    // the item was added. Exporting the currently selected scene instead would
+    // write the wrong content under the item's name.
+    if let Some(scene) = batch.borrow().scene_of(index) {
+        let missing = {
+            let mut model = model.borrow_mut();
+            match model.current_workspace_mut() {
+                Some(workspace) if workspace.selected_scene() != scene => {
+                    !workspace.switch_scene(scene)
+                }
+                Some(_) => false,
+                None => true,
+            }
+        };
+        if missing {
+            fail_batch_item(
+                window,
+                model,
+                manager,
+                settings,
+                planner,
+                batch,
+                index,
+                localized(
+                    "The scene this item exports no longer exists",
+                    "该条目要导出的场景已不存在",
+                    "この項目が書き出すシーンはもう存在しません",
+                )
+                .to_owned(),
+            );
+            return;
+        }
     }
     let Some((project_instance_id, project)) = current_export_project(&model.borrow()) else {
-        let mut queue = batch.borrow_mut();
-        queue.begin(index);
-        queue.finish_running(BatchOutcome::Failed(
+        fail_batch_item(
+            window,
+            model,
+            manager,
+            settings,
+            planner,
+            batch,
+            index,
             localized(
                 "There is no project to export.",
                 "没有可导出的项目。",
                 "書き出すプロジェクトがありません",
             )
             .to_owned(),
-        ));
-        queue.set_message(localized(
-            "The batch stopped because no project is open",
-            "没有打开的项目，批次已停止",
-            "プロジェクトが開かれていないため停止しました",
-        ));
-        sync_batch(window, &queue);
+        );
         return;
     };
     let started = batch.borrow_mut().begin(index);
@@ -750,13 +787,62 @@ fn begin_batch_item(
                 localized("Exporting item", "正在导出项", "書き出し中")
             ));
         }
-        Err(error) => {
-            let mut queue = batch.borrow_mut();
-            queue.finish_running(BatchOutcome::Failed(error.to_string()));
-            queue.set_message(error.to_string());
-        }
+        Err(error) => fail_batch_item(
+            window,
+            model,
+            manager,
+            settings,
+            planner,
+            batch,
+            index,
+            error.to_string(),
+        ),
     }
     sync_batch(window, &batch.borrow());
+}
+
+/// Records a failure for one item and moves the batch on.
+///
+/// A synchronous `start` failure returns before any worker exists, so no
+/// `Finished` event ever arrives to advance the queue. Without this the batch
+/// would sit on a dead item, showing its error and never finishing.
+#[allow(clippy::too_many_arguments)]
+fn fail_batch_item(
+    window: &ExportWindow,
+    model: &Rc<RefCell<ApplicationModel>>,
+    manager: &Rc<RefCell<ExportManager>>,
+    settings: &Rc<RefCell<SettingsStore>>,
+    planner: &Rc<RefCell<ExportPlannerRuntime>>,
+    batch: &Rc<RefCell<BatchQueue>>,
+    index: usize,
+    message: String,
+) {
+    let (next, total, pause) = {
+        let mut queue = batch.borrow_mut();
+        if queue.running_index() != Some(index) {
+            queue.begin(index);
+        }
+        queue.finish_running(BatchOutcome::Failed(message.clone()));
+        queue.set_message(message);
+        (index + 1, queue.items().len(), queue.pause_requested())
+    };
+    if next >= total {
+        let (succeeded, failed) = batch.borrow().summary();
+        batch.borrow_mut().set_message(format!(
+            "{}: {succeeded} {} · {failed} {}",
+            localized("Batch finished", "批次完成", "バッチ完了"),
+            localized("succeeded", "成功", "成功"),
+            localized("failed", "失败", "失敗")
+        ));
+        sync_batch(window, &batch.borrow());
+        return;
+    }
+    if pause {
+        batch.borrow_mut().pause_after(next);
+        sync_batch(window, &batch.borrow());
+        return;
+    }
+    begin_batch_item(window, model, manager, settings, planner, batch, next);
 }
 
 /// Returns to the scene the user was on before the batch started.

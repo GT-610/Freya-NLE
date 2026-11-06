@@ -551,10 +551,26 @@ impl TimelineState {
                     .unwrap_or_default();
                 match expression {
                     Some(expression) if !expression.trim().is_empty() => {
+                        // The evaluator refuses anything longer, so storing it
+                        // would silently keep the last numeric value instead.
+                        if expression.len() > crate::expression::MAX_EXPRESSION_BYTES {
+                            return Err(StateError::InvalidArgument);
+                        }
                         expressions.insert(param_name.clone(), Value::String(expression));
                     }
                     _ => {
                         expressions.remove(&param_name);
+                        // An imported project may store the AviUtl 1.x form, an
+                        // `=` written directly into the parameter. Clearing the
+                        // separate expression has to clear that too, or the
+                        // parameter keeps animating through the fallback.
+                        if let Some(Value::String(literal)) = effect.params.get_mut(&param_name)
+                            && crate::expression::is_expression(literal)
+                        {
+                            let literal = literal.trim_start_matches('=').trim().to_owned();
+                            *effect.params.get_mut(&param_name).expect("checked above") =
+                                Value::String(literal);
+                        }
                     }
                 }
                 if expressions.is_empty() {

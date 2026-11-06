@@ -140,7 +140,13 @@ impl PreviewRuntime {
         if self.source_key.as_ref() != Some(&source_key) {
             self.decoder.reset();
             if let Some(planner) = self.planner.as_mut() {
-                planner.rebuild(workspace.document(), workspace.project().path.as_deref());
+                planner.rebuild_with_media_directory(
+                    workspace.document(),
+                    workspace
+                        .project()
+                        .media_directory()
+                        .map(std::path::Path::to_path_buf),
+                );
                 planner.set_native_definitions(effect_catalog.native_definitions());
                 planner.set_known_objects(
                     effect_catalog
@@ -149,8 +155,13 @@ impl PreviewRuntime {
                         .collect::<Vec<_>>(),
                 );
             } else {
-                let mut planner =
-                    PreviewPlanner::new(workspace.document(), workspace.project().path.as_deref());
+                let mut planner = PreviewPlanner::with_media_directory(
+                    workspace.document(),
+                    workspace
+                        .project()
+                        .media_directory()
+                        .map(std::path::Path::to_path_buf),
+                );
                 planner.set_native_definitions(effect_catalog.native_definitions());
                 planner.set_known_objects(
                     effect_catalog
@@ -259,11 +270,20 @@ impl AudioPlaybackRuntime {
         };
         if self.source_key.as_ref() != Some(&source_key) {
             if let Some(planner) = self.planner.as_mut() {
-                planner.rebuild(workspace.document(), workspace.project().path.as_deref());
-            } else {
-                self.planner = Some(PreviewPlanner::new(
+                planner.rebuild_with_media_directory(
                     workspace.document(),
-                    workspace.project().path.as_deref(),
+                    workspace
+                        .project()
+                        .media_directory()
+                        .map(std::path::Path::to_path_buf),
+                );
+            } else {
+                self.planner = Some(PreviewPlanner::with_media_directory(
+                    workspace.document(),
+                    workspace
+                        .project()
+                        .media_directory()
+                        .map(std::path::Path::to_path_buf),
                 ));
             }
             self.source_key = Some(source_key);
@@ -318,8 +338,10 @@ impl AudioPlaybackRuntime {
             for warning in planned.warnings {
                 eprintln!("Audio preview planning warning: {warning}");
             }
-            let sources =
-                resolve_timeline_audio_sources(planned.audio, workspace.project().path.as_deref());
+            let sources = resolve_timeline_audio_sources(
+                planned.audio,
+                workspace.project().media_directory(),
+            );
             match self.mixer.mix_frame_with_timeline_rate(
                 frame,
                 fps,
@@ -603,7 +625,7 @@ pub(super) fn samples_for_timeline_frame(
 
 fn resolve_timeline_audio_sources(
     plans: Vec<AudioLayerPlan>,
-    project_path: Option<&Path>,
+    media_directory: Option<&Path>,
 ) -> Vec<TimelineAudioSource> {
     plans
         .into_iter()
@@ -613,9 +635,7 @@ fn resolve_timeline_audio_sources(
             let path = if source.is_absolute() {
                 source
             } else {
-                project_path
-                    .and_then(Path::parent)
-                    .map_or(source.clone(), |directory| directory.join(source))
+                media_directory.map_or(source.clone(), |directory| directory.join(source))
             };
             Some(TimelineAudioSource { path, plan })
         })

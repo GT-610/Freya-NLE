@@ -18,6 +18,13 @@ pub struct ProjectSession {
     pub state: TimelineState,
     pub document: ProjectDocument,
     pub path: Option<PathBuf>,
+    /// Directory relative media paths resolve against.
+    ///
+    /// Normally the project file's own directory, but a session restored from a
+    /// backup is deliberately unsaved (`path` stays `None`) while its media
+    /// still lives beside the project the backup came from. Keeping the two
+    /// apart means Save offers Save As without the preview losing every still.
+    pub media_directory: Option<PathBuf>,
     pub dirty: bool,
 }
 
@@ -97,6 +104,7 @@ impl ProjectSession {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         }
     }
@@ -106,6 +114,7 @@ impl ProjectSession {
         let mut project =
             Self::from_json(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
         project.path = Some(path.to_path_buf());
+        project.media_directory = path.parent().map(Path::to_path_buf);
         Ok(project)
     }
 
@@ -125,27 +134,35 @@ impl ProjectSession {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
 
-    pub fn load_recovery(
-        snapshot_path: &Path,
-        _original_project_url: &str,
-    ) -> Result<Self, String> {
+    pub fn load_recovery(snapshot_path: &Path, original_project_url: &str) -> Result<Self, String> {
         let bytes = read_document(snapshot_path, MAX_PROJECT_DOCUMENT_BYTES)?;
         let state = TimelineState::from_json(&bytes)
             .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
         let document = state.snapshot();
+        // A restored session stays unsaved so that Save opens Save As instead
+        // of overwriting the project the snapshot came from, but its relative
+        // media paths still belong to that project's directory.
+        let media_directory = Path::new(original_project_url)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf);
         Ok(Self {
             state,
             document,
-            // Match the Qt recovery flow: the source path is informative only. A recovered
-            // project is intentionally unsaved so that a normal Save opens Save As instead of
-            // overwriting the original project.
             path: None,
+            media_directory,
             dirty: true,
         })
+    }
+
+    /// Directory relative media paths resolve against for this session.
+    pub fn media_directory(&self) -> Option<&Path> {
+        self.media_directory.as_deref()
     }
 
     pub fn refresh(&mut self) {
@@ -167,6 +184,7 @@ impl ProjectSession {
         let bytes = self.snapshot_bytes_for(path)?;
         write_atomic(path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
         self.path = Some(path.to_path_buf());
+        self.media_directory = path.parent().map(Path::to_path_buf);
         self.dirty = false;
         Ok(())
     }
@@ -472,14 +490,26 @@ mod tests {
         .expect("recovery snapshot writes");
 
         let recovered =
-            ProjectSession::load_recovery(&snapshot_path, "file:///tmp/AviQtl%20recovery.aviqtl")
+            ProjectSession::load_recovery(&snapshot_path, "/projects/demo/snapshot.freya")
                 .expect("recovery snapshot loads");
-        assert_eq!(recovered.path, None);
-        assert!(recovered.dirty);
+        assert_eq!(recovered.path, None, "a recovered session stays unsaved");
+        assert!(recovered.dirty, "a recovered session needs a save");
+        // Its media still belongs to the project the snapshot came from, so a
+        // relative still resolves there instead of against the process cwd.
+        assert_eq!(
+            recovered.media_directory(),
+            Some(Path::new("/projects/demo")),
+            "the source directory travels with the recovered session"
+        );
 
         let unsaved = ProjectSession::load_recovery(&snapshot_path, "")
             .expect("unsaved recovery snapshot loads");
         assert_eq!(unsaved.path, None);
+        assert_eq!(
+            unsaved.media_directory(),
+            None,
+            "no source means no media directory to guess"
+        );
         assert!(unsaved.dirty);
         fs::remove_file(snapshot_path).expect("recovery snapshot removes");
     }

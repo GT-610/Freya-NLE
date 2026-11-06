@@ -104,6 +104,12 @@ impl PreviewSource {
             PreviewContent::Text { plan } => {
                 "text".hash(&mut hasher);
                 plan.content.hash(&mut hasher);
+                // The runs carry what a text script changed for this frame: two
+                // frames can share `content` while a script recolours a run, and
+                // without them the preview keeps the cached texture.
+                plan.runs_authoritative.hash(&mut hasher);
+                plan.runs.len().hash(&mut hasher);
+                hash_text_runs(&plan.runs, &mut hasher);
                 plan.font_family.hash(&mut hasher);
                 plan.font_size.to_bits().hash(&mut hasher);
                 plan.bold.hash(&mut hasher);
@@ -156,6 +162,42 @@ impl PreviewSource {
             },
             PreviewContent::NativeCanvas { .. } => "native package object".to_owned(),
             PreviewContent::Scene { scene } => format!("nested scene {}", scene.instance_key),
+        }
+    }
+}
+
+/// Hashes the parts of a run that change the pixels.
+fn hash_text_runs(runs: &[freya_nle_core::api::TextRun], hasher: &mut DefaultHasher) {
+    for run in runs {
+        run.text.hash(hasher);
+        hash_color(run.color, hasher);
+        hash_color(run.outline_color, hasher);
+        run.font_size.to_bits().hash(hasher);
+        run.letter_spacing.to_bits().hash(hasher);
+        run.font_family.hash(hasher);
+        run.outline_width.map(f32::to_bits).hash(hasher);
+        run.bold.hash(hasher);
+        run.italic.hash(hasher);
+        run.strikethrough.hash(hasher);
+        run.line_spacing.map(f32::to_bits).hash(hasher);
+        run.emoji.hash(hasher);
+        run.x_scale.to_bits().hash(hasher);
+        run.y_scale.to_bits().hash(hasher);
+        run.rotation.to_bits().hash(hasher);
+        match run.anchor {
+            freya_nle_core::api::TextAnchor::Flow => 0_u8.hash(hasher),
+            freya_nle_core::api::TextAnchor::At { x, y } => {
+                1_u8.hash(hasher);
+                x.to_bits().hash(hasher);
+                y.to_bits().hash(hasher);
+            }
+            freya_nle_core::api::TextAnchor::Reset => 2_u8.hash(hasher),
+        }
+        if let Some(ruby) = &run.ruby {
+            ruby.block.hash(hasher);
+            ruby.base.hash(hasher);
+            ruby.scale.to_bits().hash(hasher);
+            ruby.expand.hash(hasher);
         }
     }
 }

@@ -1185,11 +1185,14 @@ impl ExpressionScene<'_> {
     }
 
     fn effect_by_name(&self, clip_index: usize, name: &str) -> Option<usize> {
+        // A reference must resolve to an effect the render loop actually runs;
+        // reading a bypassed effect's value would apply a parameter the user
+        // turned off.
         self.clips
             .get(clip_index)?
             .effects
             .iter()
-            .position(|effect| effect.name == name || effect.id == name)
+            .position(|effect| effect.enabled && (effect.name == name || effect.id == name))
     }
 
     /// Finds the effect on another layer that corresponds to the referencing
@@ -1319,7 +1322,14 @@ fn substitute_references(source: &str, resolve: &mut impl FnMut(&str) -> Option<
                 .unwrap_or(0);
             let chain = &rest[..chain_len];
             match resolve(chain).and_then(format_resolved) {
-                Some(number) => output.push_str(&number),
+                // Wrapped, because a bare negative would rebind: Lua reads
+                // `-5^2` as `-(5^2)`, so a reference resolving to -5 used as
+                // `X^2` would come out negative.
+                Some(number) => {
+                    output.push('(');
+                    output.push_str(&number);
+                    output.push(')');
+                }
                 None => output.push_str(chain),
             }
             rest = &rest[chain_len..];
@@ -1510,7 +1520,10 @@ impl BakePlan {
                 if !seen.insert(clip.clip_id) {
                     continue;
                 }
-                if clip.start_frame <= range_end && clip.end_frame >= range_start {
+                // Exclusive end, matching the render loop: a clip that ends on
+                // this frame is no longer drawn, so a reference must not read
+                // its value instead of the next layer's.
+                if clip.start_frame <= range_end && clip.end_frame > range_start {
                     selected.push(index);
                 }
             }
@@ -1698,7 +1711,14 @@ impl BakePlan {
                     render_input.rotation_z = effect.float_or("rotationZ", 0.0, relative_frame);
                     render_input.scale = effect.float_or("scale", 100.0, relative_frame);
                     render_input.opacity = effect.float_or("opacity", 1.0, relative_frame);
-                    render_input.aspect = effect.float_or("aspect", 0.0, relative_frame);
+                    // A file written by an older build may store the aspect
+                    // as a percentage; the compositor multiplies by
+                    // `1.0 + aspect`, so an unclamped 100 would stretch the
+                    // object 101x wide. Clamping here keeps a stale value from
+                    // reaching the compositor at all.
+                    render_input.aspect = effect
+                        .float_or("aspect", 0.0, relative_frame)
+                        .clamp(-1.0, 1.0);
                     render_input.pivot_x = effect.float_or("cx", 0.0, relative_frame);
                     render_input.pivot_y = effect.float_or("cy", 0.0, relative_frame);
                     render_input.pivot_z = effect.float_or("cz", 0.0, relative_frame);
@@ -2613,6 +2633,42 @@ mod tests {
         .expect("serialize scene fixture")
     }
 
+    /// A project written before the aspect unit was corrected stores the panel
+    /// percentage (100 = square). The compositor multiplies by `1.0 + aspect`,
+    /// so forwarding 100 would stretch the object 101x wide.
+    #[test]
+    fn a_persisted_percentage_aspect_is_clamped_before_the_compositor() {
+        let aspect_at = |aspect: f64| {
+            let input = json!({
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 10.0, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1, "sceneId": 1, "type": "text", "start": 0, "duration": 60,
+                    "layer": 0, "params": {}, "audioPlugins": [],
+                    "effects": [
+                        {"id": "transform", "name": "Transform", "enabled": true,
+                         "params": {"aspect": aspect}},
+                        {"id": "text", "name": "Text", "enabled": true,
+                         "params": {"text": "hello"}}
+                    ]
+                }]
+            });
+            let bytes = serde_json::to_vec(&input).expect("serialize project fixture");
+            let document = crate::project::parse_project_document(&bytes).expect("project parses");
+            let mut plan = SceneRenderPlan::from_document(&document, 1).expect("scene plan");
+            plan.evaluate(0).layers[0].transform.aspect
+        };
+
+        // A stale percentage is clamped into the documented range instead of
+        // reaching `1.0 + aspect` as a hundred.
+        assert_eq!(aspect_at(100.0), 1.0);
+        assert_eq!(aspect_at(-100.0), -1.0);
+        // Values already inside the range pass through untouched.
+        assert_eq!(aspect_at(0.5), 0.5);
+        assert_eq!(aspect_at(0.0), 0.0);
+    }
+
     #[test]
     fn builds_scene_outputs_and_reuses_numeric_frame_cache() {
         let mut plan = BakePlan::parse(&scene_json()).expect("valid plan");
@@ -2889,22 +2945,30 @@ mod tests {
             "blur.size" => Some(12.0),
             _ => None,
         };
-        assert_eq!(substitute_references("X*2 + 1", &mut resolve), "3*2 + 1");
+        assert_eq!(substitute_references("X*2 + 1", &mut resolve), "(3)*2 + 1");
         assert_eq!(
             substitute_references("@clamp(X, 0, 20)", &mut resolve),
-            "clamp(3, 0, 20)"
+            "clamp((3), 0, 20)"
         );
         assert_eq!(
             substitute_references("blur.size - $", &mut resolve),
-            "12 - 0.5"
+            "(12) - (0.5)"
         );
+        // A negative value has to stay parenthesised: Lua reads `-5^2` as
+        // `-(5^2)`, so an unparenthesised reference would flip the sign of a
+        // power expression.
+        let mut negative = |chain: &str| (chain == "X").then_some(-5.0);
+        assert_eq!(substitute_references("X^2", &mut negative), "(-5)^2");
         // Unknown chains and decimal numbers keep their text.
         assert_eq!(
             substitute_references("above.X + 1.5", &mut resolve),
             "above.X + 1.5"
         );
         // A reference chain directly after another one is still separate.
-        assert_eq!(substitute_references("X+blur.size", &mut resolve), "3+12");
+        assert_eq!(
+            substitute_references("X+blur.size", &mut resolve),
+            "(3)+(12)"
+        );
     }
 
     #[test]

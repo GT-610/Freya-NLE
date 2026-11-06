@@ -34,9 +34,21 @@ pub struct PreviewPlanner {
 
 impl PreviewPlanner {
     pub fn new(document: &ProjectDocument, project_path: Option<&Path>) -> Self {
+        Self::with_media_directory(
+            document,
+            project_path.and_then(Path::parent).map(Path::to_path_buf),
+        )
+    }
+
+    /// Builds a planner whose relative media resolves against `directory`.
+    ///
+    /// Separate from [`Self::new`] because a session restored from a backup is
+    /// unsaved and has no project file, but its media still sits beside the
+    /// project the backup was taken from.
+    pub fn with_media_directory(document: &ProjectDocument, directory: Option<PathBuf>) -> Self {
         Self {
             plans: build_render_plans(document),
-            project_directory: project_path.and_then(Path::parent).map(Path::to_path_buf),
+            project_directory: directory,
             native_definitions: BTreeMap::new(),
             known_objects: BTreeSet::new(),
             warned_effects: BTreeSet::new(),
@@ -59,8 +71,21 @@ impl PreviewPlanner {
     }
 
     pub fn rebuild(&mut self, document: &ProjectDocument, project_path: Option<&Path>) {
+        self.rebuild_with_media_directory(
+            document,
+            project_path.and_then(Path::parent).map(Path::to_path_buf),
+        );
+    }
+
+    /// Rebuilds against an explicit media directory; see
+    /// [`Self::with_media_directory`].
+    pub fn rebuild_with_media_directory(
+        &mut self,
+        document: &ProjectDocument,
+        directory: Option<PathBuf>,
+    ) {
         self.plans = build_render_plans(document);
-        self.project_directory = project_path.and_then(Path::parent).map(Path::to_path_buf);
+        self.project_directory = directory;
     }
 
     pub fn build(

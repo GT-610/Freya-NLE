@@ -303,11 +303,14 @@ fn item_from_json(value: &Value) -> Option<(String, i32, ExportRequest)> {
     if output_path.is_empty() {
         return None;
     }
+    // Checked: a stored value past `i32` would otherwise wrap (`4294967306`
+    // becomes `10`) and export the wrong frames.
     let number = |key: &str, fallback: i32| {
         object
             .get(key)
             .and_then(Value::as_i64)
-            .map_or(fallback, |value| value as i32)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(fallback)
     };
     let string = |key: &str, fallback: &str| {
         object
@@ -394,11 +397,14 @@ pub(super) fn scene_output_path(
     let name = format!("{stem}_{safe}");
     match mode {
         ExportMode::Video => {
-            let mut path = base.with_file_name(name);
-            if let Some(extension) = base.extension() {
-                path.set_extension(extension);
-            }
-            path
+            // Appending the extension by text, not `set_extension`: a scene
+            // name may itself contain a period (`Scene.v1`), and replacing the
+            // suffix after it produced `clip_Scene.mkv`, which collides with a
+            // real `Scene`.
+            let Some(extension) = base.extension().and_then(|value| value.to_str()) else {
+                return base.with_file_name(name);
+            };
+            base.with_file_name(format!("{name}.{extension}"))
         }
         ExportMode::ImageSequence => base.with_file_name(name),
     }

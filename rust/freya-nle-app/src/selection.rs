@@ -59,6 +59,19 @@ impl ClipSelection {
         self.preview_ids.clear();
     }
 
+    /// Clicks a set of objects as one unit, for grouped clips, keeping
+    /// `primary` as the one the user actually clicked.
+    ///
+    /// The primary object is the one the settings panel opens, so a group that
+    /// reordered it to the first member would open a different object than the
+    /// one under the pointer.
+    pub fn click_group(&mut self, ids: &[i32], primary: i32, control: bool) {
+        self.click_ids(ids, control);
+        if self.ids.contains(&primary) {
+            self.primary = Some(primary);
+        }
+    }
+
     /// Clicks a set of objects as one unit, for grouped clips.
     ///
     /// With Control the whole set toggles: adding it when any member is missing

@@ -2280,6 +2280,10 @@ impl WorkspaceModel {
                 return None;
             }
         };
+        // Normalized here too, not only on update: a name or label past the
+        // documented bound would be rejected by document validation before the
+        // settings path ever got a chance to truncate it.
+        let input = normalized_scene_settings(input);
         let name = input.name.clone();
         let scene = SceneDocument {
             id: scene_id,
@@ -3077,10 +3081,23 @@ impl WorkspaceModel {
     fn select_clip_with_group(&mut self, clip_id: i32, control: bool) {
         let members = self.group_members(clip_id);
         if members.len() > 1 {
-            self.selection.click_ids(&members, control);
+            // The clicked member stays primary: the settings panel and the
+            // double-click both act on what the user pointed at, not on
+            // whichever member happens to come first in document order.
+            self.selection.click_group(&members, clip_id, control);
         } else {
             self.selection.click_clip(clip_id, control);
         }
+    }
+
+    /// Whether the edited scene has `layer` locked.
+    fn is_layer_locked(&self, layer: i32) -> bool {
+        self.project
+            .document
+            .scenes
+            .iter()
+            .find(|scene| scene.id == self.selected_scene)
+            .is_some_and(|scene| scene.locked_layers.contains(&layer))
     }
 
     /// Clips in the edited scene that share a group with `clip_id`.
@@ -3153,6 +3170,11 @@ impl WorkspaceModel {
             else {
                 continue;
             };
+            // A locked layer keeps its membership: grouping is an edit like
+            // any other, and `plan_clip_replacements` does not check locks.
+            if self.is_layer_locked(clip.layer) {
+                continue;
+            }
             let mut after = clip;
             after.group = Some(group);
             commands.push(TimelineCommand::ReplaceClip {
@@ -3191,6 +3213,9 @@ impl WorkspaceModel {
                 continue;
             };
             if clip.group.is_none() {
+                continue;
+            }
+            if self.is_layer_locked(clip.layer) {
                 continue;
             }
             let mut after = clip;
@@ -6147,6 +6172,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
@@ -7162,6 +7188,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
@@ -7261,6 +7288,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         });
         workspace.click_clip(1, false);
@@ -7471,6 +7499,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
@@ -7514,6 +7543,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         });
 
@@ -8112,6 +8142,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
@@ -8153,6 +8184,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
@@ -8403,6 +8435,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         })
     }
@@ -8681,6 +8714,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         });
 
@@ -9281,6 +9315,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         });
         workspace.click_clip(1, false);
@@ -9611,6 +9646,7 @@ mod tests {
             state,
             document,
             path: None,
+            media_directory: None,
             dirty: false,
         });
         workspace.click_clip(1, false);

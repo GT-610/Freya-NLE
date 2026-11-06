@@ -380,6 +380,9 @@ impl Parser {
             }
         };
         let outline_color = match outline {
+            // A bare `<#>` resets the colour pair, matching how `<s>` and `<tr>`
+            // restore both halves of what they control.
+            None if text.is_empty() => self.base.outline_color,
             None => self.style.outline_color,
             Some(value) if value.trim().is_empty() => self.base.outline_color,
             Some(value) => match parse_color(value) {
@@ -961,9 +964,18 @@ fn position_coordinate(field: &str, current: f32) -> Option<Option<f32>> {
     if field.is_empty() {
         return Some(None);
     }
+    // Both `+5` and `-5` are offsets from the current position, which is what
+    // AviUtl's `<p>` means by a signed coordinate; an unsigned `5` is absolute.
     let (text, relative) = match field.strip_prefix('+') {
         Some(value) => (value.trim(), true),
-        None => (field, false),
+        None => match field.strip_prefix('-') {
+            Some(value) => {
+                let value = value.trim().parse::<f32>().ok()?;
+                let value = current - value.abs();
+                return Some(Some(value.clamp(-MAX_POSITION, MAX_POSITION)));
+            }
+            None => (field, false),
+        },
     };
     let value = text.parse::<f32>().ok().filter(|value| value.is_finite())?;
     let value = if relative { current + value } else { value };

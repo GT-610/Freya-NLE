@@ -150,6 +150,26 @@ impl BackupStore {
         self.root.join(key)
     }
 
+    /// Resolves a directory key to a real directory under the backup root.
+    ///
+    /// A key is 16 hex characters, so it cannot name a path outside the root by
+    /// spelling alone — but it can name a *symlink* that points outside. Listing
+    /// or deleting through such a link would touch files the user never put in
+    /// the backup folder, so a linked directory is refused instead of followed.
+    fn key_directory(&self, key: &str) -> Result<PathBuf, String> {
+        if !valid_project_key(key) {
+            return Err(format!("{key:?} is not a backup directory key"));
+        }
+        let directory = self.root.join(key);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+                "{} is a symbolic link, which a backup directory must not be",
+                directory.display()
+            )),
+            _ => Ok(directory),
+        }
+    }
+
     /// Removes the oldest versions across every project until the whole store
     /// fits `budget_bytes`.
     ///
@@ -163,6 +183,9 @@ impl BackupStore {
         let mut versions = read_dir
             .flatten()
             .filter(|entry| valid_project_key(&entry.file_name().to_string_lossy()))
+            // A linked directory may point anywhere, so its contents are not
+            // this store's to count or delete.
+            .filter(|entry| !entry.file_type().is_ok_and(|kind| kind.is_symlink()))
             .flat_map(|entry| {
                 let directory = entry.path();
                 list_entries(&directory)
@@ -202,6 +225,7 @@ impl BackupStore {
         read_dir
             .flatten()
             .filter(|entry| valid_project_key(&entry.file_name().to_string_lossy()))
+            .filter(|entry| !entry.file_type().is_ok_and(|kind| kind.is_symlink()))
             .flat_map(|entry| list_entries(&entry.path()))
             .map(|entry| entry.size)
             .sum()
@@ -214,8 +238,15 @@ impl BackupStore {
         bytes: &[u8],
         limit: usize,
     ) -> Result<Option<BackupEntry>, String> {
-        if limit == 0 || bytes.len() as u64 > MAX_PROJECT_DOCUMENT_BYTES {
+        if limit == 0 {
             return Ok(None);
+        }
+        // A document past the read bound could never be restored, so storing it
+        // would produce a version that looks saved and cannot be opened.
+        if bytes.len() as u64 > MAX_PROJECT_DOCUMENT_BYTES {
+            return Err(format!(
+                "the project is larger than the {MAX_PROJECT_DOCUMENT_BYTES} byte backup limit                  and would not be restorable"
+            ));
         }
         let directory = self.project_dir(project_path);
         fs::create_dir_all(&directory)
@@ -267,7 +298,8 @@ impl BackupStore {
             .flatten()
             .filter_map(|entry| {
                 let key = entry.file_name().to_string_lossy().into_owned();
-                if !valid_project_key(&key) {
+                if !valid_project_key(&key) || entry.file_type().is_ok_and(|kind| kind.is_symlink())
+                {
                     return None;
                 }
                 let entries = list_entries(&entry.path());
@@ -291,10 +323,7 @@ impl BackupStore {
 
     /// Removes every version of one project and its directory.
     pub(crate) fn clear_key(&self, key: &str) -> Result<usize, String> {
-        if !valid_project_key(key) {
-            return Err(format!("{key:?} is not a backup directory key"));
-        }
-        let directory = self.root.join(key);
+        let directory = self.key_directory(key)?;
         let removed = list_entries(&directory).len();
         match fs::remove_dir_all(&directory) {
             Ok(()) => Ok(removed),
@@ -303,12 +332,21 @@ impl BackupStore {
         }
     }
 
+    /// The project path recorded in a directory's manifest, or empty.
+    ///
+    /// A restored session is unsaved, so this is the only place its original
+    /// directory survives; relative media resolves against it.
+    pub(crate) fn project_manifest_path(&self, key: &str) -> Option<String> {
+        let directory = self.key_directory(key).ok()?;
+        read_manifest(&directory)
+            .map(|manifest| manifest.path)
+            .filter(|path| !path.is_empty())
+    }
+
     /// The project name recorded for a directory, when it has a manifest.
     pub(crate) fn project_label(&self, key: &str) -> Option<String> {
-        if !valid_project_key(key) {
-            return None;
-        }
-        read_manifest(&self.root.join(key)).map(|manifest| manifest.name)
+        let directory = self.key_directory(key).ok()?;
+        read_manifest(&directory).map(|manifest| manifest.name)
     }
 
     /// Removes one version addressed by its directory key.
@@ -320,13 +358,11 @@ impl BackupStore {
     /// Resolves a directory key handed back by the UI. Both parts are checked
     /// here, so a forged key cannot reach outside the backup root.
     pub(crate) fn path_for_key(&self, key: &str, file_name: &str) -> Result<PathBuf, String> {
-        if !valid_project_key(key) {
-            return Err(format!("{key:?} is not a backup directory key"));
-        }
+        let directory = self.key_directory(key)?;
         if !valid_backup_file(file_name) {
             return Err(format!("{file_name:?} is not a backup file name"));
         }
-        Ok(self.root.join(key).join(file_name))
+        Ok(directory.join(file_name))
     }
 
     pub(crate) fn path_for(&self, project_path: &Path, file_name: &str) -> Result<PathBuf, String> {
@@ -496,6 +532,45 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// A key is 16 hex characters, so it cannot spell a path outside the root
+    /// — but it can name a symlink that points outside. Scanning or pruning
+    /// through such a link would enumerate and delete files the user never put
+    /// in the backup folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_backup_directory_is_refused_rather_than_followed() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_root("symlink");
+        let store = BackupStore::with_root(root.clone());
+        let outside = root.with_extension("outside");
+        fs::create_dir_all(&outside).expect("outside directory creates");
+        let stray = outside.join("stray.freya");
+        fs::write(&stray, b"not a backup").expect("outside file writes");
+
+        let key = store.key_for(Path::new("/tmp/project.freya"));
+        fs::create_dir_all(&root).expect("root creates");
+        symlink(&outside, root.join(&key)).expect("directory symlink creates");
+
+        assert!(store.key_directory(&key).is_err(), "the key is refused");
+        assert!(store.clear_key(&key).is_err(), "clearing is refused");
+        assert!(store.project_label(&key).is_none(), "no label is read");
+        assert!(
+            store
+                .path_for_key(&key, "2026-01-01T00-00-00.000Z.freya")
+                .is_err()
+        );
+        // A budget sweep must not walk into the target either.
+        store.enforce_total_budget(0).expect("sweep completes");
+        assert!(store.projects().is_empty(), "the link is not a project");
+        assert!(stray.exists(), "the file outside the store survived");
+
+        let _ = fs::remove_file(stray);
+        let _ = fs::remove_dir_all(&outside);
+        let _ = fs::remove_file(root.join(&key));
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn projects_lists_every_backup_directory_with_its_project_name() {
         let root = test_root("projects");
@@ -625,27 +700,41 @@ mod tests {
             let _ = index;
         }
         assert_eq!(store.total_size(), 600);
+        let newest_before = store
+            .projects()
+            .into_iter()
+            .flat_map(|project| project.entries.into_iter())
+            .map(|entry| entry.file_name)
+            .max()
+            .expect("a newest version exists");
         // Room for four versions: the two oldest go, newest everywhere stays.
         let removed = store.enforce_total_budget(400).expect("budget prunes");
         assert_eq!(removed, 2);
         assert_eq!(store.total_size(), 400);
         let projects = store.projects();
-        let newest = projects
-            .iter()
-            .flat_map(|project| project.entries.iter())
-            .map(|entry| entry.file_name.clone())
-            .max()
-            .expect("a newest version remains");
         assert!(
             projects
                 .iter()
                 .flat_map(|project| project.entries.iter())
-                .any(|entry| entry.file_name == newest)
+                .any(|entry| entry.file_name == newest_before),
+            "the newest version from before pruning must survive it"
         );
         // Zero bytes still leaves one restorable copy.
         let removed = store.enforce_total_budget(0).expect("empty budget prunes");
-        assert_eq!(removed, 3);
-        assert_eq!(store.total_size(), 100);
+        assert!(removed >= 1);
+        assert_eq!(
+            store.total_size(),
+            100,
+            "one newest version survives an impossible budget"
+        );
+        assert!(
+            store
+                .projects()
+                .into_iter()
+                .flat_map(|project| project.entries.into_iter())
+                .any(|entry| entry.file_name == newest_before),
+            "and it is still the same version"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

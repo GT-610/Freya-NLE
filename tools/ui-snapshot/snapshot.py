@@ -38,22 +38,28 @@ def check_top(
     redistributes the extra height into its rows (the stretched combo box this
     check was written for) shows up as differing pixels here.
     """
-    directory = output_dir()
-    base_path = directory / f"{base_name}.png"
-    tall_path = directory / f"{tall_name}.png"
-    for path in (base_path, tall_path):
-        if not path.exists():
-            raise SystemExit(f"missing {path}; render both sizes first")
+    # Re-convert both frames first: the PNGs are derived from the raw captures,
+    # and a rerender that was never converted would be compared against the
+    # previous run's image and pass while the current one regressed.
+    base_path = convert(base_name)
+    tall_path = convert(tall_name)
     base = Image.open(base_path).convert("RGBA")
     tall = Image.open(tall_path).convert("RGBA")
-    if tall.width != base.width or tall.height < base.height:
+    if tall.width != base.width or tall.height <= base.height:
+        # Strictly taller: an equal height means the size override did not take
+        # effect, and identical images would then pass without testing anything.
         raise SystemExit(
             f"{tall_name} is {tall.width}x{tall.height}, "
-            f"expected the same width and at least {base.height} rows"
+            f"expected the same width and more than {base.height} rows"
         )
     # A footer strip is ignored: a button pinned to the bottom of the shorter
     # window legitimately moves down when the window grows.
-    compared_height = max(base.height - footer, 1)
+    if base.height <= footer:
+        raise SystemExit(
+            f"{base_name} is only {base.height} rows tall, so there is no top "
+            f"region left after ignoring the {footer}-row footer"
+        )
+    compared_height = base.height - footer
     shared = tall.crop((0, 0, base.width, compared_height))
     base = base.crop((0, 0, base.width, compared_height))
     base_pixels = base.tobytes()

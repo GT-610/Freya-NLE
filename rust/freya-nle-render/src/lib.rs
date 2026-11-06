@@ -3782,9 +3782,14 @@ mod tests {
 
     /// The documented range has to stay finite and unflipped end to end, and
     /// a value from the old percentage convention must not blow up the quad.
+    /// The compositor multiplies, so its contract is the multiplier, not
+    /// "finite". A caller that forwards a percentage still gets a finite quad
+    /// here — 101x wide — which is why `core` clamps at the plan boundary and
+    /// [`the_default_aspect_does_not_stretch_the_quad`] tests that path.
     #[test]
     fn aspect_extremes_stay_finite() {
-        for aspect in [-1.0, -0.5, 0.0, 0.5, 1.0, 100.0, -100.0] {
+        let unchanged = quad_extent(&aspect_uniform(0.0));
+        for aspect in [-1.0, -0.5, 0.0, 0.5, 1.0] {
             let uniform = aspect_uniform(aspect);
             assert!(
                 uniform.iter().all(|value| value.is_finite()),
@@ -3792,6 +3797,22 @@ mod tests {
             );
             let (width, height) = quad_extent(&uniform);
             assert!(width >= 0.0 && height >= 0.0, "aspect {aspect} flipped");
+            // The multiplier is exactly `1 + aspect` on one axis.
+            if aspect >= 0.0 {
+                assert!(
+                    (width / unchanged.0 - (1.0 + aspect)).abs() < 0.01,
+                    "aspect {aspect} gave {width} against {}",
+                    unchanged.0
+                );
+                assert!((height - unchanged.1).abs() < 0.01);
+            } else {
+                assert!((width - unchanged.0).abs() < 0.01);
+                assert!(
+                    (height / unchanged.1 - (1.0 - aspect)).abs() < 0.01,
+                    "aspect {aspect} gave {height} against {}",
+                    unchanged.1
+                );
+            }
         }
     }
 
