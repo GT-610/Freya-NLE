@@ -1532,6 +1532,12 @@ msgstr "打开"
 msgid "No saved versions yet"
 msgstr "还没有已保存的版本"
 
+msgid "All projects"
+msgstr "所有项目"
+
+msgid "Unknown project"
+msgstr "未知项目"
+
 msgid "Save as Default"
 msgstr "保存为默认值"
 

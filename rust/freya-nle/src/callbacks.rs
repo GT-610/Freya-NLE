@@ -505,14 +505,13 @@ pub(super) fn install_callbacks(
     // Saved-version history: the window lists the current project's backups and
     // restores one as an unsaved copy.
     let backup_open_ui = lifecycle_ui.clone();
-    backup_history.on_open_entry(move |file_name| {
-        let restored = {
-            let mut model = backup_open_ui.model.borrow_mut();
-            let Some(index) = model.current_project_index() else {
-                return;
-            };
-            model.open_backup_as_project(index, file_name.as_str())
-        };
+    backup_history.on_open_entry(move |key, file_name| {
+        // No current-project check: the all-projects view exists precisely to
+        // restore a version when that project is not open.
+        let restored = backup_open_ui
+            .model
+            .borrow_mut()
+            .open_backup_entry(key.as_str(), file_name.as_str());
         match restored {
             Ok(_) => {
                 backup_open_ui.sync();
@@ -524,14 +523,11 @@ pub(super) fn install_callbacks(
         }
     });
     let backup_delete_ui = lifecycle_ui.clone();
-    backup_history.on_delete_entry(move |file_name| {
-        let removed = {
-            let mut model = backup_delete_ui.model.borrow_mut();
-            let Some(index) = model.current_project_index() else {
-                return;
-            };
-            model.remove_backup(index, file_name.as_str())
-        };
+    backup_history.on_delete_entry(move |key, file_name| {
+        let removed = backup_delete_ui
+            .model
+            .borrow_mut()
+            .remove_backup_entry(key.as_str(), file_name.as_str());
         match removed {
             Ok(()) => backup_delete_ui.sync_backup_history(),
             Err(error) => show_error_dialog(&error),
@@ -550,6 +546,13 @@ pub(super) fn install_callbacks(
             Ok(()) => backup_save_ui.sync_backup_history(),
             Err(error) => show_error_dialog(&error),
         }
+    });
+    let backup_toggle_ui = lifecycle_ui.clone();
+    backup_history.on_toggle_all_projects(move |all| {
+        if let Some(window) = backup_toggle_ui.backup_history.upgrade() {
+            window.set_all_projects(all);
+        }
+        backup_toggle_ui.sync_backup_history();
     });
     let backup_close_window = backup_history.as_weak();
     backup_history.on_close_window(move || {

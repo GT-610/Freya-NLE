@@ -1,24 +1,28 @@
-import { Button, ScrollView } from "std-widgets.slint";
-import { BackupEntryData } from "models.slint";
+import { Button, CheckBox, ScrollView } from "std-widgets.slint";
+import { BackupProjectData } from "models.slint";
 import { AppTheme } from "theme.slint";
 
 // AviUtl2's バックアップ履歴: the versions of this project that were saved.
 //
 // Opening a version creates an unsaved copy, so the original project is never
-// overwritten by a restore.
+// overwritten by a restore. "All projects" widens the same list to every backup
+// directory, which is how work from another project is recovered without
+// opening it first.
 export component BackupHistoryWindow inherits Window {
     title: @tr("Backup History");
-    preferred-width: 520px;
-    preferred-height: 420px;
-    min-width: 420px;
-    min-height: 300px;
+    preferred-width: 560px;
+    preferred-height: 460px;
+    min-width: 440px;
+    min-height: 320px;
     background: AppTheme.dialog-background;
 
     in property <string> project-name: "";
-    in property <[BackupEntryData]> entries;
+    in property <[BackupProjectData]> projects;
+    in-out property <bool> all-projects: false;
 
-    callback open-entry(string);
-    callback delete-entry(string);
+    callback open-entry(string, string);
+    callback delete-entry(string, string);
+    callback toggle-all-projects(bool);
     callback save-version();
     callback close-window();
 
@@ -29,16 +33,27 @@ export component BackupHistoryWindow inherits Window {
         VerticalLayout {
             padding: 14px;
             spacing: 10px;
-            Text {
-                text: @tr("Backup History");
-                color: AppTheme.dialog-foreground;
-                font-size: 1.1rem;
-                font-weight: 700;
-            }
-            Text {
-                text: root.project-name;
-                color: AppTheme.dialog-muted;
-                overflow: elide;
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: @tr("Backup History");
+                    color: AppTheme.dialog-foreground;
+                    font-size: 1.1rem;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.project-name;
+                    color: AppTheme.dialog-muted;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                CheckBox {
+                    text: @tr("All projects");
+                    checked <=> root.all-projects;
+                    toggled => { root.toggle-all-projects(root.all-projects); }
+                }
             }
             Rectangle {
                 vertical-stretch: 1;
@@ -51,39 +66,81 @@ export component BackupHistoryWindow inherits Window {
                     entry-list := VerticalLayout {
                         width: parent.width;
                         spacing: 1px;
-                        for entry in root.entries : Rectangle {
-                            height: 42px;
-                            background: transparent;
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 6px;
-                                spacing: 8px;
+                        for project in root.projects : VerticalLayout {
+                            spacing: 1px;
+                            // The single-project view already names the
+                            // project in the header, so only the widened list
+                            // needs a divider per directory.
+                            if root.all-projects : Rectangle {
+                                height: 34px;
+                                background: AppTheme.panel-background;
                                 VerticalLayout {
-                                    spacing: 1px;
-                                    horizontal-stretch: 1;
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 0px;
                                     Text {
-                                        text: entry.saved-at;
+                                        text: project.label == ""
+                                            ? @tr("Unknown project")
+                                            : project.label;
                                         color: AppTheme.dialog-foreground;
-                                        font-size: 0.82rem;
+                                        font-size: 0.8rem;
+                                        font-weight: 600;
                                         overflow: elide;
                                     }
                                     Text {
-                                        text: entry.size-text;
+                                        text: project.detail;
                                         color: AppTheme.dialog-muted;
-                                        font-size: 0.72rem;
+                                        font-size: 0.68rem;
+                                        overflow: elide;
                                     }
                                 }
-                                Button {
-                                    text: @tr("Open");
-                                    clicked => { root.open-entry(entry.file-name); }
+                            }
+                            for entry in project.entries : Rectangle {
+                                height: 42px;
+                                background: transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 6px;
+                                    spacing: 8px;
+                                    VerticalLayout {
+                                        spacing: 1px;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: entry.saved-at;
+                                            color: AppTheme.dialog-foreground;
+                                            font-size: 0.82rem;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: entry.size-text;
+                                            color: AppTheme.dialog-muted;
+                                            font-size: 0.72rem;
+                                        }
+                                    }
+                                    Button {
+                                        text: @tr("Open");
+                                        clicked => { root.open-entry(project.key, entry.file-name); }
+                                    }
+                                    Button {
+                                        text: @tr("Delete");
+                                        clicked => { root.delete-entry(project.key, entry.file-name); }
+                                    }
                                 }
-                                Button {
-                                    text: @tr("Delete");
-                                    clicked => { root.delete-entry(entry.file-name); }
+                            }
+                            if project.entries.length == 0 : Rectangle {
+                                height: 40px;
+                                Text {
+                                    x: 10px;
+                                    y: 8px;
+                                    width: parent.width - 20px;
+                                    text: @tr("No saved versions yet");
+                                    color: AppTheme.dialog-muted;
+                                    font-size: 0.8rem;
+                                    wrap: word-wrap;
                                 }
                             }
                         }
-                        if root.entries.length == 0 : Rectangle {
+                        if root.projects.length == 0 : Rectangle {
                             height: 52px;
                             Text {
                                 x: 10px;

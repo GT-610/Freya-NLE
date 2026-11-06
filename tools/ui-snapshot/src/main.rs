@@ -152,20 +152,43 @@ fn main() {
             let ui = BackupHistoryWindow::new().expect("create the backup history window");
             ui.global::<AppTheme>().set_preference_index(preference);
             ui.set_project_name("harbor_trip.freya".into());
-            ui.set_entries(ModelRc::new(VecModel::from(vec![
-                BackupEntryData {
-                    file_name: "1762300000000.freya".into(),
-                    saved_at: "2026-11-05 18:42:10".into(),
-                    size_text: "184.2 KB".into(),
-                },
-                BackupEntryData {
-                    file_name: "1762200000000.freya".into(),
-                    saved_at: "2026-11-04 09:15:03".into(),
-                    size_text: "181.7 KB".into(),
-                },
-            ])));
+            // `UI_SNAPSHOT_BACKUP=all` widens the list, including one directory
+            // whose manifest predates the feature and therefore has no label.
+            let all = std::env::var("UI_SNAPSHOT_BACKUP").is_ok_and(|value| value == "all");
+            let mut projects = vec![BackupProjectData {
+                key: "0a1b2c3d4e5f6071".into(),
+                label: "harbor_trip".into(),
+                detail: "/Users/me/Videos/harbor_trip.freya".into(),
+                entries: ModelRc::new(VecModel::from(vec![
+                    BackupEntryData {
+                        file_name: "1762300000000.freya".into(),
+                        saved_at: "2026-11-05 18:42:10".into(),
+                        size_text: "184.2 KB".into(),
+                    },
+                    BackupEntryData {
+                        file_name: "1762200000000.freya".into(),
+                        saved_at: "2026-11-04 09:15:03".into(),
+                        size_text: "181.7 KB".into(),
+                    },
+                ])),
+            }];
+            if all {
+                projects.push(BackupProjectData {
+                    key: "1122334455667788".into(),
+                    label: "".into(),
+                    detail: "".into(),
+                    entries: ModelRc::new(VecModel::from(vec![BackupEntryData {
+                        file_name: "1761000000000.freya".into(),
+                        saved_at: "2026-10-21 07:03:44".into(),
+                        size_text: "2.1 MB".into(),
+                    }])),
+                });
+                ui.set_all_projects(true);
+            }
+            ui.set_projects(ModelRc::new(VecModel::from(projects)));
             ui.show().expect("show the backup history window");
-            save(&window, width, height, &output_name("backup", preference));
+            let name = if all { "backup-all" } else { "backup" };
+            save(&window, width, height, &output_name(name, preference));
         }
         "layer" => {
             let ui = LayerSettingsWindow::new().expect("create the layer settings window");

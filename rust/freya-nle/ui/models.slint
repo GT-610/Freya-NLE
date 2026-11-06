@@ -39,6 +39,15 @@ export struct BackupEntryData {
     size-text: string,
 }
 
+// One backup directory in the history window. The single-project view still
+// uses this shape, so opening and deleting always have a directory key.
+export struct BackupProjectData {
+    key: string,
+    label: string,
+    detail: string,
+    entries: [BackupEntryData],
+}
+
 export struct RecoveryEntryData {
     id: string,
     name: string,

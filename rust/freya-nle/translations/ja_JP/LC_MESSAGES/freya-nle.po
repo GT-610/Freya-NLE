@@ -1532,6 +1532,12 @@ msgstr "開く"
 msgid "No saved versions yet"
 msgstr "保存済みのバージョンはありません"
 
+msgid "All projects"
+msgstr "すべてのプロジェクト"
+
+msgid "Unknown project"
+msgstr "不明なプロジェクト"
+
 msgid "Save as Default"
 msgstr "既定値として保存"
 

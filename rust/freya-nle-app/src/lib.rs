@@ -37,7 +37,7 @@ pub use project_io::{PROJECT_EXTENSION, ProjectDefaults, ProjectSession};
 pub use recovery::RecoveryEntry;
 pub use workspace::{LayerSettingsInput, ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
 
-use backup::{BackupEntry, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT};
+use backup::{BackupEntry, BackupProject, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT};
 use lifecycle::{LifecycleContinuation, PendingLifecycle};
 use recovery::{
     DEFAULT_BACKUP_INTERVAL, RecoveryOperation, RecoveryStore, RecoveryWrite, generate_recovery_id,
@@ -525,6 +525,51 @@ impl ApplicationModel {
             return Vec::new();
         };
         self.backup_store.entries(&path)
+    }
+
+    /// Every project with saved versions, for the all-projects browser.
+    pub fn all_backup_projects(&self) -> Vec<BackupProject> {
+        self.backup_store.projects()
+    }
+
+    /// The current project's backup directory, including the empty case so the
+    /// single-project view can explain that nothing was saved yet.
+    pub fn current_backup_project(&self) -> Option<BackupProject> {
+        let path = self
+            .projects
+            .get(self.current_project_index()?)?
+            .workspace
+            .project()
+            .path
+            .clone()?;
+        Some(BackupProject {
+            key: self.backup_store.key_for(&path),
+            label: path
+                .file_stem()
+                .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned()),
+            path: Some(path.to_string_lossy().into_owned()),
+            entries: self.backup_store.entries(&path),
+        })
+    }
+
+    /// Opens one saved version addressed by its backup directory key.
+    pub fn open_backup_entry(&mut self, key: &str, file_name: &str) -> Result<usize, String> {
+        let backup_path = self.backup_store.path_for_key(key, file_name)?;
+        let project = ProjectSession::load_recovery(&backup_path, "")?;
+        let name = self
+            .backup_store
+            .project_label(key)
+            .filter(|name| !name.is_empty())
+            .map_or_else(
+                || "Restored backup".to_owned(),
+                |name| format!("{name} (backup)"),
+            );
+        Ok(self.add_project_entry(project, name))
+    }
+
+    /// Removes one saved version addressed by its backup directory key.
+    pub fn remove_backup_entry(&mut self, key: &str, file_name: &str) -> Result<(), String> {
+        self.backup_store.remove_key(key, file_name)
     }
 
     pub fn remove_backup(&mut self, project_index: usize, file_name: &str) -> Result<(), String> {
@@ -1041,6 +1086,57 @@ mod tests {
             .expect("backup removes");
         assert_eq!(app.backup_entries(0).len(), 1);
         assert!(app.backup_errors().is_empty());
+
+        std::fs::remove_file(path).expect("saved project removes");
+    }
+
+    #[test]
+    fn backup_history_browses_every_project_by_directory_key() {
+        let mut app = ApplicationModel::default();
+        app.create_project(ProjectDefaults::default());
+        let path = temporary_project_path("backup-browse");
+        assert!(matches!(
+            app.request_save_current_project(),
+            LifecycleStep::ChooseSavePath { .. }
+        ));
+        assert_eq!(
+            app.complete_save_path(Some(&path)),
+            LifecycleStep::ProjectSaved { project_index: 0 }
+        );
+        app.record_backup_now(0).expect("a version is recorded");
+
+        let current = app
+            .current_backup_project()
+            .expect("the saved project has a backup directory");
+        assert_eq!(
+            current.label,
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        );
+        assert_eq!(current.entries.len(), 2);
+        let projects = app.all_backup_projects();
+        let browsed = projects
+            .iter()
+            .find(|project| project.path.as_deref() == Some(path.to_string_lossy().as_ref()))
+            .expect("the project is listed across projects");
+        assert_eq!(browsed.key, current.key);
+
+        // Opening works by key alone, without the source project being open.
+        let restored = app
+            .open_backup_entry(&browsed.key, &browsed.entries[1].file_name)
+            .expect("a listed version opens");
+        assert_eq!(app.current_project_index(), Some(restored));
+        assert!(app.tabs()[restored].name.contains("(backup)"));
+
+        app.remove_backup_entry(&browsed.key, &browsed.entries[0].file_name)
+            .expect("a listed version removes");
+        let remaining = app
+            .all_backup_projects()
+            .into_iter()
+            .find(|project| project.key == browsed.key)
+            .expect("the directory remains");
+        assert_eq!(remaining.entries.len(), 1);
 
         std::fs::remove_file(path).expect("saved project removes");
     }

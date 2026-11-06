@@ -16,13 +16,14 @@ use crate::playback::PreviewRuntime;
 use crate::projection::{sync_windows, update_vec_model};
 use crate::settings::{project_defaults, sync_timeline_runtime_settings, system_theme_index};
 use crate::{
-    AboutWindow, AppTheme, BackupEntryData, BackupHistoryWindow, EasingConfigWindow, ExportWindow,
-    LayerSettingsWindow, MainWindow, MarkNoteWindow, ObjectSettingsWindow, PackageManagerWindow,
-    PluginPermissionWindow, ProjectLauncherWindow, ProjectRecoveryWindow, ProjectSettingsWindow,
-    RecentProjectData, RecoveryEntryData, SaveConfirmationWindow, SceneSettingsWindow,
-    SystemSettingsWindow, TimelineWindow,
+    AboutWindow, AppTheme, BackupEntryData, BackupHistoryWindow, BackupProjectData,
+    EasingConfigWindow, ExportWindow, LayerSettingsWindow, MainWindow, MarkNoteWindow,
+    ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow,
+    ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData, RecoveryEntryData,
+    SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
+use freya_nle_app::backup::BackupProject;
 use freya_nle_app::effect_catalog::EffectCatalog;
 use freya_nle_app::fragment::FRAGMENT_EXTENSION;
 use freya_nle_app::settings::SettingsStore;
@@ -215,6 +216,25 @@ fn backup_time_text(saved_at: &str) -> String {
     }
 }
 
+fn backup_project_data(project: BackupProject) -> BackupProjectData {
+    BackupProjectData {
+        key: SharedString::from(project.key),
+        label: SharedString::from(project.label),
+        detail: SharedString::from(project.path.unwrap_or_default()),
+        entries: ModelRc::new(VecModel::from(
+            project
+                .entries
+                .into_iter()
+                .map(|entry| BackupEntryData {
+                    file_name: SharedString::from(entry.file_name),
+                    saved_at: SharedString::from(backup_time_text(&entry.saved_at)),
+                    size_text: SharedString::from(backup_size_text(entry.size)),
+                })
+                .collect::<Vec<_>>(),
+        )),
+    }
+}
+
 fn backup_size_text(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -324,33 +344,35 @@ impl LifecycleUi {
         }
     }
 
-    /// Re-reads the current project's backup list into the open window.
+    /// Re-reads the backup list into the open window.
+    ///
+    /// The single-project view and the widened all-projects view share one
+    /// model: every row knows which backup directory it belongs to, so opening
+    /// and deleting work the same way in both modes.
     pub(super) fn sync_backup_history(&self) {
         let Some(window) = self.backup_history.upgrade() else {
             return;
         };
         let model = self.model.borrow();
-        let Some(index) = model.current_project_index() else {
-            window.set_project_name(SharedString::default());
-            window.set_entries(ModelRc::new(VecModel::from(Vec::<BackupEntryData>::new())));
-            return;
-        };
         let project_name = model
-            .tabs()
-            .get(index)
-            .map(|tab| tab.name.clone())
+            .current_project_index()
+            .and_then(|index| model.tabs().get(index).map(|tab| tab.name.clone()))
             .unwrap_or_default();
-        let entries = model
-            .backup_entries(index)
-            .into_iter()
-            .map(|entry| BackupEntryData {
-                file_name: SharedString::from(entry.file_name),
-                saved_at: SharedString::from(backup_time_text(&entry.saved_at)),
-                size_text: SharedString::from(backup_size_text(entry.size)),
-            })
-            .collect::<Vec<_>>();
+        let projects = if window.get_all_projects() {
+            model
+                .all_backup_projects()
+                .into_iter()
+                .map(backup_project_data)
+                .collect::<Vec<_>>()
+        } else {
+            model
+                .current_backup_project()
+                .map(backup_project_data)
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
         window.set_project_name(SharedString::from(project_name));
-        window.set_entries(ModelRc::new(VecModel::from(entries)));
+        window.set_projects(ModelRc::new(VecModel::from(projects)));
     }
 
     pub(super) fn workspace_action(&self, action: &str, origin: WorkspaceOrigin) {
