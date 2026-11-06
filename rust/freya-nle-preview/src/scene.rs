@@ -1476,6 +1476,69 @@ mod tests {
         assert_eq!(transform.x, 10.0, "the object's own x is untouched");
     }
 
+    /// The plan and the compositor have to agree about units, on every field.
+    ///
+    /// `EvaluatedTransform` (core) and `LayerTransform` (render) are separate
+    /// structs joined only by the field-by-field copy in `build_scene`. A unit
+    /// or default that differs between them is invisible to both crates' own
+    /// tests — `aspect` arrived as 100 from the plan and the compositor read it
+    /// as a ratio, stretching every object 101x wide while every test passed.
+    ///
+    /// This drives the real pipeline with an object that sets nothing, so the
+    /// value each field reaches the compositor with is the plan's default, and
+    /// asserts it equals the compositor's own default. A field whose defaults
+    /// legitimately differ has to be named here, with the reason.
+    #[test]
+    fn every_transform_field_reaches_the_compositor_with_its_own_default() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 10.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 120,
+                "layer": 0,
+                "effects": [{"id": "text", "params": {"text": "hello"}}]
+            }]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        let planned = planner.build(&document, 1, 0).expect("scene plans");
+        let reached = planned.scene.layers[0].transform;
+        let reference = LayerTransform::default();
+
+        assert_eq!(reached.x, reference.x, "x");
+        assert_eq!(reached.y, reference.y, "y");
+        assert_eq!(reached.z, reference.z, "z");
+        assert_eq!(
+            reached.scale_percent, reference.scale_percent,
+            "scale_percent"
+        );
+        assert_eq!(reached.aspect, reference.aspect, "aspect");
+        assert_eq!(
+            reached.rotation_x_degrees, reference.rotation_x_degrees,
+            "rotation_x"
+        );
+        assert_eq!(
+            reached.rotation_y_degrees, reference.rotation_y_degrees,
+            "rotation_y"
+        );
+        assert_eq!(
+            reached.rotation_z_degrees, reference.rotation_z_degrees,
+            "rotation_z"
+        );
+        assert_eq!(reached.pivot_x, reference.pivot_x, "pivot_x");
+        assert_eq!(reached.pivot_y, reference.pivot_y, "pivot_y");
+        assert_eq!(reached.pivot_z, reference.pivot_z, "pivot_z");
+        assert_eq!(reached.opacity, reference.opacity, "opacity");
+        assert_eq!(
+            reached.backface_visible, reference.backface_visible,
+            "backface_visible"
+        );
+    }
+
     /// A plain object must not be stretched.
     ///
     /// `aspect` reaches the compositor, which multiplies by `1.0 + aspect`.

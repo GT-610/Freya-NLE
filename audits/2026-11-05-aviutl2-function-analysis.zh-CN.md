@@ -2247,6 +2247,40 @@ UI 侧已把 `Err` 显示到 `error_message`（`callbacks.rs` 的 `on_recover_pr
 - `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟
   `main_frames: 3`、`timeline_frames: 3`、`main_same_device: true`、`wgpu_errors: []`。
 
+### 7.56 验收工具：计划与合成器之间的单位契约
+
+§7.55 那个 101 倍缺陷有一个让人不舒服的性质：**全仓 900 多个测试一个都没抓到**。
+`EvaluatedTransform`（core）与 `LayerTransform`（render）是两个独立结构体，只靠
+`build_scene` 里的一串逐字段拷贝相连。任何一侧改了单位或默认值，另一侧的测试都
+照常通过——每侧都只验证自己。
+
+| 位置 | 改动 |
+| --- | --- |
+| preview | 新增 `every_transform_field_reaches_the_compositor_with_its_own_default`：用一个不设置任何变换的对象跑完整管线，逐字段断言交给合成器的值等于 `LayerTransform::default()` |
+
+做法与理由：
+
+- **用真实默认值，不用手写期望**：断言对象是 `LayerTransform::default()` 本身，
+  所以两侧任何一方改默认值，测试都会指向具体字段名（`assert_eq!(..., "aspect")`）。
+  手写一串期望值会让测试自己变成第三个真相来源。
+- **驱动真实管线，不直接构造**：`PreviewPlanner::build` 走的就是预览与导出共用的
+  那条路径，不额外给测试开后门。
+- **默认值不同的字段必须写进豁免**：目前一个都没有。将来若某个字段两侧默认值确实
+  不同，只能在这里显式排除并写明原因——把"悄悄不同"变成"写下来的决定"。
+
+**验证过程中抓到的第二个坑**：第一版把 `EvaluatedTransform::default()` 的
+`aspect` 回退成 100，测试**仍然通过**。原因是渲染循环用的是 `bake_plan.rs` 里那个
+显式初始化器（`aspect: 0.0` 出现在 `EvaluatedTransform { .. }` 字面量里），
+`Default` 根本不参与。改回显式初始化器后测试立刻失败（`left: 100.0, right: 0.0`）。
+这说明：**只测 Default 是测不出这个缺陷的**，必须走真实数据流。
+
+验证：
+
+- 把真实初始化器的 `aspect` 回退为 100，测试在 `aspect` 字段处失败；恢复后通过；
+- `cargo test --workspace --all-features --locked` 通过（core 223、app 287、
+  desktop 68、render 54、preview 28）；
+- `clippy --no-deps` 与 `fmt --check` 干净。
+
 ## 8. 验收与风险
 验收以可观察行为为准：标记在标尺上有清晰位置；前后跳转不越过场景时长；备注
 编辑取消后不写入；撤销一次回到打点前；重开项目后标记还在；没有标记时菜单项
