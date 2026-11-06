@@ -1690,17 +1690,6 @@ impl BakePlan {
                     scale_percent: render.scale_x * 100.0,
                     opacity: render.opacity,
                 };
-                apply_group_controls(&mut transform, clip.layer, &group_controls);
-                if !camera_covers(camera_targets, clip.layer)
-                    && !is_control_object(&clip.clip_type)
-                    && let Some(setting) = self.layer_settings.get(&clip.layer)
-                {
-                    // Layer offsets are a screen-space nudge added after the
-                    // object's own transform and any group control around it.
-                    transform.x += setting.x;
-                    transform.y += setting.y;
-                    transform.z += setting.z;
-                }
                 let media = media_playback_plan(
                     &clip.clip_type,
                     relative_frame,
@@ -1722,7 +1711,22 @@ impl BakePlan {
                         screen_height: self.scene_height,
                         scene_id: self.scene_id,
                     },
+                    &mut transform,
                 );
+                // A text script sees and writes the object's own transform, so
+                // the group control and layer nudge are applied on top of what
+                // the script left rather than being folded into its inputs.
+                apply_group_controls(&mut transform, clip.layer, &group_controls);
+                if !camera_covers(camera_targets, clip.layer)
+                    && !is_control_object(&clip.clip_type)
+                    && let Some(setting) = self.layer_settings.get(&clip.layer)
+                {
+                    // Layer offsets are a screen-space nudge added after the
+                    // object's own transform and any group control around it.
+                    transform.x += setting.x;
+                    transform.y += setting.y;
+                    transform.z += setting.z;
+                }
                 let procedural = procedural_object_render_plan(
                     &clip.clip_type,
                     relative_frame,
@@ -1904,6 +1908,9 @@ fn text_render_plan(
     fps: f64,
     effects: &[EvaluatedEffect],
     context: &TextObjectContext,
+    // A text script may write `obj.rz` and friends, which changes this frame's
+    // transform; the caller applies it after this returns.
+    transform: &mut EvaluatedTransform,
 ) -> Option<TextRenderPlan> {
     let effect = effects.iter().find(|effect| effect.id == clip_type)?;
     let value = |name| effect.params.get(name);
@@ -1972,7 +1979,7 @@ fn text_render_plan(
     // Scripts run before the control-character parse, so their output takes
     // part in timing, colours and the rest of the text pipeline.
     let seconds = relative_frame as f64 / fps.max(0.001);
-    let content = crate::expression::expand_text_scripts(
+    let (content, scripted) = crate::expression::expand_text_scripts(
         &raw_content,
         &crate::expression::TextScriptClock {
             time: seconds,
@@ -1986,8 +1993,30 @@ fn text_render_plan(
             screen_width: context.screen_width,
             screen_height: context.screen_height,
             scene_id: context.scene_id,
+            transform: crate::expression::TextScriptTransform {
+                x: transform.x,
+                y: transform.y,
+                z: transform.z,
+                rotation_x: transform.rotation_x,
+                rotation_y: transform.rotation_y,
+                rotation_z: transform.rotation_z,
+                scale_percent: transform.scale_percent,
+                opacity: transform.opacity,
+            },
         },
     );
+    // A script that changed the object's transform wins for this frame, the
+    // same way `<?obj.rz = obj.time * 360?>` rotates the object in AviUtl.
+    if let Some(scripted) = scripted {
+        transform.x = scripted.x;
+        transform.y = scripted.y;
+        transform.z = scripted.z;
+        transform.rotation_x = scripted.rotation_x;
+        transform.rotation_y = scripted.rotation_y;
+        transform.rotation_z = scripted.rotation_z;
+        transform.scale_percent = scripted.scale_percent;
+        transform.opacity = scripted.opacity;
+    }
     let font_family = value_as_string(value("fontFamily"), "sans-serif");
     let font_size = value_as_f64(value("fontSize"), 48.0).clamp(1.0, 4_096.0) as f32;
     let letter_spacing = value_as_f64(value("letterSpacing"), 0.0) as f32;
@@ -3148,6 +3177,54 @@ mod tests {
         // The clear swaps the visible block at one second.
         assert_eq!(runs_at(&mut plan, 5, 2), "one");
         assert_eq!(runs_at(&mut plan, 10, 2), "two");
+    }
+
+    #[test]
+    fn a_text_script_can_rotate_the_object_for_the_frame() {
+        let input = json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 10, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Scene", "duration": 120}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 60,
+                "layer": 0,
+                "params": {},
+                "audioPlugins": [],
+                "effects": [{
+                    "id": "text",
+                    "name": "Text",
+                    "enabled": true,
+                    "params": {"text": "<?obj.rz=obj.time*360?>spin", "fontSize": 48}
+                }, {
+                    "id": "transform",
+                    "name": "Transform",
+                    "enabled": true,
+                    "params": {"x": 100, "rotationZ": 0}
+                }]
+            }]
+        });
+        let bytes = serde_json::to_vec(&input).expect("serialize project fixture");
+        let document = crate::project::parse_project_document(&bytes).expect("project parses");
+        let mut plan = SceneRenderPlan::from_document(&document, 1).expect("scene plan builds");
+        let layer_at = |plan: &mut SceneRenderPlan, frame: i32| {
+            plan.evaluate(frame)
+                .layers
+                .iter()
+                .find(|layer| layer.clip_id == 1)
+                .map(|layer| layer.transform)
+                .expect("the text layer renders")
+        };
+        // 10 fps: frame 5 is half a second, so the script rotates by 180°.
+        let half = layer_at(&mut plan, 5);
+        assert_eq!(half.rotation_z, 180.0);
+        assert_eq!(half.x, 100.0, "the object's own x is unchanged");
+        let start = layer_at(&mut plan, 0);
+        assert_eq!(start.rotation_z, 0.0, "the script follows the frame");
+        assert_eq!(layer_at(&mut plan, 10).rotation_z, 360.0);
     }
 
     #[test]
