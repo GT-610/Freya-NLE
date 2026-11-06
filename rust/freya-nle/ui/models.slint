@@ -218,6 +218,15 @@ export struct CurveHandleData {
     removable: bool,
 }
 
+// One parameter offered when saving an effect preset. AviUtl2 chooses the
+// saved items at creation time, and items a preset does not carry keep their
+// value when it is applied.
+export struct PresetScopeItemData {
+    param-name: string,
+    label: string,
+    checked: bool,
+}
+
 export struct EasingCatalogRowData {
     header: bool,
     easing-index: int,

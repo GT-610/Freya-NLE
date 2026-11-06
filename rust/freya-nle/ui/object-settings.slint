@@ -1,6 +1,6 @@
-import { ObjectEffectData, EffectCatalogItemData, ObjectSettingRowData } from "models.slint";
+import { ObjectEffectData, EffectCatalogItemData, ObjectSettingRowData, PresetScopeItemData } from "models.slint";
 import { EffectSidebarEntry, ObjectSettingRow } from "object-controls.slint";
-import { Button, ComboBox, GroupBox, LineEdit, ScrollView, Slider, SpinBox, StandardListView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, GroupBox, LineEdit, ScrollView, Slider, SpinBox, StandardListView } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 import { StereoAudioMeter } from "widgets.slint";
 
@@ -71,6 +71,7 @@ export component ObjectSettingsWindow inherits Window {
     in-out property <int> preset-effect-index: -1;
     in-out property <string> preset-effect-name: "";
     in-out property <string> preset-name: "";
+    in-out property <[PresetScopeItemData]> preset-scope-items;
     in-out property <bool> color-picker-visible: false;
     in-out property <bool> font-picker-visible: false;
     in-out property <int> picker-effect-index: -1;
@@ -97,7 +98,8 @@ export component ObjectSettingsWindow inherits Window {
     callback delete-selected-effects();
     callback filter-effects(string);
     callback add-effect(string);
-    callback save-effect-preset(int, string);
+    callback save-effect-preset(int, string, [PresetScopeItemData]);
+    callback preset-scope(int) -> [PresetScopeItemData];
     callback load-effect-preset(int, string);
     callback delete-effect-preset(int, string);
     callback preset-names(int) -> [string];
@@ -258,6 +260,7 @@ export component ObjectSettingsWindow inherits Window {
                                 root.preset-effect-index = index;
                                 root.preset-effect-name = effect-name;
                                 root.preset-name = "";
+                                root.preset-scope-items = root.preset-scope(index);
                                 root.preset-save-visible = true;
                             }
                             load-preset(index, name) => { root.load-effect-preset(index, name); }
@@ -436,7 +439,7 @@ export component ObjectSettingsWindow inherits Window {
             height: min(parent.height - 48px, 520px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 4px;
@@ -517,10 +520,10 @@ export component ObjectSettingsWindow inherits Window {
             TouchArea { clicked => { root.preset-save-visible = false; } }
         Rectangle {
             width: min(parent.width - 48px, 420px);
-            height: 190px;
+            height: root.preset-scope-items.length > 0 ? 430px : 190px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 4px;
@@ -535,8 +538,31 @@ export component ObjectSettingsWindow inherits Window {
                     accessible-label: @tr("Save Preset");
                     accepted(value) => {
                         if value != "" {
-                            root.save-effect-preset(root.preset-effect-index, value);
+                            root.save-effect-preset(root.preset-effect-index, value, root.preset-scope-items);
                             root.preset-save-visible = false;
+                        }
+                    }
+                }
+                if root.preset-scope-items.length > 0 : VerticalLayout {
+                    spacing: 4px;
+                    vertical-stretch: 1;
+                    Text { text: @tr("Parameters to save"); color: AppTheme.muted-foreground; }
+                    Text {
+                        text: @tr("Unchecked parameters keep their current value");
+                        color: AppTheme.muted-foreground;
+                        font-size: 0.72rem;
+                        wrap: word-wrap;
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        viewport-width: self.visible-width;
+                        VerticalLayout {
+                            spacing: 2px;
+                            for item[index] in root.preset-scope-items : CheckBox {
+                                text: item.label;
+                                checked: item.checked;
+                                toggled => { root.preset-scope-items[index].checked = self.checked; }
+                            }
                         }
                     }
                 }
@@ -548,7 +574,7 @@ export component ObjectSettingsWindow inherits Window {
                         text: @tr("confirm-save" => "Save");
                         enabled: root.preset-name != "";
                         clicked => {
-                            root.save-effect-preset(root.preset-effect-index, root.preset-name);
+                            root.save-effect-preset(root.preset-effect-index, root.preset-name, root.preset-scope-items);
                             root.preset-save-visible = false;
                         }
                     }
@@ -585,7 +611,7 @@ export component ObjectSettingsWindow inherits Window {
             height: min(parent.height - 48px, 430px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 4px;
@@ -706,7 +732,7 @@ export component ObjectSettingsWindow inherits Window {
             height: min(parent.height - 48px, 540px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 4px;

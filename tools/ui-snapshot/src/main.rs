@@ -186,6 +186,31 @@ fn main() {
             let ui = ObjectSettingsWindow::new().expect("create the object settings window");
             ui.global::<AppTheme>().set_preference_index(preference);
             populate_settings(&ui);
+            // `UI_SNAPSHOT_PRESET=1` opens the save-preset dialog, which is the
+            // only surface with a per-parameter scope list.
+            if std::env::var("UI_SNAPSHOT_PRESET").is_ok() {
+                ui.set_preset_effect_index(1);
+                ui.set_preset_effect_name("ぼかし".into());
+                ui.set_preset_name("Soft blur".into());
+                ui.set_preset_scope_items(ModelRc::new(VecModel::from(vec![
+                    PresetScopeItemData {
+                        param_name: "size".into(),
+                        label: "範囲".into(),
+                        checked: true,
+                    },
+                    PresetScopeItemData {
+                        param_name: "quality".into(),
+                        label: "品質".into(),
+                        checked: true,
+                    },
+                    PresetScopeItemData {
+                        param_name: "aspect".into(),
+                        label: "縦横比".into(),
+                        checked: false,
+                    },
+                ])));
+                ui.set_preset_save_visible(true);
+            }
             ui.show().expect("show the object settings window");
             save(&window, width, height, &output_name("settings", preference));
         }

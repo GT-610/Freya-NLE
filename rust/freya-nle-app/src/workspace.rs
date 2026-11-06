@@ -1016,6 +1016,21 @@ impl WorkspaceModel {
         effect_index: usize,
         name: &str,
     ) -> bool {
+        self.save_effect_preset_scoped(store, effect_index, name, None)
+    }
+
+    /// Saves a preset, optionally limited to `scope` parameter names.
+    ///
+    /// AviUtl2 chooses the saved items when the preset is created: applying a
+    /// preset leaves every item it does not carry at its current value. That
+    /// falls out of storing only the chosen parameters and their keyframes.
+    pub fn save_effect_preset_scoped(
+        &mut self,
+        store: &PresetStore,
+        effect_index: usize,
+        name: &str,
+        scope: Option<&[String]>,
+    ) -> bool {
         let Some(effect) = self
             .selected_clip_document()
             .and_then(|clip| clip.effects.get(effect_index))
@@ -1023,13 +1038,49 @@ impl WorkspaceModel {
             return false;
         };
         let effect_id = effect.id.clone();
-        let result = store.save(
-            &effect_id,
-            name,
-            effect.params.clone(),
-            effect.keyframes.clone().unwrap_or_default(),
-            effect.enabled,
-        );
+        let (params, keyframes) = match scope {
+            None => (
+                effect.params.clone(),
+                effect.keyframes.clone().unwrap_or_default(),
+            ),
+            Some(names) => {
+                if names.is_empty() {
+                    self.set_status(status_message!(
+                        "Select at least one parameter to save",
+                        "请至少选择一个要保存的参数",
+                        "保存する項目を 1 つ以上選択してください"
+                    ));
+                    return false;
+                }
+                let params = effect
+                    .params
+                    .iter()
+                    .filter(|(param, _)| names.iter().any(|name| name == *param))
+                    .map(|(param, value)| (param.clone(), value.clone()))
+                    .collect::<Map<String, Value>>();
+                if params.is_empty() {
+                    self.set_status(status_message!(
+                        "The selected parameters are not in this effect",
+                        "所选参数不属于这个特效",
+                        "選択した項目はこのエフェクトにありません"
+                    ));
+                    return false;
+                }
+                let keyframes = effect
+                    .keyframes
+                    .as_ref()
+                    .map(|tracks| {
+                        tracks
+                            .iter()
+                            .filter(|(param, _)| names.iter().any(|name| name == *param))
+                            .map(|(param, track)| (param.clone(), track.clone()))
+                            .collect::<Map<String, Value>>()
+                    })
+                    .unwrap_or_default();
+                (params, keyframes)
+            }
+        };
+        let result = store.save(&effect_id, name, params, keyframes, effect.enabled);
         match result {
             Ok(()) => {
                 self.set_status(status_message!(
@@ -9083,6 +9134,74 @@ mod tests {
 
         assert!(workspace.delete_effect_preset(&store, 0, "Current"));
         assert!(store.names("rect").is_empty());
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_scoped_preset_saves_only_the_chosen_parameters() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-scoped-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let state = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1,
+                    "sceneId": 1,
+                    "type": "rect",
+                    "start": 0,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{
+                        "id": "blur",
+                        "name": "Blur",
+                        "params": {"size": 5, "quality": 3},
+                        "keyframes": {
+                            "size": [{"frame": 0, "value": 5}],
+                            "quality": [{"frame": 0, "value": 3}]
+                        }
+                    }]
+                }]
+            }"#,
+        )
+        .expect("scoped preset fixture loads");
+        let document = state.snapshot();
+        let mut workspace = WorkspaceModel::new(ProjectSession {
+            state,
+            document,
+            path: None,
+            dirty: false,
+        });
+        workspace.click_clip(1, false);
+
+        let scope = ["size".to_owned()];
+        assert!(workspace.save_effect_preset_scoped(&store, 0, "Sized", Some(&scope)));
+        let preset = store.load_preset("blur", "Sized").expect("preset loads");
+        assert_eq!(preset.params.keys().collect::<Vec<_>>(), ["size"]);
+        assert_eq!(preset.keyframes.keys().collect::<Vec<_>>(), ["size"]);
+
+        // Loading the scoped preset restores the chosen item and leaves the
+        // other one at the value the user set in the meantime.
+        assert!(workspace.set_effect_parameter_at_frame(0, "size", 0, json!(1.0)));
+        assert!(workspace.set_effect_parameter_at_frame(0, "quality", 0, json!(9.0)));
+        assert!(workspace.load_effect_preset(&store, 0, "Sized"));
+        let effect = &workspace.document().clips[0].effects[0];
+        assert_eq!(effect.params["size"], json!(5));
+        assert_eq!(effect.params["quality"], json!(9.0));
+
+        assert!(
+            !workspace.save_effect_preset_scoped(&store, 0, "Empty", Some(&[])),
+            "an empty scope is refused rather than saving everything"
+        );
+        let unknown = ["missing".to_owned()];
+        assert!(!workspace.save_effect_preset_scoped(&store, 0, "Unknown", Some(&unknown)));
+        assert!(store.names("blur").iter().all(|name| name == "Sized"));
+
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
 

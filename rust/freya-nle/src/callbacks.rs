@@ -1227,8 +1227,18 @@ pub(super) fn install_callbacks(
         ModelRc::new(VecModel::from(names))
     });
     let preset_save_ui = object_settings_ui.clone();
-    object_settings.on_save_effect_preset(move |index, name| {
-        preset_save_ui.save_preset(index.max(0) as usize, name.as_str());
+    object_settings.on_save_effect_preset(move |index, name, scope| {
+        let scope = scope
+            .iter()
+            .map(|item| (item.param_name.to_string(), item.checked))
+            .collect();
+        preset_save_ui.save_preset(index.max(0) as usize, name.as_str(), scope);
+    });
+    let preset_scope_ui = object_settings_ui.clone();
+    object_settings.on_preset_scope(move |index| {
+        ModelRc::new(VecModel::from(
+            preset_scope_ui.preset_scope(index.max(0) as usize),
+        ))
     });
     let preset_load_ui = object_settings_ui.clone();
     object_settings.on_load_effect_preset(move |index, name| {

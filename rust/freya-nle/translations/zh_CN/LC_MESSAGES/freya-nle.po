@@ -1546,3 +1546,9 @@ msgstr "每个项目保留的版本数"
 
 msgid "Save Version"
 msgstr "保存版本"
+
+msgid "Parameters to save"
+msgstr "要保存的参数"
+
+msgid "Unchecked parameters keep their current value"
+msgstr "未勾选的参数保持当前值"

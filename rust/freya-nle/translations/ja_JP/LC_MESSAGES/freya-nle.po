@@ -1546,3 +1546,9 @@ msgstr "プロジェクトごとの保持数"
 
 msgid "Save Version"
 msgstr "バージョンを保存"
+
+msgid "Parameters to save"
+msgstr "保存する設定項目"
+
+msgid "Unchecked parameters keep their current value"
+msgstr "チェックを外した項目は現在の値を維持します"

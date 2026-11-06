@@ -11,7 +11,7 @@ use crate::projection::{sync_project_tabs, sync_transport, sync_weak_windows, up
 use crate::{
     EasingConfigWindow, EffectCatalogItemData, KeyframeMarkerData, MainWindow,
     ObjectCatalogMenuCategoryData, ObjectEffectData, ObjectSettingRowData, ObjectSettingsWindow,
-    TimelineWindow,
+    PresetScopeItemData, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::easing::BezierCurve;
@@ -485,7 +485,49 @@ impl ObjectSettingsUi {
         self.sync();
     }
 
-    pub(super) fn save_preset(&self, effect_index: usize, name: &str) {
+    /// The parameters the preset dialog offers to save.
+    ///
+    /// Audio-plugin presets keep their all-or-nothing behaviour, so the list is
+    /// empty in that mode and the dialog hides the section.
+    pub(super) fn preset_scope(&self, effect_index: usize) -> Vec<PresetScopeItemData> {
+        let model = self.model.borrow();
+        let catalog = self.catalog.borrow();
+        let Some(settings) = model
+            .current_workspace()
+            .and_then(|workspace| workspace.object_settings(&catalog))
+        else {
+            return Vec::new();
+        };
+        if settings.audio_plugin_mode {
+            return Vec::new();
+        }
+        let Some(effect) = settings
+            .effects
+            .iter()
+            .find(|effect| effect.index == effect_index)
+        else {
+            return Vec::new();
+        };
+        effect
+            .controls
+            .iter()
+            .filter_map(|control| {
+                let param = control.param.as_ref()?;
+                Some(PresetScopeItemData {
+                    param_name: SharedString::from(param.clone()),
+                    label: SharedString::from(
+                        localized_effect_metadata(&control.label).into_owned(),
+                    ),
+                    checked: true,
+                })
+            })
+            .collect()
+    }
+
+    /// Saves a preset, limited to the checked parameters when the dialog
+    /// offered a list. An empty list means the effect or plugin has no
+    /// parameters to choose between, so the whole preset is saved.
+    pub(super) fn save_preset(&self, effect_index: usize, name: &str, scope: Vec<(String, bool)>) {
         let _ = self
             .model
             .borrow_mut()
@@ -494,7 +536,18 @@ impl ObjectSettingsUi {
                 if workspace.object_settings_uses_audio_plugins() {
                     workspace.save_audio_plugin_preset(&self.presets, effect_index, name)
                 } else {
-                    workspace.save_effect_preset(&self.presets, effect_index, name)
+                    let selected = scope
+                        .iter()
+                        .filter(|(_, checked)| *checked)
+                        .map(|(param, _)| param.clone())
+                        .collect::<Vec<_>>();
+                    let scoped = (!scope.is_empty()).then_some(selected);
+                    workspace.save_effect_preset_scoped(
+                        &self.presets,
+                        effect_index,
+                        name,
+                        scoped.as_deref(),
+                    )
                 }
             });
         self.sync();
