@@ -239,6 +239,18 @@ fn main() {
                 ui.set_expression_text("above.size * 2".into());
                 ui.set_expression_visible(true);
             }
+            // `UI_SNAPSHOT_TEXT_PRESET=1` opens the text preset manager: it
+            // lists shared presets instead of one effect's parameters.
+            if std::env::var("UI_SNAPSHOT_TEXT_PRESET").is_ok() {
+                ui.set_text_preset_effect_index(0);
+                ui.set_text_preset_names(ModelRc::new(VecModel::from(vec![
+                    "Title".into(),
+                    "Caption".into(),
+                    "Credits".into(),
+                ])));
+                ui.set_text_preset_name("Subtitle".into());
+                ui.set_text_preset_visible(true);
+            }
             if std::env::var("UI_SNAPSHOT_PRESET").is_ok() {
                 ui.set_preset_effect_index(1);
                 ui.set_preset_effect_name("ぼかし".into());

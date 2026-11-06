@@ -1251,6 +1251,18 @@ pub(super) fn install_callbacks(
     object_settings.on_delete_effect_preset(move |index, name| {
         preset_delete_ui.delete_preset(index.max(0) as usize, name.as_str());
     });
+    let text_preset_open_ui = object_settings_ui.clone();
+    object_settings.on_open_text_presets(move |index| {
+        text_preset_open_ui.open_text_presets(index.max(0) as usize);
+    });
+    let text_preset_save_ui = object_settings_ui.clone();
+    object_settings.on_save_text_preset(move |index, name| {
+        text_preset_save_ui.save_text_preset(index.max(0) as usize, name.as_str());
+    });
+    let text_preset_delete_ui = object_settings_ui.clone();
+    object_settings.on_delete_text_preset(move |name| {
+        text_preset_delete_ui.delete_text_preset(name.as_str());
+    });
     let expression_open_ui = object_settings_ui.clone();
     object_settings.on_open_expression(move |index| {
         expression_open_ui.open_expression(index.max(0) as usize);

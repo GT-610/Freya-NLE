@@ -9,6 +9,7 @@ build = "build.rs"
 [dependencies]
 freya-nle-app = { path = "../freya-nle-app" }
 freya-nle-audio = { path = "../freya-nle-audio" }
+freya-nle-core = { path = "../freya-nle-core" }
 freya-nle-export = { path = "../freya-nle-export" }
 freya-nle-preview = { path = "../freya-nle-preview" }
 freya-nle-render = { path = "../freya-nle-render" }

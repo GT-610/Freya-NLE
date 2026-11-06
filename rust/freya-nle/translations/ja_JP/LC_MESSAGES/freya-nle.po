@@ -467,6 +467,18 @@ msgstr "1行に1パスを入力します"
 msgid "Enter preset name..."
 msgstr "プリセット名を入力..."
 
+msgid "Text Presets"
+msgstr "テキストプリセット"
+
+msgid "Text Presets..."
+msgstr "テキストプリセット..."
+
+msgid "Apply a preset with <$name> inside the text."
+msgstr "テキスト内で <$name> と書くとプリセットを適用します。"
+
+msgid "No text presets yet"
+msgstr "テキストプリセットはまだありません"
+
 msgid "Enter shortcuts in a format such as “Ctrl+S” or “Alt+Shift+N”"
 msgstr "「Ctrl+S」や「Alt+Shift+N」の形式で入力してください"
 

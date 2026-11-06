@@ -1346,6 +1346,87 @@ fn creation_defaults_round_trip_through_settings() {
 }
 
 #[test]
+fn text_presets_round_trip_and_feed_the_parser() {
+    use freya_nle_app::settings::SettingsStore;
+    use serde_json::json;
+
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-text-presets-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let (mut store, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    let mut params = serde_json::Map::new();
+    params.insert("fontFamily".to_owned(), json!("Georgia"));
+    params.insert("fontSize".to_owned(), json!(96));
+    params.insert("color".to_owned(), json!("#112233"));
+    params.insert("fontBold".to_owned(), json!(true));
+
+    crate::settings::save_text_preset(&mut store, "Title", &params).expect("preset saves");
+    assert_eq!(crate::settings::text_preset_names(&store), vec!["Title"]);
+    // A name that could never be addressed by `<$name>` is rejected.
+    assert!(crate::settings::save_text_preset(&mut store, "bad>name", &params).is_err());
+    assert!(
+        crate::settings::save_text_preset(&mut store, "empty", &serde_json::Map::new()).is_err()
+    );
+
+    crate::settings::sync_text_presets(&store);
+    let runs = freya_nle_core::api::parse_text_runs_at(
+        "a<$Title>b",
+        freya_nle_core::api::TextBaseStyle {
+            color: freya_nle_core::api::RgbaColor {
+                red: 0xff,
+                green: 0xff,
+                blue: 0xff,
+                alpha: 0xff,
+            },
+            outline_color: freya_nle_core::api::RgbaColor {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 0xff,
+            },
+            font_size: 48.0,
+            letter_spacing: 0.0,
+            font_family: None,
+            bold: false,
+            italic: false,
+            line_spacing: None,
+            anchor: freya_nle_core::api::TextAnchor::Flow,
+            x_scale: 1.0,
+            y_scale: 1.0,
+            rotation: 0.0,
+            ruby: None,
+            emoji: None,
+        },
+        0.0,
+        0.0,
+    );
+    let preset_run = runs.last().expect("preset run");
+    assert_eq!(preset_run.text, "b");
+    assert_eq!(preset_run.font_size, 96.0);
+    assert_eq!(preset_run.font_family.as_deref(), Some("Georgia"));
+    assert!(preset_run.bold);
+    assert_eq!(
+        (
+            preset_run.color.red,
+            preset_run.color.green,
+            preset_run.color.blue
+        ),
+        (0x11, 0x22, 0x33)
+    );
+
+    crate::settings::delete_text_preset(&mut store, "Title").expect("preset deletes");
+    assert!(crate::settings::text_preset_names(&store).is_empty());
+    assert!(store.value("textPresets").is_none());
+    freya_nle_core::api::set_text_presets(Vec::new());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn mark_timecodes_and_labels_follow_the_ruler_reading() {
     assert_eq!(mark_timecode(0, 60), "00:00:00.00");
     assert_eq!(mark_timecode(72, 60), "00:00:01.12");

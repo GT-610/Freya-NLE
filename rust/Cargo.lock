@@ -1758,6 +1758,7 @@ dependencies = [
  "fontdb",
  "freya-nle-app",
  "freya-nle-audio",
+ "freya-nle-core",
  "freya-nle-export",
  "freya-nle-preview",
  "freya-nle-render",

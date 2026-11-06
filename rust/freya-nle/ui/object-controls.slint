@@ -318,6 +318,9 @@ export component EffectSidebarEntry inherits Rectangle {
     callback load-preset(int, string);
     callback delete-preset(int, string);
     callback query-presets(int) -> [string];
+    // Text presets are shared by every text object, unlike the per-effect
+    // presets above, so they get their own manager.
+    callback open-text-presets(int);
     in-out property <[string]> preset-names;
     private property <bool> drag-active: false;
     private property <bool> drag-threshold-crossed: false;
@@ -381,6 +384,11 @@ export component EffectSidebarEntry inherits Rectangle {
                     title: preset;
                     activated => { root.delete-preset(root.effect.index, preset); }
                 }
+            }
+            if root.effect.id == "text" : MenuSeparator { }
+            if root.effect.id == "text" : MenuItem {
+                title: @tr("Text Presets...");
+                activated => { root.open-text-presets(root.effect.index); }
             }
             MenuSeparator { }
             // Parameter reference expressions (AviUtl2's 参照式).

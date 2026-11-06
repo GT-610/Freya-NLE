@@ -62,6 +62,7 @@ impl ObjectSettingsUi {
                 window.get_effect_filter().as_str(),
                 &self.settings.borrow(),
             );
+            self.sync_text_preset_names(&window);
         }
     }
 
@@ -665,6 +666,72 @@ impl ObjectSettingsUi {
             });
         if applied {
             self.sync();
+        }
+    }
+
+    /// Opens the text preset manager and refills its name list.
+    pub(super) fn open_text_presets(&self, effect_index: usize) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        window.set_text_preset_effect_index(effect_index as i32);
+        window.set_text_preset_name(SharedString::new());
+        self.sync_text_preset_names(&window);
+        window.set_text_preset_visible(true);
+    }
+
+    fn sync_text_preset_names(&self, window: &ObjectSettingsWindow) {
+        let names = crate::settings::text_preset_names(&self.settings.borrow());
+        window.set_text_preset_names(ModelRc::new(VecModel::from(
+            names
+                .into_iter()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
+        )));
+    }
+
+    /// Saves the selected text effect's style as a preset `<$name>` can apply.
+    pub(super) fn save_text_preset(&self, effect_index: usize, name: &str) {
+        let Some((id, params)) = self
+            .model
+            .borrow()
+            .current_workspace()
+            .and_then(|workspace| workspace.effect_parameters(effect_index))
+        else {
+            return;
+        };
+        if id != "text" {
+            return;
+        }
+        let params = params
+            .into_iter()
+            .filter(|(key, _)| crate::settings::TEXT_PRESET_PARAMETERS.contains(&key.as_str()))
+            .collect::<serde_json::Map<_, _>>();
+        match crate::settings::save_text_preset(&mut self.settings.borrow_mut(), name, &params) {
+            Ok(()) => {
+                if let Some(workspace) = self.model.borrow_mut().current_workspace_mut() {
+                    workspace.report_status(freya_nle_app::status_message!(
+                        "Saved the text preset {name}",
+                        "已保存文本预设 {name}",
+                        "テキストプリセット「{name}」を保存しました"
+                    ));
+                }
+                if let Some(window) = self.window.upgrade() {
+                    self.sync_text_preset_names(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn delete_text_preset(&self, name: &str) {
+        match crate::settings::delete_text_preset(&mut self.settings.borrow_mut(), name) {
+            Ok(()) => {
+                if let Some(window) = self.window.upgrade() {
+                    self.sync_text_preset_names(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
         }
     }
 

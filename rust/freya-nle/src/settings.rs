@@ -247,6 +247,153 @@ pub(super) fn clear_effect_default(
     settings.apply(root)
 }
 
+/// Parameter names a text preset can carry: the text effect keys the text
+/// control characters are able to change, so a preset and `<$name>` agree.
+pub(super) const TEXT_PRESET_PARAMETERS: [&str; 8] = [
+    "fontFamily",
+    "fontSize",
+    "color",
+    "outlineColor",
+    "fontBold",
+    "fontItalic",
+    "letterSpacing",
+    "lineSpacing",
+];
+
+const TEXT_PRESETS_KEY: &str = "textPresets";
+
+pub(super) fn text_preset_names(settings: &SettingsStore) -> Vec<String> {
+    let mut names = settings
+        .value(TEXT_PRESETS_KEY)
+        .and_then(Value::as_object)
+        .map(|presets| presets.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    names.sort_unstable();
+    names
+}
+
+fn valid_text_preset_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    // The directive ends at `>`, so a name containing `>` could never be
+    // addressed; `$` and control characters are rejected for the same reason.
+    let valid = !name.is_empty()
+        && name.chars().count() <= 64
+        && !name
+            .chars()
+            .any(|character| matches!(character, '<' | '>' | '$') || character.is_control());
+    valid.then_some(name)
+}
+
+pub(super) fn save_text_preset(
+    settings: &mut SettingsStore,
+    name: &str,
+    params: &Map<String, Value>,
+) -> Result<(), String> {
+    let name = valid_text_preset_name(name)
+        .ok_or_else(|| "A preset name cannot be empty or contain <, > or $".to_owned())?;
+    if params.is_empty() {
+        return Err("The text object has no style settings to save".to_owned());
+    }
+    let mut root = settings.snapshot();
+    let mut presets = root
+        .get(TEXT_PRESETS_KEY)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    presets.insert(name.to_owned(), Value::Object(params.clone()));
+    root.insert(TEXT_PRESETS_KEY.to_owned(), Value::Object(presets));
+    settings.apply(root)?;
+    sync_text_presets(settings);
+    Ok(())
+}
+
+pub(super) fn delete_text_preset(settings: &mut SettingsStore, name: &str) -> Result<(), String> {
+    let mut root = settings.snapshot();
+    let empty = {
+        let Some(presets) = root
+            .get_mut(TEXT_PRESETS_KEY)
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        presets.remove(name);
+        presets.is_empty()
+    };
+    if empty {
+        root.remove(TEXT_PRESETS_KEY);
+    }
+    settings.apply(root)?;
+    sync_text_presets(settings);
+    Ok(())
+}
+
+/// Hands the stored presets to the text parser.
+pub(super) fn sync_text_presets(settings: &SettingsStore) {
+    let presets = settings
+        .value(TEXT_PRESETS_KEY)
+        .and_then(Value::as_object)
+        .map(|presets| {
+            presets
+                .iter()
+                .filter_map(|(name, params)| {
+                    let params = params.as_object()?;
+                    preset_from_params(name, params)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    freya_nle_core::api::set_text_presets(presets);
+}
+
+fn preset_from_params(
+    name: &str,
+    params: &Map<String, Value>,
+) -> Option<freya_nle_core::api::TextPreset> {
+    let preset = freya_nle_core::api::TextPreset {
+        name: name.to_owned(),
+        font_family: params
+            .get("fontFamily")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|family| !family.is_empty())
+            .map(str::to_owned),
+        font_size: params
+            .get("fontSize")
+            .and_then(Value::as_f64)
+            .filter(|size| size.is_finite() && *size > 0.0)
+            .map(|size| size as f32),
+        color: params
+            .get("color")
+            .and_then(Value::as_str)
+            .and_then(freya_nle_core::api::parse_text_color),
+        outline_color: params
+            .get("outlineColor")
+            .and_then(Value::as_str)
+            .and_then(freya_nle_core::api::parse_text_color),
+        bold: params.get("fontBold").and_then(Value::as_bool),
+        italic: params.get("fontItalic").and_then(Value::as_bool),
+        letter_spacing: params
+            .get("letterSpacing")
+            .and_then(Value::as_f64)
+            .filter(|spacing| spacing.is_finite())
+            .map(|spacing| spacing as f32),
+        line_spacing: params
+            .get("lineSpacing")
+            .and_then(Value::as_f64)
+            .filter(|spacing| spacing.is_finite() && *spacing >= 0.0)
+            .map(|spacing| spacing as f32),
+    };
+    let empty = preset.font_family.is_none()
+        && preset.font_size.is_none()
+        && preset.color.is_none()
+        && preset.outline_color.is_none()
+        && preset.bold.is_none()
+        && preset.italic.is_none()
+        && preset.letter_spacing.is_none()
+        && preset.line_spacing.is_none();
+    (!empty).then_some(preset)
+}
+
 pub(super) fn project_defaults(settings: &SettingsStore) -> ProjectDefaults {
     let fps = settings.f64_value("defaultProjectFps", 60.0);
     ProjectDefaults {

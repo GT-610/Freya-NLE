@@ -467,6 +467,18 @@ msgstr "每行输入一个路径"
 msgid "Enter preset name..."
 msgstr "请输入预设名称…"
 
+msgid "Text Presets"
+msgstr "文本预设"
+
+msgid "Text Presets..."
+msgstr "文本预设..."
+
+msgid "Apply a preset with <$name> inside the text."
+msgstr "在文本中用 <$name> 应用预设。"
+
+msgid "No text presets yet"
+msgstr "还没有文本预设"
+
 msgid "Enter shortcuts in a format such as “Ctrl+S” or “Alt+Shift+N”"
 msgstr "请以“Ctrl+S”或“Alt+Shift+N”的格式输入"
 

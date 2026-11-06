@@ -22,7 +22,9 @@
 //!   angle and `<tr>` restoring 0;
 //! - `</>base<![scale][+]>ruby</>`: furigana over the base text, where `+`
 //!   expands the line so the ruby does not collide with the line above;
-//! - `<&name>`: an inline emoji image from the registered emoji folder.
+//! - `<&name>`: an inline emoji image from the registered emoji folder;
+//! - `<$name>`: applies a registered text preset, and `<$>` restores every
+//!   preset-changeable setting to the object's own values.
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -135,6 +137,59 @@ impl FontStyle {
             strikethrough: false,
         }
     }
+}
+
+/// One named text style that `<$name>` applies.
+///
+/// Every field is optional: AviUtl presets can save only the settings the user
+/// ticked, and an absent field leaves the object's current value alone.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TextPreset {
+    pub name: String,
+    pub font_family: Option<String>,
+    pub font_size: Option<f32>,
+    pub color: Option<RgbaColor>,
+    pub outline_color: Option<RgbaColor>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub letter_spacing: Option<f32>,
+    pub line_spacing: Option<f32>,
+}
+
+thread_local! {
+    /// Presets registered by the host for `<$name>`. The editor keeps this in
+    /// step with its settings; the parser never talks to the settings store.
+    static TEXT_PRESETS: std::cell::RefCell<Vec<TextPreset>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Registers the presets `<$name>` resolves.
+pub fn set_text_presets(presets: Vec<TextPreset>) {
+    TEXT_PRESETS.with(|slot| *slot.borrow_mut() = presets);
+}
+
+/// Parses a stored text colour (`#rrggbb` or `#aarrggbb`) for preset storage.
+pub fn parse_text_color(value: &str) -> Option<RgbaColor> {
+    let [alpha, red, green, blue] = parse_hex_color(value)?;
+    Some(RgbaColor {
+        red,
+        green,
+        blue,
+        alpha,
+    })
+}
+
+fn text_preset(name: &str) -> Option<TextPreset> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    TEXT_PRESETS.with(|slot| {
+        slot.borrow()
+            .iter()
+            .find(|preset| preset.name == name)
+            .cloned()
+    })
 }
 
 const MIN_FONT_SIZE: f32 = 1.0;
@@ -291,6 +346,7 @@ impl Parser {
             '@' => self.apply_font(&directive[1..]),
             'p' => self.apply_position(&directive[1..]),
             '&' => self.apply_emoji(&directive[1..]),
+            '$' => self.apply_text_preset(&directive[1..]),
             't' => self.apply_transform(&directive[1..]),
             'g' => self.apply_spacing(&directive[1..]),
             'r' => self.apply_speed(&directive[1..]),
@@ -370,6 +426,49 @@ impl Parser {
             self.font.bold = bold;
             self.font.italic = italic;
             self.font.strikethrough = strikethrough;
+        }
+        true
+    }
+
+    /// `<$name>`: applies a registered preset, while `<$>` returns to the
+    /// object's own style. Only the fields the preset saved are changed.
+    fn apply_text_preset(&mut self, value: &str) -> bool {
+        let value = value.trim();
+        if value.is_empty() {
+            self.style.font_size = self.base.font_size;
+            self.style.color = self.base.color;
+            self.style.outline_color = self.base.outline_color;
+            self.style.letter_spacing = self.base.letter_spacing;
+            self.style.line_spacing = self.base.line_spacing;
+            self.font = FontStyle::from_base(&self.base);
+            return true;
+        }
+        let Some(preset) = text_preset(value) else {
+            return false;
+        };
+        if let Some(family) = preset.font_family {
+            self.font.family = Some(family);
+        }
+        if let Some(size) = preset.font_size {
+            self.style.font_size = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        }
+        if let Some(color) = preset.color {
+            self.style.color = color;
+        }
+        if let Some(color) = preset.outline_color {
+            self.style.outline_color = color;
+        }
+        if let Some(bold) = preset.bold {
+            self.font.bold = bold;
+        }
+        if let Some(italic) = preset.italic {
+            self.font.italic = italic;
+        }
+        if let Some(spacing) = preset.letter_spacing {
+            self.style.letter_spacing = spacing.clamp(-MAX_LETTER_SPACING, MAX_LETTER_SPACING);
+        }
+        if let Some(spacing) = preset.line_spacing {
+            self.style.line_spacing = (spacing >= 0.0).then_some(spacing.min(MAX_LINE_SPACING));
         }
         true
     }
@@ -1157,6 +1256,56 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn text_presets_apply_only_the_saved_settings() {
+        set_text_presets(vec![TextPreset {
+            name: "title".to_owned(),
+            font_size: Some(96.0),
+            color: Some(RgbaColor {
+                red: 0x12,
+                green: 0x34,
+                blue: 0x56,
+                alpha: 0xff,
+            }),
+            bold: Some(true),
+            ..TextPreset::default()
+        }]);
+        let runs = parse_text_runs("a<$title>b", base());
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[1].text, "b");
+        assert_eq!(runs[1].font_size, 96.0);
+        assert_eq!(
+            (runs[1].color.red, runs[1].color.green, runs[1].color.blue),
+            (0x12, 0x34, 0x56)
+        );
+        assert!(runs[1].bold);
+        // The preset did not save italic or spacing, so they keep the base.
+        assert!(!runs[1].italic);
+        assert_eq!(runs[1].letter_spacing, 0.0);
+        set_text_presets(Vec::new());
+    }
+
+    #[test]
+    fn a_bare_preset_directive_restores_the_object_style() {
+        set_text_presets(Vec::new());
+        let runs = parse_text_runs("<s96><#00ff00><$>after", base());
+        let run = runs.last().expect("text run");
+        assert_eq!(run.text, "after");
+        assert_eq!(run.font_size, base().font_size);
+        assert_eq!(
+            (run.color.red, run.color.green, run.color.blue),
+            (0xff, 0xff, 0xff)
+        );
+    }
+
+    #[test]
+    fn an_unknown_text_preset_stays_literal() {
+        set_text_presets(Vec::new());
+        let runs = parse_text_runs("a<$missing>b", base());
+        let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+        assert_eq!(text, "a<$missing>b");
     }
 
     #[test]
