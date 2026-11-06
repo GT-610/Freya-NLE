@@ -279,6 +279,8 @@ export component TimelineWindow inherits Window {
     callback filter-objects(string, int);
     // Asks the host to rebuild the filtered object list for this kind index.
     callback filter-object-kinds(string);
+    // Moves one layer's objects onto another layer, from an object-list drag.
+    callback move-object-layer(int, int);
     callback filter-context-catalog(string, int);
     callback move-context-search-selection(int) -> int;
     callback add-catalog-object(string, int, int) -> bool;
@@ -1562,6 +1564,7 @@ export component TimelineWindow inherits Window {
                     kind-filters: root.object-kind-filters;
                     kind-filter-value: root.object-kind-label;
                     filter-kinds(kind) => { root.filter-object-kinds(kind); }
+                    move-layer(source, target) => { root.move-object-layer(source, target); }
                     select(clip-id) => { root.clip-selected(clip-id, false); }
                     open(clip-id) => {
                         root.clip-selected(clip-id, false);

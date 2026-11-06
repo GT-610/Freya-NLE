@@ -16,6 +16,14 @@ export component ObjectListPanel inherits Rectangle {
     // The chosen label; empty means every kind.
     in-out property <string> kind-filter-value: "";
     callback filter-kinds(string);
+    // Dragging a row onto another row moves that layer's objects to the target
+    // layer; the list is ordered by layer, so this is the only thing a vertical
+    // drag can mean.
+    callback move-layer(int, int);
+    // The row being dragged and how many rows the pointer has travelled. Rows
+    // are fixed height, so the row count is the layer delta.
+    private property <int> drag-source-layer: -1;
+    private property <int> drag-delta-rows: 0;
     callback select(int);
     callback open(int);
     // Window coordinates, so the timeline can place the shared context menu.
@@ -88,7 +96,7 @@ export component ObjectListPanel inherits Rectangle {
             object-list := VerticalLayout {
                 width: parent.width;
                 spacing: 1px;
-                for object in root.objects : Rectangle {
+                for object[index] in root.objects : Rectangle {
                     height: 28px;
                     background: object.selected
                         ? AppTheme.selection-background
@@ -136,6 +144,10 @@ export component ObjectListPanel inherits Rectangle {
                         accessible-item-selected: object.selected;
                         clicked => { root.select(object.clip-id); }
                         double-clicked => { root.open(object.clip-id); }
+                        // A vertical drag moves this layer's objects to another
+                        // layer; the list is ordered by layer, so the distance
+                        // in rows is the layer delta. A plain click still
+                        // selects, because the move only runs after a full row.
                         pointer-event(event) => {
                             if event.kind == PointerEventKind.down
                                 && event.button == PointerEventButton.right {
@@ -145,6 +157,31 @@ export component ObjectListPanel inherits Rectangle {
                                     self.absolute-position.y + self.mouse-y,
                                     object.kind == "audio",
                                     object.clip-by-upper-object
+                                );
+                            } else if event.kind == PointerEventKind.down {
+                                root.drag-source-layer = object.layer;
+                                root.drag-delta-rows = 0;
+                            } else if event.kind == PointerEventKind.up {
+                                let delta = root.drag-delta-rows;
+                                let source = root.drag-source-layer;
+                                root.drag-source-layer = -1;
+                                root.drag-delta-rows = 0;
+                                // Rows are one per object, not one per layer, so
+                                // the destination layer is read from the row the
+                                // drag ended on rather than from the row count.
+                                let target-index = index + delta;
+                                if source == object.layer
+                                    && target-index >= 0
+                                    && target-index < root.objects.length {
+                                    root.move-layer(
+                                        source,
+                                        root.objects[target-index].layer
+                                    );
+                                }
+                            } else if event.kind == PointerEventKind.move
+                                && root.drag-source-layer == object.layer {
+                                root.drag-delta-rows = round(
+                                    (self.mouse-y - self.pressed-y) / 28px
                                 );
                             }
                         }

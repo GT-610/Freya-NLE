@@ -2751,6 +2751,23 @@ pub(super) fn install_callbacks(
         );
     });
 
+    let object_layer_model = model.clone();
+    let object_layer_main = main.as_weak();
+    let object_layer_timeline = timeline.as_weak();
+    timeline.on_move_object_layer(move |source, target| {
+        let maximum_layers = object_layer_timeline
+            .upgrade()
+            .map_or(MAX_TIMELINE_LAYERS, |window| window.get_maximum_layers());
+        if let Some(workspace) = object_layer_model.borrow_mut().current_workspace_mut() {
+            workspace.move_layer_objects_to_layer(source, target, maximum_layers);
+        }
+        sync_weak_windows(
+            &object_layer_main,
+            &object_layer_timeline,
+            &object_layer_model,
+        );
+    });
+
     timeline.on_clip_selected(move |clip_id, additive| {
         if let Some(workspace) = clip_select_model.borrow_mut().current_workspace_mut() {
             workspace.click_clip(clip_id, additive);

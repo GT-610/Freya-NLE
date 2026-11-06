@@ -4896,6 +4896,91 @@ impl WorkspaceModel {
         }
     }
 
+    /// Moves the objects of one layer onto another layer, keeping their frames.
+    ///
+    /// The object list is ordered by layer, so dragging a row is a layer change
+    /// rather than a time move. Every object on the source layer moves together
+    /// because the list row stands for "what is on this layer at this frame";
+    /// leaving the rest behind would scatter one layer's objects across two.
+    pub fn move_layer_objects_to_layer(
+        &mut self,
+        source_layer: i32,
+        target_layer: i32,
+        maximum_layers: i32,
+    ) -> bool {
+        if source_layer == target_layer {
+            return false;
+        }
+        let maximum_layer = maximum_layers.clamp(1, MAX_TIMELINE_LAYERS) - 1;
+        if !(0..=maximum_layer).contains(&target_layer) {
+            self.set_status(status_message!(
+                "Layer {} does not exist",
+                "图层 {} 不存在",
+                "レイヤー {} は存在しません",
+                target_layer + 1
+            ));
+            return false;
+        }
+        let clips = self
+            .project
+            .document
+            .clips
+            .iter()
+            .filter(|clip| clip.scene_id == self.selected_scene && clip.layer == source_layer)
+            .map(|clip| (clip.id, clip.layer, clip.start, clip.duration))
+            .collect::<Vec<_>>();
+        if clips.is_empty() {
+            self.set_status(status_message!(
+                "Layer {} has no objects",
+                "图层 {} 没有对象",
+                "レイヤー {} にオブジェクトがありません",
+                source_layer + 1
+            ));
+            return false;
+        }
+        let updates = clips
+            .into_iter()
+            .map(
+                |(clip_id, layer, start, duration)| freya_nle_core::api::ClipGeometryUpdate {
+                    clip_id,
+                    layer,
+                    start,
+                    duration,
+                },
+            )
+            .map(|mut update| {
+                update.layer = target_layer;
+                update
+            })
+            .collect::<Vec<_>>();
+        // The locked-layer check belongs to the planner, but a plain geometry
+        // update bypasses it; the target layer is checked here instead.
+        if self
+            .selected_scene_document()
+            .is_some_and(|scene| scene.locked_layers.contains(&target_layer))
+        {
+            self.set_status(status_message!(
+                "Layer {} is locked",
+                "图层 {} 已锁定",
+                "レイヤー {} はロックされています",
+                target_layer + 1
+            ));
+            return false;
+        }
+        if self.execute_geometry_updates(updates) {
+            self.set_status(status_message!(
+                "Moved layer {} objects to layer {}",
+                "已将图层 {} 的对象移到图层 {}",
+                "レイヤー {} のオブジェクトをレイヤー {} へ移動しました",
+                source_layer + 1,
+                target_layer + 1
+            ));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn preview_timeline_drag(
         &self,
         request: TimelineDragRequest,
@@ -6454,6 +6539,38 @@ mod tests {
         workspace.seek(40);
         workspace.toggle_layer_lock(1);
         assert!(workspace.objects_at_playhead()[0].locked);
+    }
+
+    #[test]
+    fn moving_a_layer_moves_all_of_its_objects_in_one_step() {
+        let mut workspace = workspace();
+        // Layer 0 holds one object in this fixture; layer 4 is empty.
+        assert_eq!(workspace.timeline_clips()[0].layer, 0);
+        assert!(workspace.move_layer_objects_to_layer(0, 4, MAX_TIMELINE_LAYERS));
+        let moved = workspace
+            .timeline_clips()
+            .into_iter()
+            .find(|clip| clip.id == 1)
+            .expect("the object survives");
+        assert_eq!(moved.layer, 4);
+        assert_eq!(moved.start, 0, "the frame is untouched");
+        // One undo puts it back on the original layer.
+        workspace.undo();
+        assert_eq!(workspace.timeline_clips()[0].layer, 0);
+
+        // A locked target layer refuses the move and says why.
+        workspace.toggle_layer_lock(5);
+        assert!(!workspace.move_layer_objects_to_layer(0, 5, MAX_TIMELINE_LAYERS));
+        assert_eq!(workspace.timeline_clips()[0].layer, 0);
+        // Moving onto itself and out-of-range layers are refused.
+        assert!(!workspace.move_layer_objects_to_layer(0, 0, MAX_TIMELINE_LAYERS));
+        assert!(!workspace.move_layer_objects_to_layer(
+            0,
+            MAX_TIMELINE_LAYERS,
+            MAX_TIMELINE_LAYERS
+        ));
+        // An empty source layer is refused rather than silently doing nothing.
+        assert!(!workspace.move_layer_objects_to_layer(90, 2, MAX_TIMELINE_LAYERS));
     }
 
     #[test]
