@@ -9,7 +9,7 @@ publish.workspace = true
 freya-nle-media = { path = "../freya-nle-media" }
 freya-nle-core = { path = "../freya-nle-core" }
 fontdb = { version = "0.23.0", default-features = false, features = ["fs"] }
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "bmp", "jpeg", "gif"] }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 rustybuzz = "0.20.1"
 tiny-skia = { version = "0.12.0", default-features = false, features = ["simd", "std"] }

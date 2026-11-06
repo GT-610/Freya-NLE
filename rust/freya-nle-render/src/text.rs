@@ -595,7 +595,11 @@ fn emoji_pixmap(name: &str) -> Option<Arc<Pixmap>> {
         .and_then(|slot| slot.lock().ok().map(|dirs| dirs.clone()))
         .unwrap_or_default();
     for directory in directories {
-        for extension in ["png", "PNG"] {
+        // AviUtl2 reads whatever image file sits in the folder, so the common
+        // still formats are accepted instead of PNG alone.
+        for extension in [
+            "png", "PNG", "bmp", "BMP", "jpg", "JPG", "jpeg", "JPEG", "gif", "GIF",
+        ] {
             let path = directory.join(format!("{name}.{extension}"));
             if !path.is_file() {
                 continue;
@@ -1772,6 +1776,39 @@ mod tests {
                 .iter()
                 .any(|pixel| pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60 && pixel[3] > 0),
             "the registered image is drawn into the cell"
+        );
+    }
+
+    #[test]
+    fn an_emoji_may_be_saved_as_bmp_as_well_as_png() {
+        let directory = emoji_test_directory();
+        // AviUtl2 reads whatever image file the folder holds, so a BMP has to
+        // resolve through the same lookup.
+        let mut pixels = vec![0_u8; 8 * 8 * 4];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[0, 128, 255, 255]);
+        }
+        image::save_buffer(
+            directory.join("__test_bmp.bmp"),
+            &pixels,
+            8,
+            8,
+            image::ColorType::Rgba8,
+        )
+        .expect("write bmp");
+        let mut emoji = run("\u{FFFC}", 48.0);
+        emoji.emoji = Some("__test_bmp".to_owned());
+        let frame = test_rasterizer()
+            .rasterize(&plain_plan(vec![emoji]), 0.0)
+            .expect("a BMP emoji rasterizes");
+        assert!(
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[1] > 90 && pixel[2] > 200 && pixel[3] > 0),
+            "the BMP image is drawn"
         );
     }
 
