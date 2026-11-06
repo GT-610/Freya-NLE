@@ -407,6 +407,11 @@ fn default_max_clip_id() -> i32 {
 }
 
 #[cfg(test)]
+fn default_scene_width() -> i32 {
+    1920
+}
+
+#[cfg(test)]
 fn default_scene_height() -> i32 {
     1080
 }
@@ -421,6 +426,8 @@ fn default_enabled() -> bool {
 #[cfg(test)]
 struct SceneInput {
     fps: f64,
+    #[serde(default = "default_scene_width")]
+    width: i32,
     #[serde(default = "default_scene_height")]
     height: i32,
     #[serde(default = "default_max_clip_id")]
@@ -1316,7 +1323,9 @@ struct EvaluationKey {
 
 struct BakePlan {
     fps: f64,
+    scene_width: i32,
     scene_height: i32,
+    scene_id: i32,
     clips: Vec<CachedClip>,
     scene_durations: HashMap<i32, i32>,
     layer_settings: BTreeMap<i32, LayerSetting>,
@@ -1382,7 +1391,9 @@ impl BakePlan {
             .collect();
         Ok(Self::from_clips(
             fps,
+            input.width,
             input.height,
+            0,
             clips,
             HashMap::new(),
             layer_settings,
@@ -1416,7 +1427,9 @@ impl BakePlan {
             .collect();
         Ok(Self::from_clips(
             scene.fps,
+            scene.width,
             scene.height,
+            scene.id,
             clips,
             scene_durations,
             layer_settings,
@@ -1425,7 +1438,9 @@ impl BakePlan {
 
     fn from_clips(
         fps: f64,
+        scene_width: i32,
         scene_height: i32,
+        scene_id: i32,
         clips: Vec<CachedClip>,
         scene_durations: HashMap<i32, i32>,
         layer_settings: BTreeMap<i32, LayerSetting>,
@@ -1441,7 +1456,9 @@ impl BakePlan {
         }
         Self {
             fps,
+            scene_width,
             scene_height,
+            scene_id,
             clips,
             scene_durations,
             layer_settings,
@@ -1697,6 +1714,14 @@ impl BakePlan {
                     clip.duration_frames,
                     self.fps,
                     &evaluated_effects,
+                    &TextObjectContext {
+                        layer: clip.layer,
+                        start_frame: clip.start_frame,
+                        end_frame: clip.end_frame,
+                        screen_width: self.scene_width,
+                        screen_height: self.scene_height,
+                        scene_id: self.scene_id,
+                    },
                 );
                 let procedural = procedural_object_render_plan(
                     &clip.clip_type,
@@ -1862,12 +1887,23 @@ fn shape_render_plan(clip_type: &str, effects: &[EvaluatedEffect]) -> Option<Sha
     })
 }
 
+/// The scene and object facts a text script reads through `obj`.
+struct TextObjectContext {
+    layer: i32,
+    start_frame: i32,
+    end_frame: i32,
+    screen_width: i32,
+    screen_height: i32,
+    scene_id: i32,
+}
+
 fn text_render_plan(
     clip_type: &str,
     relative_frame: i32,
     duration_frames: i32,
     fps: f64,
     effects: &[EvaluatedEffect],
+    context: &TextObjectContext,
 ) -> Option<TextRenderPlan> {
     let effect = effects.iter().find(|effect| effect.id == clip_type)?;
     let value = |name| effect.params.get(name);
@@ -1943,6 +1979,12 @@ fn text_render_plan(
             frame: relative_frame,
             total_frames: duration_frames,
             frame_rate: fps,
+            layer: context.layer,
+            start_frame: context.start_frame,
+            end_frame: context.end_frame,
+            screen_width: context.screen_width,
+            screen_height: context.screen_height,
+            scene_id: context.scene_id,
         },
     );
     let font_family = value_as_string(value("fontFamily"), "sans-serif");
@@ -3143,7 +3185,7 @@ mod tests {
                     "name": "Text",
                     "enabled": true,
                     "params": {
-                        "text": "<? mes(math.floor(obj.time)) ?>/<? mes(obj.totalframe) ?>",
+                        "text": "<? mes(math.floor(obj.time)) ?>/<? mes(obj.totalframe) ?>/<? mes(obj.layer) ?>/<? mes(obj.frame_s) ?>/<? mes(obj.screen_w) ?>/<? mes(obj.scene_id) ?>",
                         "fontSize": 48
                     }
                 }]
@@ -3172,7 +3214,8 @@ mod tests {
             (0xff, 0x00, 0x00)
         );
 
-        // At 10 fps the 15th frame is 1.5 s, so the script prints 1 of 60.
+        // At 10 fps the 15th frame is 1.5 s, so the script prints 1 of 60; the
+        // object context supplies its layer, start frame, screen and scene.
         let frame = plan.evaluate(15);
         let text = frame
             .layers
@@ -3180,7 +3223,7 @@ mod tests {
             .find(|layer| layer.clip_id == 2)
             .and_then(|layer| layer.text.as_ref())
             .expect("script text layer renders");
-        assert_eq!(text.content, "1/60");
+        assert_eq!(text.content, "1/60/1/0/1920/1");
     }
 
     #[test]

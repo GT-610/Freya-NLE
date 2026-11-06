@@ -33,7 +33,7 @@ thread_local! {
     static TEXT_SCRIPTS: RefCell<Option<TextScriptVm>> = const { RefCell::new(None) };
 }
 
-/// The clock a text script sees for the frame being rendered.
+/// The clock and object facts a text script sees for the frame being rendered.
 pub(crate) struct TextScriptClock {
     /// Seconds from the start of the object.
     pub time: f64,
@@ -42,6 +42,14 @@ pub(crate) struct TextScriptClock {
     pub frame: i32,
     pub total_frames: i32,
     pub frame_rate: f64,
+    /// Layer the text object sits on; also AviUtl's `obj.effect_layer`.
+    pub layer: i32,
+    /// Scene-based start and end frame of the object (`obj.frame_s`/`frame_e`).
+    pub start_frame: i32,
+    pub end_frame: i32,
+    pub screen_width: i32,
+    pub screen_height: i32,
+    pub scene_id: i32,
 }
 
 /// Replaces every `<?...?>` block with what its script prints.
@@ -158,6 +166,16 @@ impl TextScriptVm {
             .with("frame", i64::from(clock.frame))
             .with("totalframe", i64::from(clock.total_frames))
             .with("framerate", clock.frame_rate)
+            .with("layer", i64::from(clock.layer))
+            .with("effect_layer", i64::from(clock.layer))
+            .with("frame_s", i64::from(clock.start_frame))
+            .with("frame_e", i64::from(clock.end_frame))
+            // Text renders from the scene's first frame, so the render origin
+            // is always zero here.
+            .with("originframe", 0_i64)
+            .with("screen_w", i64::from(clock.screen_width))
+            .with("screen_h", i64::from(clock.screen_height))
+            .with("scene_id", i64::from(clock.scene_id))
             .build();
         let _ = self.vm.set_global("obj", Value::Table(object));
         let mut source = String::with_capacity(TEXT_SCRIPT_PRELUDE.len() + script.len() + 64);
@@ -341,6 +359,12 @@ mod tests {
             frame: (time * 30.0) as i32,
             total_frames: (total_time * 30.0) as i32,
             frame_rate: 30.0,
+            layer: 0,
+            start_frame: 0,
+            end_frame: (total_time * 30.0) as i32,
+            screen_width: 1920,
+            screen_height: 1080,
+            scene_id: 1,
         }
     }
 
@@ -368,6 +392,20 @@ mod tests {
         assert_eq!(
             expand_text_scripts("<? obj.mes(string.format(\"%d\", obj.frame)) ?>", &clock),
             "45"
+        );
+        assert_eq!(
+            expand_text_scripts(
+                "<? mes(obj.layer) ?>/<? mes(obj.frame_s) ?>/<? mes(obj.frame_e) ?>",
+                &clock
+            ),
+            "0/0/360"
+        );
+        assert_eq!(
+            expand_text_scripts(
+                "<? mes(obj.screen_w) ?>x<? mes(obj.screen_h) ?>/<? mes(obj.scene_id) ?>",
+                &clock
+            ),
+            "1920x1080/1"
         );
     }
 
