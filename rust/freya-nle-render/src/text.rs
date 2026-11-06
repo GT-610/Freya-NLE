@@ -545,11 +545,16 @@ struct RunSegment {
 
 /// One horizontal rule drawn through a run that asked for `<@...S>`.
 /// One emoji image to draw, recorded during layout.
+///
+/// The cell keeps the image's own aspect ratio instead of a square: AviUtl
+/// advances by the picture's proportions, so a wide emoji occupies more of the
+/// line and a tall one less.
 struct EmojiDraw {
     name: String,
     x: f32,
     baseline: f32,
-    size: f32,
+    width: f32,
+    height: f32,
 }
 
 /// Folders searched for `<&name>` images, in order.
@@ -566,6 +571,22 @@ pub fn set_emoji_directories(directories: Vec<PathBuf>) {
     if let Ok(mut dirs) = slot.lock() {
         *dirs = directories;
     }
+}
+
+/// Width divided by height, or 1.0 when the image is missing.
+///
+/// Bounded so a pathological image cannot push a line off the raster.
+fn emoji_aspect(name: &str) -> f32 {
+    const MIN_ASPECT: f32 = 0.05;
+    const MAX_ASPECT: f32 = 20.0;
+    let Some(source) = emoji_pixmap(name) else {
+        return 1.0;
+    };
+    let (width, height) = (source.width() as f32, source.height() as f32);
+    if width <= 0.0 || height <= 0.0 {
+        return 1.0;
+    }
+    (width / height).clamp(MIN_ASPECT, MAX_ASPECT)
 }
 
 fn emoji_pixmap(name: &str) -> Option<Arc<Pixmap>> {
@@ -877,11 +898,12 @@ fn rasterize_runs(
         for (index, text) in draft.segments {
             let segment = &segments[index];
             if let Some(emoji) = &segment.emoji {
-                // One square cell per emoji, drawn as an image by the caller.
+                // The cell keeps the image's proportions; the caller draws it.
+                let cell_width = segment.font_size * emoji_aspect(emoji);
                 shaped_segments.push(ShapedSegment {
                     run_index: index,
                     glyphs: Vec::new(),
-                    width: segment.font_size,
+                    width: cell_width,
                     ascent: segment.font_size * 0.8,
                     scale: 1.0,
                     x_scale: 1.0,
@@ -896,7 +918,7 @@ fn rasterize_runs(
                     line_spacing: segment.line_spacing,
                     emoji: Some(emoji.clone()),
                 });
-                width += segment.font_size;
+                width += cell_width;
                 continue;
             }
             let face = &faces[segment.face_index];
@@ -1040,7 +1062,8 @@ fn rasterize_runs(
                     name: emoji.clone(),
                     x: segment_x,
                     baseline,
-                    size: segment.font_size,
+                    width: segment.width,
+                    height: segment.font_size,
                 });
                 segment_x += segment.width;
                 continue;
@@ -1171,8 +1194,8 @@ fn rasterize_runs(
     }
     for emoji in &emojis {
         visual_left = visual_left.min(emoji.x);
-        visual_top = visual_top.min(emoji.baseline - emoji.size);
-        visual_right = visual_right.max(emoji.x + emoji.size);
+        visual_top = visual_top.min(emoji.baseline - emoji.height);
+        visual_right = visual_right.max(emoji.x + emoji.width);
         visual_bottom = visual_bottom.max(emoji.baseline);
     }
     let visual_width = (visual_right - visual_left).max(0.0);
@@ -1289,10 +1312,11 @@ fn rasterize_runs(
         if width <= 0.0 || height <= 0.0 {
             continue;
         }
-        // Fit the image inside its square cell without distorting it.
-        let scale = emoji.size / width.max(height);
-        let draw_x = emoji.x + (emoji.size - width * scale) / 2.0;
-        let draw_y = emoji.baseline - emoji.size + (emoji.size - height * scale) / 2.0;
+        // The cell already has the image's proportions, so one scale fits both
+        // axes and the picture fills it instead of being letterboxed.
+        let scale = emoji.height / height;
+        let draw_x = emoji.x;
+        let draw_y = emoji.baseline - emoji.height;
         let transform = Transform::from_translate(draw_x + translate_x, draw_y + translate_y)
             .pre_scale(scale, scale);
         pixmap.draw_pixmap(
@@ -1699,21 +1723,40 @@ mod tests {
             .count()
     }
 
+    /// One shared emoji folder holding every test image.
+    ///
+    /// The folder list is a process-wide static, so tests that run in parallel
+    /// must agree on a single directory instead of each replacing it; otherwise
+    /// one test's registration hides the other's image.
+    fn emoji_test_directory() -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("freya-nle-emoji-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("emoji directory");
+        for (name, width, height, color) in [
+            ("__test_star", 8u32, 8u32, [255u8, 0, 0, 255]),
+            ("__test_wide", 32, 8, [0, 255, 0, 255]),
+            ("__test_tall", 8, 32, [0, 0, 255, 255]),
+        ] {
+            let mut pixels = vec![0_u8; (width * height * 4) as usize];
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel.copy_from_slice(&color);
+            }
+            image::save_buffer(
+                directory.join(format!("{name}.png")),
+                &pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )
+            .expect("write png");
+        }
+        set_emoji_directories(vec![directory.clone()]);
+        directory
+    }
+
     #[test]
     fn an_emoji_run_draws_the_registered_image() {
-        let directory = std::env::temp_dir().join(format!(
-            "freya-nle-emoji-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&directory).expect("emoji directory");
-        let path = directory.join("__test_star.png");
-        let mut pixels = vec![0_u8; 8 * 8 * 4];
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&[255, 0, 0, 255]);
-        }
-        image::save_buffer(&path, &pixels, 8, 8, image::ColorType::Rgba8).expect("write png");
-        set_emoji_directories(vec![directory]);
+        emoji_test_directory();
 
         let mut emoji = run("\u{FFFC}", 48.0);
         emoji.emoji = Some("__test_star".to_owned());
@@ -1729,6 +1772,49 @@ mod tests {
                 .iter()
                 .any(|pixel| pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60 && pixel[3] > 0),
             "the registered image is drawn into the cell"
+        );
+    }
+
+    #[test]
+    fn an_emoji_cell_follows_the_image_aspect_ratio() {
+        // `__test_wide` is 32x8 and `__test_tall` is 8x32.
+        emoji_test_directory();
+
+        let wide = {
+            let mut emoji = run("\u{FFFC}", 48.0);
+            emoji.emoji = Some("__test_wide".to_owned());
+            plain_plan(vec![emoji])
+        };
+        let tall = {
+            let mut emoji = run("\u{FFFC}", 48.0);
+            emoji.emoji = Some("__test_tall".to_owned());
+            plain_plan(vec![emoji])
+        };
+        let square = {
+            let mut emoji = run("\u{FFFC}", 48.0);
+            emoji.emoji = Some("__test_missing".to_owned());
+            plain_plan(vec![emoji])
+        };
+        let rasterizer = test_rasterizer();
+        let wide_frame = rasterizer.rasterize(&wide, 0.0).expect("wide emoji");
+        let tall_frame = rasterizer.rasterize(&tall, 0.0).expect("tall emoji");
+        let square_frame = rasterizer.rasterize(&square, 0.0).expect("fallback cell");
+        // The wide picture advances four times the font size, the tall one
+        // keeps the font size width; a missing image falls back to a square.
+        assert!(
+            wide_frame.width > tall_frame.width,
+            "a wide emoji occupies more of the line ({} vs {})",
+            wide_frame.width,
+            tall_frame.width
+        );
+        // A missing image falls back to a square cell, which sits between the
+        // wide and the tall one.
+        assert!(
+            wide_frame.width > square_frame.width && square_frame.width > tall_frame.width,
+            "square cell between the two ({} > {} > {})",
+            wide_frame.width,
+            square_frame.width,
+            tall_frame.width
         );
     }
 
