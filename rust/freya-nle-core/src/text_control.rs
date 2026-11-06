@@ -12,6 +12,7 @@
 //! - `<sNN>`, `<s+NN>`, `<s-NN>`, `<s*1.5>`: absolute or relative font size,
 //!   with `<s>` restoring the object size;
 //! - `<gwNN>`: letter spacing, with `<gw>` restoring the object spacing;
+//! - `<ghNN>`: line spacing, with `<gh>` restoring the object's line spacing;
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -44,6 +45,8 @@ pub struct TextRun {
     pub bold: bool,
     pub italic: bool,
     pub strikethrough: bool,
+    /// Line spacing for the gap after this run's line, when `<gh...>` set one.
+    pub line_spacing: Option<f32>,
 }
 
 /// The values a run starts from when no directive has changed them.
@@ -57,6 +60,8 @@ pub struct TextBaseStyle {
     pub font_family: Option<String>,
     pub bold: bool,
     pub italic: bool,
+    /// Line spacing requested by `<gh...>`; `None` keeps the object's value.
+    pub line_spacing: Option<f32>,
 }
 
 /// The font half of a run: family and the three style switches.
@@ -82,6 +87,7 @@ impl FontStyle {
 const MIN_FONT_SIZE: f32 = 1.0;
 const MAX_FONT_SIZE: f32 = 4_096.0;
 const MAX_LETTER_SPACING: f32 = 1_000.0;
+const MAX_LINE_SPACING: f32 = 4_096.0;
 const MAX_SPEED: f32 = 1_000.0;
 const MAX_WAIT_SECONDS: f32 = 3_600.0;
 
@@ -339,8 +345,19 @@ impl Parser {
     }
 
     fn apply_spacing(&mut self, value: &str) -> bool {
+        if let Some(spacing) = value.strip_prefix('h') {
+            let spacing = spacing.trim();
+            self.style.line_spacing = if spacing.is_empty() {
+                self.base.line_spacing
+            } else {
+                match spacing.parse::<f32>() {
+                    Ok(value) if value.is_finite() => Some(value.clamp(0.0, MAX_LINE_SPACING)),
+                    _ => return false,
+                }
+            };
+            return true;
+        }
         let Some(spacing) = value.strip_prefix('w') else {
-            // `<gh>` has no per-run meaning yet.
             return false;
         };
         let spacing = spacing.trim();
@@ -483,6 +500,7 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             outline_color: run.style.outline_color,
             font_size: run.style.font_size,
             letter_spacing: run.style.letter_spacing,
+            line_spacing: run.style.line_spacing,
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -638,6 +656,7 @@ mod tests {
             },
             font_size: 48.0,
             letter_spacing: 0.0,
+            line_spacing: None,
             font_family: None,
             bold: false,
             italic: false,
@@ -843,6 +862,16 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn line_spacing_directives_change_the_gap_after_a_line() {
+        let runs = parse_text_runs("<gh72>a\nb<gh>c", base());
+        assert_eq!(text(&runs), "a\nbc");
+        assert_eq!(runs[0].line_spacing, Some(72.0));
+        // `<gh>` restores the object's spacing, which is "natural" here.
+        assert_eq!(runs[1].line_spacing, None);
+        assert_eq!(text(&parse_text_runs("<ghx>", base())), "<ghx>");
     }
 
     #[test]

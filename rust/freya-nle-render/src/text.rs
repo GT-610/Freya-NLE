@@ -504,6 +504,8 @@ struct RunSegment {
     outline_color: RgbaColor,
     font_size: f32,
     letter_spacing: f32,
+    /// Line spacing this run requests for the gap after its line.
+    line_spacing: Option<f32>,
     /// Index into the per-run faces passed to the layout.
     face_index: usize,
     strikethrough: bool,
@@ -527,6 +529,7 @@ struct ShapedSegment {
     face_index: usize,
     font_size: f32,
     strikethrough: bool,
+    line_spacing: Option<f32>,
 }
 
 struct ShapedRunLine {
@@ -573,6 +576,7 @@ fn rasterize_runs(
             outline_color: run.outline_color,
             font_size: run.font_size.max(1.0),
             letter_spacing: run.letter_spacing,
+            line_spacing: run.line_spacing,
             face_index: index,
             strikethrough: run.strikethrough,
         })
@@ -580,7 +584,6 @@ fn rasterize_runs(
     let mut ascent = 0.0_f32;
     let mut descent = 0.0_f32;
     let mut natural_advance = 0.0_f32;
-    let mut maximum_font_size = 0.0_f32;
     for segment in &segments {
         let face = &faces[segment.face_index];
         let units_per_em = face.units_per_em().max(1) as f32;
@@ -590,17 +593,9 @@ fn rasterize_runs(
         let line_height = (segment_ascent + segment_descent).max(segment.font_size);
         ascent = ascent.max(segment_ascent);
         descent = descent.max(segment_descent);
-        maximum_font_size = maximum_font_size.max(segment.font_size);
         natural_advance = natural_advance
             .max((line_height + f32::from(face.line_gap()) * scale).max(line_height));
     }
-    let glyph_line_height = (ascent + descent).max(maximum_font_size);
-    let line_advance = if plan.line_spacing > 0.0 {
-        plan.line_spacing
-    } else {
-        natural_advance
-    };
-
     // Split every run on newlines, appending to the current logical line so a
     // directive can straddle one without moving the text that follows it.
     let mut line_runs: Vec<Vec<(usize, String)>> = vec![Vec::new()];
@@ -644,6 +639,7 @@ fn rasterize_runs(
                 face_index: segment.face_index,
                 font_size: segment.font_size,
                 strikethrough: segment.strikethrough,
+                line_spacing: segment.line_spacing,
             });
         }
         lines.push(ShapedRunLine {
@@ -652,7 +648,27 @@ fn rasterize_runs(
         });
     }
     let logical_width = lines.iter().map(|line| line.width).fold(0.0_f32, f32::max);
-    let logical_height = glyph_line_height + line_advance * (lines.len().saturating_sub(1) as f32);
+    // Baselines accumulate, because `<gh...>` may change the advance from one
+    // line to the next; the value at the end of a line governs the gap after it.
+    let mut baselines = Vec::with_capacity(lines.len());
+    let mut baseline = ascent;
+    for line in &lines {
+        baselines.push(baseline);
+        let object_advance = if plan.line_spacing > 0.0 {
+            plan.line_spacing
+        } else {
+            natural_advance
+        };
+        let advance = line
+            .segments
+            .iter()
+            .rev()
+            .find_map(|segment| segment.line_spacing)
+            .filter(|spacing| *spacing > 0.0)
+            .unwrap_or(object_advance);
+        baseline += advance;
+    }
+    let logical_height = baselines.last().copied().unwrap_or(ascent) + descent;
     if !logical_width.is_finite() || !logical_height.is_finite() {
         return Err(TextRasterError::InvalidDimensions);
     }
@@ -662,7 +678,7 @@ fn rasterize_runs(
     let mut outlined_glyphs = 0_usize;
     for (line_index, line) in lines.iter().enumerate() {
         let line_x = alignment_offset(plan.alignment, logical_width, line.width);
-        let baseline = ascent + line_index as f32 * line_advance;
+        let baseline = baselines[line_index];
         let mut segment_x = line_x;
         for segment in &line.segments {
             let face = &faces[segment.face_index];
@@ -1137,6 +1153,7 @@ mod tests {
             },
             font_size,
             letter_spacing: 0.0,
+            line_spacing: None,
             font_family: None,
             bold: false,
             italic: false,
@@ -1166,6 +1183,21 @@ mod tests {
             .iter()
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn a_run_can_change_the_line_spacing_after_its_line() {
+        let rasterizer = test_rasterizer();
+        let mut compact = plain_plan(vec![run("\u{ea01}\n\u{ea02}", 48.0)]);
+        compact.line_spacing = 0.0;
+        let mut spaced = plain_plan(vec![run("\u{ea01}\n\u{ea02}", 48.0)]);
+        spaced.runs[0].line_spacing = Some(140.0);
+        let compact_frame = rasterizer.rasterize(&compact, 0.0).expect("compact frame");
+        let spaced_frame = rasterizer.rasterize(&spaced, 0.0).expect("spaced frame");
+        assert!(
+            spaced_frame.height > compact_frame.height,
+            "<gh> pushes the second line down, which grows the frame"
+        );
     }
 
     #[test]
@@ -1264,6 +1296,7 @@ mod tests {
                 outline_color: red,
                 font_size: 64.0,
                 letter_spacing: 0.0,
+                line_spacing: None,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1275,6 +1308,7 @@ mod tests {
                 outline_color: green,
                 font_size: 128.0,
                 letter_spacing: 0.0,
+                line_spacing: None,
                 font_family: None,
                 bold: false,
                 italic: false,

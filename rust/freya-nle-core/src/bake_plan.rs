@@ -1886,6 +1886,7 @@ fn text_render_plan(
                 outline_color,
                 font_size,
                 letter_spacing: 0.0,
+                line_spacing: None,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1932,6 +1933,7 @@ fn text_render_plan(
     let outline_color = value_as_color(value("outlineColor"), "#000000");
     let speed = value_as_f64(value("speed"), 0.0).clamp(0.0, 1_000.0) as f32;
     let time = relative_frame as f32 / fps.max(0.001) as f32;
+    let line_spacing = value_as_f64(value("lineSpacing"), 0.0).max(0.0) as f32;
     let bold = value_as_bool(value("fontBold"), false);
     let italic = value_as_bool(value("fontItalic"), false);
     let runs = crate::text_control::parse_text_runs_at(
@@ -1941,6 +1943,7 @@ fn text_render_plan(
             outline_color,
             font_size,
             letter_spacing,
+            line_spacing: (line_spacing > 0.0).then_some(line_spacing),
             font_family: None,
             bold,
             italic,
@@ -1957,7 +1960,7 @@ fn text_render_plan(
         bold,
         italic,
         letter_spacing,
-        line_spacing: value_as_f64(value("lineSpacing"), 0.0).max(0.0) as f32,
+        line_spacing,
         alignment,
         color,
         outline_enabled: value_as_bool(value("outlineEnabled"), false),
