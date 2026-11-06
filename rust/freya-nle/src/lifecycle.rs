@@ -352,6 +352,18 @@ impl LifecycleUi {
     /// The single-project view and the widened all-projects view share one
     /// model: every row knows which backup directory it belongs to, so opening
     /// and deleting work the same way in both modes.
+    /// Reports how many versions a clear removed.
+    pub(super) fn report_backup_cleared(&self, count: usize) {
+        let message = freya_nle_app::status_message!(
+            "Removed {count} saved version(s)",
+            "已删除 {count} 个已保存版本",
+            "保存済みバージョンを {count} 件削除しました"
+        );
+        if let Some(workspace) = self.model.borrow_mut().current_workspace_mut() {
+            workspace.report_status(message);
+        }
+    }
+
     pub(super) fn sync_backup_history(&self) {
         let Some(window) = self.backup_history.upgrade() else {
             return;

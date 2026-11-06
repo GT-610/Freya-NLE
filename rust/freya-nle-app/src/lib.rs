@@ -573,6 +573,12 @@ impl ApplicationModel {
         Ok(self.add_project_entry(project, name))
     }
 
+    /// Removes every saved version of one project, addressed by its directory
+    /// key, and returns how many versions that was.
+    pub fn clear_backup_history(&mut self, key: &str) -> Result<usize, String> {
+        self.backup_store.clear_key(key)
+    }
+
     /// Removes one saved version addressed by its backup directory key.
     pub fn remove_backup_entry(&mut self, key: &str, file_name: &str) -> Result<(), String> {
         self.backup_store.remove_key(key, file_name)

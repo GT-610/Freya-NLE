@@ -23,6 +23,10 @@ export component BackupHistoryWindow inherits Window {
     callback open-entry(string, string);
     callback delete-entry(string, string);
     callback toggle-all-projects(bool);
+    // Deletes every version of one project: the list can grow to hundreds of
+    // entries and deleting them one by one is not reasonable.
+    callback clear-project(string);
+    callback clear-all-projects();
     callback save-version();
     callback close-window();
 
@@ -127,6 +131,20 @@ export component BackupHistoryWindow inherits Window {
                                     }
                                 }
                             }
+                            // Only the widened view needs a per-project button:
+                            // the narrowed view's footer button clears the one
+                            // project it shows.
+                            if root.all-projects && project.entries.length > 0 : Rectangle {
+                                height: 30px;
+                                HorizontalLayout {
+                                    padding-right: 6px;
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Button {
+                                        text: @tr("Clear Project History");
+                                        clicked => { root.clear-project(project.key); }
+                                    }
+                                }
+                            }
                             if project.entries.length == 0 : Rectangle {
                                 height: 40px;
                                 Text {
@@ -158,6 +176,13 @@ export component BackupHistoryWindow inherits Window {
             HorizontalLayout {
                 alignment: end;
                 spacing: 8px;
+                Button {
+                    // The all-projects view clears every directory; the
+                    // single-project view only has one to clear.
+                    text: root.all-projects ? @tr("Clear All History") : @tr("Clear History");
+                    enabled: root.projects.length > 0;
+                    clicked => { root.clear-all-projects(); }
+                }
                 Button {
                     text: @tr("Save Version");
                     clicked => { root.save-version(); }

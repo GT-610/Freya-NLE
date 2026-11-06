@@ -289,6 +289,20 @@ impl BackupStore {
         projects
     }
 
+    /// Removes every version of one project and its directory.
+    pub(crate) fn clear_key(&self, key: &str) -> Result<usize, String> {
+        if !valid_project_key(key) {
+            return Err(format!("{key:?} is not a backup directory key"));
+        }
+        let directory = self.root.join(key);
+        let removed = list_entries(&directory).len();
+        match fs::remove_dir_all(&directory) {
+            Ok(()) => Ok(removed),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(format!("{}: {error}", directory.display())),
+        }
+    }
+
     /// The project name recorded for a directory, when it has a manifest.
     pub(crate) fn project_label(&self, key: &str) -> Option<String> {
         if !valid_project_key(key) {
@@ -562,6 +576,25 @@ mod tests {
         assert!(backup_root_from_setting("  /tmp/backups  ").is_some());
         assert!(backup_root_from_setting("relative/backups").is_none());
         assert!(backup_root_from_setting(" ").is_none());
+    }
+
+    #[test]
+    fn clearing_a_project_removes_its_directory_and_every_version() {
+        let root = test_root("clear");
+        let store = BackupStore::with_root(root.clone());
+        store
+            .record(&root.join("one.freya"), b"first", 5)
+            .expect("records");
+        store
+            .record(&root.join("two.freya"), b"second", 5)
+            .expect("records");
+        let key = store.key_for(&root.join("one.freya"));
+        assert_eq!(store.clear_key(&key).expect("clears"), 1);
+        // The directory is gone, so the project stops being listed.
+        assert_eq!(store.projects().len(), 1);
+        assert_eq!(store.clear_key(&key).expect("clearing again is a no-op"), 0);
+        assert!(store.clear_key("../escape").is_err());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

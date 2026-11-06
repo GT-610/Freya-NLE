@@ -547,6 +547,56 @@ pub(super) fn install_callbacks(
             Err(error) => show_error_dialog(&error),
         }
     });
+    let backup_clear_project_ui = lifecycle_ui.clone();
+    backup_history.on_clear_project(move |key| {
+        let cleared = backup_clear_project_ui
+            .model
+            .borrow_mut()
+            .clear_backup_history(key.as_str());
+        match cleared {
+            Ok(count) => backup_clear_project_ui.report_backup_cleared(count),
+            Err(error) => show_error_dialog(&error),
+        }
+        backup_clear_project_ui.sync_backup_history();
+    });
+    let backup_clear_all_ui = lifecycle_ui.clone();
+    backup_history.on_clear_all_projects(move || {
+        let all_projects = backup_clear_all_ui
+            .backup_history
+            .upgrade()
+            .is_some_and(|window| window.get_all_projects());
+        let keys = if all_projects {
+            backup_clear_all_ui
+                .model
+                .borrow()
+                .all_backup_projects()
+                .into_iter()
+                .map(|project| project.key)
+                .collect::<Vec<_>>()
+        } else {
+            // The narrowed view only ever shows the current project, so the
+            // same button must not reach the other directories.
+            backup_clear_all_ui
+                .model
+                .borrow()
+                .current_backup_project()
+                .map(|project| vec![project.key])
+                .unwrap_or_default()
+        };
+        let mut cleared = 0;
+        for key in keys {
+            match backup_clear_all_ui
+                .model
+                .borrow_mut()
+                .clear_backup_history(&key)
+            {
+                Ok(count) => cleared += count,
+                Err(error) => show_error_dialog(&error),
+            }
+        }
+        backup_clear_all_ui.report_backup_cleared(cleared);
+        backup_clear_all_ui.sync_backup_history();
+    });
     let backup_toggle_ui = lifecycle_ui.clone();
     backup_history.on_toggle_all_projects(move |all| {
         if let Some(window) = backup_toggle_ui.backup_history.upgrade() {

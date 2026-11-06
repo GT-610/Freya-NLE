@@ -1565,6 +1565,15 @@ msgstr "打开"
 msgid "No saved versions yet"
 msgstr "还没有已保存的版本"
 
+msgid "Clear Project History"
+msgstr "清除此工程的历史"
+
+msgid "Clear All History"
+msgstr "清除全部历史"
+
+msgid "Clear History"
+msgstr "清除历史"
+
 msgid "All projects"
 msgstr "所有项目"
 
