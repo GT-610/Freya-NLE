@@ -896,6 +896,34 @@ fn normalize_family(family: &str) -> Option<String> {
     Some(family.to_owned())
 }
 
+/// One user-defined colour a text may name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaletteColor {
+    pub name: String,
+    pub color: RgbaColor,
+}
+
+thread_local! {
+    /// Named colours from the user's palette. AviUtl2's 色設定 gives each
+    /// palette entry a preset name, and `<#name>` resolves through it.
+    static TEXT_PALETTE: std::cell::RefCell<Vec<PaletteColor>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Registers the palette `<#name>` resolves, in display order.
+pub fn set_text_palette(entries: Vec<PaletteColor>) {
+    TEXT_PALETTE.with(|slot| *slot.borrow_mut() = entries);
+}
+
+fn palette_color(name: &str) -> Option<RgbaColor> {
+    TEXT_PALETTE.with(|slot| {
+        slot.borrow()
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(name))
+            .map(|entry| entry.color)
+    })
+}
+
 /// Parses `3BI`-style decoration specs into the three style switches.
 ///
 /// The leading digit is AviUtl's shadow/outline decoration (0 = standard,
@@ -995,6 +1023,11 @@ fn resolve_size(value: &str, current: f32) -> Option<f32> {
 
 fn parse_color(value: &str) -> Option<RgbaColor> {
     let value = value.trim();
+    // The user's palette wins over the built-in names: a project that defines
+    // its own "red" means that red.
+    if let Some(color) = palette_color(value) {
+        return Some(color);
+    }
     if let Some([alpha, red, green, blue]) = named_color(value) {
         return Some(RgbaColor {
             red,
@@ -1019,9 +1052,9 @@ fn parse_color(value: &str) -> Option<RgbaColor> {
 
 /// A fixed handful of common colour names.
 ///
-/// AviUtl's named colours are user presets, which this build has no palette for
-/// yet; these are the everyday names, and an unknown name keeps the directive
-/// as literal text instead of guessing a colour.
+/// The user's palette (see `set_text_palette`) is consulted first; these are the
+/// everyday fallbacks, and an unknown name keeps the directive as literal text
+/// instead of guessing a colour.
 fn named_color(value: &str) -> Option<[u8; 4]> {
     let [red, green, blue, alpha] = match value.to_ascii_lowercase().as_str() {
         "white" => [0xff, 0xff, 0xff, 0xff],
@@ -1322,6 +1355,34 @@ mod tests {
         assert!(!runs[1].italic);
         assert_eq!(runs[1].letter_spacing, 0.0);
         set_text_presets(Vec::new());
+    }
+
+    #[test]
+    fn the_palette_names_resolve_before_the_builtin_colours() {
+        set_text_palette(vec![PaletteColor {
+            name: "accent".to_owned(),
+            color: RgbaColor {
+                red: 0x11,
+                green: 0x22,
+                blue: 0x33,
+                alpha: 0xff,
+            },
+        }]);
+        let runs = parse_text_runs("a<#accent>b", base());
+        let run = runs.last().expect("coloured run");
+        assert_eq!(run.text, "b");
+        assert_eq!(
+            (run.color.red, run.color.green, run.color.blue),
+            (0x11, 0x22, 0x33)
+        );
+        // Matching ignores case, like the built-in names.
+        let runs = parse_text_runs("<#ACCENT>x", base());
+        assert_eq!(runs[0].color.red, 0x11);
+        // A name that was removed keeps the directive literal again.
+        set_text_palette(Vec::new());
+        let runs = parse_text_runs("a<#accent>b", base());
+        let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+        assert_eq!(text, "a<#accent>b");
     }
 
     #[test]

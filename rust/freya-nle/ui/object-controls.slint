@@ -325,6 +325,8 @@ export component EffectSidebarEntry inherits Rectangle {
     // own effect, which is what AviUtl2 saves as a media object's 初期値.
     callback save-object-default(int);
     callback clear-object-default(int);
+    // Opens the palette that `<#name>` resolves.
+    callback open-palette();
     in-out property <[string]> preset-names;
     private property <bool> drag-active: false;
     private property <bool> drag-threshold-crossed: false;
@@ -424,6 +426,11 @@ export component EffectSidebarEntry inherits Rectangle {
                 title: @tr("Clear Object Default");
                 enabled: root.effects-mode;
                 activated => { root.clear-object-default(root.effect.index); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: @tr("Colour Palette...");
+                activated => { root.open-palette(); }
             }
         }
         HorizontalLayout {

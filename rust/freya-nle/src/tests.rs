@@ -1428,6 +1428,91 @@ fn text_presets_round_trip_and_feed_the_parser() {
 }
 
 #[test]
+fn palette_colours_round_trip_and_reach_the_parser() {
+    use freya_nle_app::settings::SettingsStore;
+
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-palette-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let (mut store, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    crate::settings::save_palette_color(&mut store, "accent", "#112233").expect("saves");
+    assert_eq!(
+        crate::settings::text_palette(&store),
+        vec![crate::settings::PaletteEntry {
+            name: "accent".to_owned(),
+            color: "#112233".to_owned(),
+        }]
+    );
+    // Names that could never be addressed, and colours that are not #rrggbb,
+    // are refused rather than stored.
+    assert!(crate::settings::save_palette_color(&mut store, "a>b", "#112233").is_err());
+    assert!(crate::settings::save_palette_color(&mut store, "a,b", "#112233").is_err());
+    assert!(crate::settings::save_palette_color(&mut store, "accent", "#11223").is_err());
+    assert!(crate::settings::save_palette_color(&mut store, "accent", "11223g").is_err());
+    // The hash is optional and the stored form always has it: the dialog shows
+    // the "#" beside the field instead of asking the user to type it.
+    crate::settings::save_palette_color(&mut store, "plain", "AABBCC").expect("normalizes");
+    assert_eq!(
+        crate::settings::text_palette(&store)
+            .into_iter()
+            .find(|entry| entry.name == "plain")
+            .expect("the entry is stored")
+            .color,
+        "#aabbcc"
+    );
+
+    crate::settings::sync_text_palette(&store);
+    let runs = freya_nle_core::api::parse_text_runs_at(
+        "<#accent>x",
+        freya_nle_core::api::TextBaseStyle {
+            color: freya_nle_core::api::RgbaColor {
+                red: 0xff,
+                green: 0xff,
+                blue: 0xff,
+                alpha: 0xff,
+            },
+            outline_color: freya_nle_core::api::RgbaColor {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 0xff,
+            },
+            font_size: 48.0,
+            letter_spacing: 0.0,
+            font_family: None,
+            outline_width: None,
+            bold: false,
+            italic: false,
+            line_spacing: None,
+            anchor: freya_nle_core::api::TextAnchor::Flow,
+            x_scale: 1.0,
+            y_scale: 1.0,
+            rotation: 0.0,
+            ruby: None,
+            emoji: None,
+        },
+        0.0,
+        0.0,
+    );
+    assert_eq!(
+        (runs[0].color.red, runs[0].color.green, runs[0].color.blue),
+        (0x11, 0x22, 0x33)
+    );
+
+    crate::settings::delete_palette_color(&mut store, "accent").expect("deletes");
+    crate::settings::delete_palette_color(&mut store, "plain").expect("deletes");
+    assert!(crate::settings::text_palette(&store).is_empty());
+    assert!(store.value("textPalette").is_none());
+    freya_nle_core::api::set_text_palette(Vec::new());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn object_defaults_round_trip_and_are_scoped_by_object_type() {
     use freya_nle_app::settings::SettingsStore;
     use serde_json::json;

@@ -39,6 +39,12 @@ export struct BackupEntryData {
     size-text: string,
 }
 
+// One named colour of the user's palette; `<#name>` resolves it.
+export struct PaletteEntryData {
+    name: string,
+    color: color,
+}
+
 // One backup directory in the history window. The single-project view still
 // uses this shape, so opening and deleting always have a directory key.
 export struct BackupProjectData {

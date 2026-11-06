@@ -1,4 +1,4 @@
-import { ObjectEffectData, EffectCatalogItemData, ObjectSettingRowData, PresetScopeItemData } from "models.slint";
+import { ObjectEffectData, EffectCatalogItemData, ObjectSettingRowData, PaletteEntryData, PresetScopeItemData } from "models.slint";
 import { EffectSidebarEntry, ObjectSettingRow } from "object-controls.slint";
 import { Button, CheckBox, ComboBox, GroupBox, LineEdit, ScrollView, Slider, SpinBox, StandardListView } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
@@ -46,6 +46,7 @@ export component ObjectSettingsWindow inherits Window {
     changed color-picker-visible => { if !root.color-picker-visible { restore-shortcuts.start(); } }
     changed font-picker-visible => { if !root.font-picker-visible { restore-shortcuts.start(); } }
     changed text-preset-visible => { if !root.text-preset-visible { restore-shortcuts.start(); } }
+    changed palette-visible => { if !root.palette-visible { restore-shortcuts.start(); } }
     restore-shortcuts := Timer {
         interval: 1ms;
         running: false;
@@ -73,6 +74,10 @@ export component ObjectSettingsWindow inherits Window {
     in-out property <string> text-preset-name: "";
     in-out property <int> text-preset-effect-index: -1;
     in property <[string]> text-preset-names;
+    in-out property <bool> palette-visible: false;
+    in-out property <string> palette-name: "";
+    in-out property <string> palette-color: "#ffffff";
+    in property <[PaletteEntryData]> palette-entries;
     in-out property <int> preset-effect-index: -1;
     in-out property <string> preset-effect-name: "";
     in-out property <string> preset-name: "";
@@ -116,6 +121,9 @@ export component ObjectSettingsWindow inherits Window {
     callback add-effect(string);
     callback save-effect-preset(int, string, [PresetScopeItemData]);
     callback open-text-presets(int);
+    callback open-palette();
+    callback save-palette-color(string, string);
+    callback delete-palette-color(string);
     callback save-text-preset(int, string);
     callback delete-text-preset(string);
     callback preset-scope(int) -> [PresetScopeItemData];
@@ -154,7 +162,7 @@ export component ObjectSettingsWindow inherits Window {
 
     object-settings-shortcuts := FocusScope {
         enabled: !root.effect-picker-visible && !root.preset-save-visible && !root.text-preset-visible
-            && !root.color-picker-visible && !root.font-picker-visible;
+            && !root.palette-visible && !root.color-picker-visible && !root.font-picker-visible;
         width: 100%;
         height: 100%;
         key-pressed(event) => {
@@ -165,6 +173,7 @@ export component ObjectSettingsWindow inherits Window {
                 && !root.effect-picker-visible
                 && !root.preset-save-visible
                 && !root.text-preset-visible
+                && !root.palette-visible
                 && !root.color-picker-visible
                 && !root.font-picker-visible
                 && event.text == Key.Delete
@@ -317,6 +326,7 @@ export component ObjectSettingsWindow inherits Window {
                             clear-default(index) => { root.clear-effect-default(index); }
                             save-object-default(index) => { root.save-object-default(index); }
                             clear-object-default(index) => { root.clear-object-default(index); }
+                            open-palette => { root.open-palette(); }
                             remove-selection(index) => { root.remove-effect-selection(index); }
                             reorder(index, delta-y) => { root.reorder-effect(index, delta-y); }
                             edit-expression(index) => { root.open-expression(index); }
@@ -763,6 +773,140 @@ export component ObjectSettingsWindow inherits Window {
                         Button {
                             text: @tr("Close");
                             clicked => { root.text-preset-visible = false; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if root.palette-visible : palette-focus := FocusScope {
+        z: 116;
+        width: 100%;
+        height: 100%;
+        init => { palette-focus-timer.start(); }
+        palette-focus-timer := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => { self.stop(); palette-name-field.focus(); }
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.palette-visible = false;
+                accept
+            } else {
+                reject
+            }
+        }
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: AppTheme.scrim;
+            TouchArea { clicked => { root.palette-visible = false; } }
+            Rectangle {
+                width: min(parent.width - 48px, 460px);
+                height: 440px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: AppTheme.dialog-background;
+                border-width: 1px;
+                border-color: AppTheme.border;
+                border-radius: 4px;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    Text { text: @tr("Colour Palette"); font-size: 1.15rem; font-weight: 700; }
+                    Text {
+                        text: @tr("A named colour can be used in text as <#name>.");
+                        color: AppTheme.muted-foreground;
+                        font-size: 0.75rem;
+                        wrap: word-wrap;
+                    }
+                    palette-name-field := LineEdit {
+                        text <=> root.palette-name;
+                        placeholder-text: @tr("Colour name, e.g. accent");
+                        accessible-label: @tr("Colour name");
+                        accepted(value) => {
+                            if value != "" {
+                                root.save-palette-color(value, root.palette-color);
+                                root.palette-name = "";
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "#"; vertical-alignment: center; color: AppTheme.muted-foreground; }
+                        LineEdit {
+                            text <=> root.palette-color;
+                            placeholder-text: "rrggbb";
+                            accessible-label: @tr("Colour value");
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 90px;
+                        background: AppTheme.panel-background;
+                        border-width: 1px;
+                        border-color: AppTheme.subtle-border;
+                        border-radius: 4px;
+                        ScrollView {
+                            viewport-width: self.visible-width;
+                            viewport-height: palette-list.preferred-height;
+                            palette-list := VerticalLayout {
+                                width: parent.width;
+                                spacing: 1px;
+                                for entry in root.palette-entries : Rectangle {
+                                    height: 32px;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 6px;
+                                        spacing: 8px;
+                                        Rectangle {
+                                            width: 18px;
+                                            height: 18px;
+                                            border-radius: 3px;
+                                            border-width: 1px;
+                                            border-color: AppTheme.subtle-border;
+                                            background: entry.color;
+                                        }
+                                        Text {
+                                            text: entry.name;
+                                            color: AppTheme.dialog-foreground;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Button {
+                                            text: @tr("Delete");
+                                            clicked => { root.delete-palette-color(entry.name); }
+                                        }
+                                    }
+                                }
+                                if root.palette-entries.length == 0 : Text {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    text: @tr("No palette colours yet");
+                                    color: AppTheme.dialog-muted;
+                                    font-size: 0.8rem;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        Button {
+                            text: @tr("Save");
+                            enabled: root.palette-name != "" && root.palette-color != "";
+                            clicked => {
+                                root.save-palette-color(root.palette-name, root.palette-color);
+                                root.palette-name = "";
+                            }
+                        }
+                        Button {
+                            text: @tr("Close");
+                            clicked => { root.palette-visible = false; }
                         }
                     }
                 }

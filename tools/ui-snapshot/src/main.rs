@@ -245,6 +245,22 @@ fn main() {
             }
             // `UI_SNAPSHOT_TEXT_PRESET=1` opens the text preset manager: it
             // lists shared presets instead of one effect's parameters.
+            // `UI_SNAPSHOT_PALETTE=1` opens the named-colour palette.
+            if std::env::var("UI_SNAPSHOT_PALETTE").is_ok() {
+                ui.set_palette_entries(ModelRc::new(VecModel::from(vec![
+                    PaletteEntryData {
+                        name: "accent".into(),
+                        color: Color::from_rgb_u8(0x11, 0x22, 0x33),
+                    },
+                    PaletteEntryData {
+                        name: "harbor".into(),
+                        color: Color::from_rgb_u8(0x2a, 0x6f, 0x9a),
+                    },
+                ])));
+                ui.set_palette_name("subtitle".into());
+                ui.set_palette_color("#dddddd".into());
+                ui.set_palette_visible(true);
+            }
             if std::env::var("UI_SNAPSHOT_TEXT_PRESET").is_ok() {
                 ui.set_text_preset_effect_index(0);
                 ui.set_text_preset_names(ModelRc::new(VecModel::from(vec![

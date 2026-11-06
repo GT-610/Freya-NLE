@@ -1259,6 +1259,18 @@ pub(super) fn install_callbacks(
     object_settings.on_delete_effect_preset(move |index, name| {
         preset_delete_ui.delete_preset(index.max(0) as usize, name.as_str());
     });
+    let palette_open_ui = object_settings_ui.clone();
+    object_settings.on_open_palette(move || {
+        palette_open_ui.open_palette();
+    });
+    let palette_save_ui = object_settings_ui.clone();
+    object_settings.on_save_palette_color(move |name, color| {
+        palette_save_ui.save_palette_color(name.as_str(), color.as_str());
+    });
+    let palette_delete_ui = object_settings_ui.clone();
+    object_settings.on_delete_palette_color(move |name| {
+        palette_delete_ui.delete_palette_color(name.as_str());
+    });
     let text_preset_open_ui = object_settings_ui.clone();
     object_settings.on_open_text_presets(move |index| {
         text_preset_open_ui.open_text_presets(index.max(0) as usize);

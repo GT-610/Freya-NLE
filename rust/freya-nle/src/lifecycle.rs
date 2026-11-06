@@ -15,7 +15,8 @@ use crate::packages::sync_plugin_permissions;
 use crate::playback::PreviewRuntime;
 use crate::projection::{sync_windows, update_vec_model};
 use crate::settings::{
-    project_defaults, sync_text_presets, sync_timeline_runtime_settings, system_theme_index,
+    project_defaults, sync_text_palette, sync_text_presets, sync_timeline_runtime_settings,
+    system_theme_index,
 };
 use crate::{
     AboutWindow, AppTheme, BackupEntryData, BackupHistoryWindow, BackupProjectData,
@@ -912,9 +913,11 @@ impl LifecycleUi {
                 .clamp(0.25, 1.0) as f32,
             settings.i32_value("previewMsaaSamples", 0).max(0) as u32,
         );
-        // The text parser resolves `<$name>` from this registration, and every
-        // preview and export plan is built on this thread.
+        // The text parser resolves `<$name>` and `<#name>` from these
+        // registrations, and every preview and export plan is built on this
+        // thread.
         sync_text_presets(&settings);
+        sync_text_palette(&settings);
         if let (Some(main), Some(timeline), Some(object_settings)) = (
             self.main.upgrade(),
             self.timeline.upgrade(),

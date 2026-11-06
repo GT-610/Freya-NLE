@@ -320,6 +320,121 @@ pub(super) fn clear_effect_default(
     settings.apply(root)
 }
 
+/// The user's named colours: `{name: "#rrggbb"}`.
+///
+/// AviUtl2's 色設定 gives each palette entry a preset name, and `<#name>` in a
+/// text resolves through it. The palette is application-wide like the text
+/// presets, so a project written on one machine keeps its colour names.
+const TEXT_PALETTE_KEY: &str = "textPalette";
+
+/// One palette entry as the interface sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PaletteEntry {
+    pub name: String,
+    /// `#rrggbb`, always six digits with no alpha.
+    pub color: String,
+}
+
+pub(super) fn text_palette(settings: &SettingsStore) -> Vec<PaletteEntry> {
+    let mut entries = settings
+        .value(TEXT_PALETTE_KEY)
+        .and_then(Value::as_object)
+        .map(|palette| {
+            palette
+                .iter()
+                .filter_map(|(name, color)| {
+                    let color = valid_palette_color(color.as_str()?)?;
+                    Some(PaletteEntry {
+                        name: name.clone(),
+                        color,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    entries
+}
+
+/// `rrggbb` or `#rrggbb`, normalized to the latter.
+///
+/// An entry with alpha would make `<#name>` mean something the text colour
+/// already carries separately, so only six digits are accepted.
+fn valid_palette_color(color: &str) -> Option<String> {
+    let hex = color.trim().trim_start_matches('#');
+    (hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| format!("#{}", hex.to_ascii_lowercase()))
+}
+
+pub(super) fn valid_palette_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    // `>` ends a directive and `<` starts one, so either would make the name
+    // unreachable from `<#name>`.
+    let valid = !name.is_empty()
+        && name.chars().count() <= 64
+        && !name
+            .chars()
+            .any(|character| matches!(character, '<' | '>' | ',' | '#') || character.is_control());
+    valid.then_some(name)
+}
+
+pub(super) fn save_palette_color(
+    settings: &mut SettingsStore,
+    name: &str,
+    color: &str,
+) -> Result<(), String> {
+    let name = valid_palette_name(name)
+        .ok_or_else(|| "A colour name cannot be empty or contain <, >, , or #".to_owned())?;
+    let color = valid_palette_color(color)
+        .ok_or_else(|| "A palette colour must be written as #rrggbb".to_owned())?;
+    let mut root = settings.snapshot();
+    let mut palette = root
+        .get(TEXT_PALETTE_KEY)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    palette.insert(name.to_owned(), Value::String(color));
+    root.insert(TEXT_PALETTE_KEY.to_owned(), Value::Object(palette));
+    settings.apply(root)?;
+    sync_text_palette(settings);
+    Ok(())
+}
+
+pub(super) fn delete_palette_color(settings: &mut SettingsStore, name: &str) -> Result<(), String> {
+    let mut root = settings.snapshot();
+    let empty = {
+        let Some(palette) = root
+            .get_mut(TEXT_PALETTE_KEY)
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        palette.remove(name);
+        palette.is_empty()
+    };
+    if empty {
+        root.remove(TEXT_PALETTE_KEY);
+    }
+    settings.apply(root)?;
+    sync_text_palette(settings);
+    Ok(())
+}
+
+/// Hands the stored palette to the text parser.
+pub(super) fn sync_text_palette(settings: &SettingsStore) {
+    let entries = text_palette(settings)
+        .into_iter()
+        .filter_map(|entry| {
+            let color = freya_nle_core::api::parse_text_color(&entry.color)?;
+            Some(freya_nle_core::api::PaletteColor {
+                name: entry.name,
+                color,
+            })
+        })
+        .collect::<Vec<_>>();
+    freya_nle_core::api::set_text_palette(entries);
+}
+
 /// Parameter names a text preset can carry: the text effect keys the text
 /// control characters are able to change, so a preset and `<$name>` agree.
 pub(super) const TEXT_PRESET_PARAMETERS: [&str; 8] = [

@@ -467,6 +467,27 @@ msgstr "每行输入一个路径"
 msgid "Enter preset name..."
 msgstr "请输入预设名称…"
 
+msgid "Colour Palette"
+msgstr "颜色调色板"
+
+msgid "Colour Palette..."
+msgstr "颜色调色板..."
+
+msgid "A named colour can be used in text as <#name>."
+msgstr "带有名字的颜色可以在文本中用 <#name> 引用。"
+
+msgid "Colour name, e.g. accent"
+msgstr "颜色名，例如 accent"
+
+msgid "Colour name"
+msgstr "颜色名"
+
+msgid "Colour value"
+msgstr "颜色值"
+
+msgid "No palette colours yet"
+msgstr "还没有调色板颜色"
+
 msgid "Text Presets"
 msgstr "文本预设"
 

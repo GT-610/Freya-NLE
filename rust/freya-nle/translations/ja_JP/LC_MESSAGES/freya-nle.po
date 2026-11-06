@@ -467,6 +467,27 @@ msgstr "1行に1パスを入力します"
 msgid "Enter preset name..."
 msgstr "プリセット名を入力..."
 
+msgid "Colour Palette"
+msgstr "色パレット"
+
+msgid "Colour Palette..."
+msgstr "色パレット..."
+
+msgid "A named colour can be used in text as <#name>."
+msgstr "名前付きの色はテキスト内で <#name> として使えます。"
+
+msgid "Colour name, e.g. accent"
+msgstr "色の名前（例: accent）"
+
+msgid "Colour name"
+msgstr "色の名前"
+
+msgid "Colour value"
+msgstr "色の値"
+
+msgid "No palette colours yet"
+msgstr "パレットの色はまだありません"
+
 msgid "Text Presets"
 msgstr "テキストプリセット"
 

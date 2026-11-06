@@ -11,7 +11,7 @@ use crate::projection::{sync_project_tabs, sync_transport, sync_weak_windows, up
 use crate::{
     EasingConfigWindow, EffectCatalogItemData, KeyframeMarkerData, MainWindow,
     ObjectCatalogMenuCategoryData, ObjectEffectData, ObjectSettingRowData, ObjectSettingsWindow,
-    PresetScopeItemData, TimelineWindow,
+    PaletteEntryData, PresetScopeItemData, TimelineWindow,
 };
 use freya_nle_app::audio_plugin::AudioPluginCatalog;
 use freya_nle_app::easing::BezierCurve;
@@ -729,6 +729,48 @@ impl ObjectSettingsUi {
             Ok(()) => {
                 if let Some(window) = self.window.upgrade() {
                     self.sync_text_preset_names(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    /// Opens the named-colour palette and fills its rows.
+    pub(super) fn open_palette(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        self.sync_palette(&window);
+        window.set_palette_visible(true);
+    }
+
+    fn sync_palette(&self, window: &ObjectSettingsWindow) {
+        let entries = crate::settings::text_palette(&self.settings.borrow())
+            .into_iter()
+            .map(|entry| PaletteEntryData {
+                name: SharedString::from(entry.name),
+                color: crate::dialogs::slint_color(&entry.color),
+            })
+            .collect::<Vec<_>>();
+        window.set_palette_entries(ModelRc::new(VecModel::from(entries)));
+    }
+
+    pub(super) fn save_palette_color(&self, name: &str, color: &str) {
+        match crate::settings::save_palette_color(&mut self.settings.borrow_mut(), name, color) {
+            Ok(()) => {
+                if let Some(window) = self.window.upgrade() {
+                    self.sync_palette(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn delete_palette_color(&self, name: &str) {
+        match crate::settings::delete_palette_color(&mut self.settings.borrow_mut(), name) {
+            Ok(()) => {
+                if let Some(window) = self.window.upgrade() {
+                    self.sync_palette(&window);
                 }
             }
             Err(error) => show_error_dialog(&error),

@@ -62,8 +62,8 @@ pub use crate::script_runtime::{
 };
 pub use crate::settings::{SettingsError, SettingsMutation, SettingsState};
 pub use crate::text_control::{
-    RubyRun, TextAnchor, TextBaseStyle, TextPreset, TextRun, parse_text_color, parse_text_runs_at,
-    set_text_presets,
+    PaletteColor, RubyRun, TextAnchor, TextBaseStyle, TextPreset, TextRun, parse_text_color,
+    parse_text_runs_at, set_text_palette, set_text_presets,
 };
 pub use crate::timeline_edit::TrimEdge;
 pub use crate::timeline_state::MidpointOperation;
