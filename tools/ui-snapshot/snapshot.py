@@ -28,6 +28,50 @@ def output_dir() -> Path:
     return OUTPUT_DIR
 
 
+def check_top(
+    base_name: str, tall_name: str, footer: int = 64, tolerance: float = 0.005
+) -> int:
+    """Compares the shared top region of two renders of one window.
+
+    Growing a dialog must add space at the bottom, so the top of the taller
+    render has to look exactly like the shorter one. A window that instead
+    redistributes the extra height into its rows (the stretched combo box this
+    check was written for) shows up as differing pixels here.
+    """
+    directory = output_dir()
+    base_path = directory / f"{base_name}.png"
+    tall_path = directory / f"{tall_name}.png"
+    for path in (base_path, tall_path):
+        if not path.exists():
+            raise SystemExit(f"missing {path}; render both sizes first")
+    base = Image.open(base_path).convert("RGBA")
+    tall = Image.open(tall_path).convert("RGBA")
+    if tall.width != base.width or tall.height < base.height:
+        raise SystemExit(
+            f"{tall_name} is {tall.width}x{tall.height}, "
+            f"expected the same width and at least {base.height} rows"
+        )
+    # A footer strip is ignored: a button pinned to the bottom of the shorter
+    # window legitimately moves down when the window grows.
+    compared_height = max(base.height - footer, 1)
+    shared = tall.crop((0, 0, base.width, compared_height))
+    base = base.crop((0, 0, base.width, compared_height))
+    base_pixels = base.tobytes()
+    shared_pixels = shared.tobytes()
+    differing = sum(
+        1
+        for index in range(0, len(base_pixels), 4)
+        if base_pixels[index : index + 4] != shared_pixels[index : index + 4]
+    )
+    total = base.width * compared_height
+    ratio = differing / total
+    print(
+        f"{base_name} vs {tall_name}: {differing}/{total} pixels differ "
+        f"({ratio:.2%})"
+    )
+    return 0 if ratio <= tolerance else 1
+
+
 def convert(name: str) -> Path:
     directory = output_dir()
     raw = directory / f"{name}.rgba"
@@ -46,6 +90,8 @@ def convert(name: str) -> Path:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--check-top":
+        raise SystemExit(check_top(sys.argv[2], sys.argv[3]))
     if len(sys.argv) > 1:
         names = sys.argv[1:]
     elif os.environ.get("UI_SNAPSHOT_THEME") == "light":

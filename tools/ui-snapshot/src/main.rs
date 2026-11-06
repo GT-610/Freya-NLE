@@ -49,7 +49,7 @@ fn main() {
         "mark" => (440u32, 190u32),
         "layer" => (460u32, 430u32),
         "backup" => (520u32, 420u32),
-        "export" => (700u32, 700u32),
+        "export" => (620u32, 760u32),
         "packages" => (760u32, 520u32),
         other => {
             eprintln!(
@@ -340,10 +340,13 @@ fn main() {
 }
 
 fn output_name(window: &str, preference: i32) -> String {
+    // `UI_SNAPSHOT_SUFFIX` keeps a second render of the same window (another
+    // size, another dialog) from overwriting the first one.
+    let suffix = std::env::var("UI_SNAPSHOT_SUFFIX").unwrap_or_default();
     if preference == 1 {
-        format!("{window}-light")
+        format!("{window}-light{suffix}")
     } else {
-        window.to_owned()
+        format!("{window}{suffix}")
     }
 }
 

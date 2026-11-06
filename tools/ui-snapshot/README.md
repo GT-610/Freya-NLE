@@ -29,6 +29,15 @@ preview frame, `UI_SNAPSHOT_OBJECTS=1` opens the object list dock, and
 (written as `backup-all`), and `UI_SNAPSHOT_TEXT_PRESET=1` opens the text preset
 manager on the `settings` render.
 
+`UI_SNAPSHOT_SUFFIX=-tall` writes `<name>-tall` instead of overwriting the default
+render, so one window can be captured at two sizes. `python3 snapshot.py
+--check-top export export-tall` then compares the shared top region of the two
+renders (ignoring a 64px footer strip): growing a dialog has to add space at the
+bottom, so pixels that change in the shared part mean the layout redistributed
+the extra height into its rows. The export dialog's stretched combo boxes were
+found exactly this way, and the check reports 15% on that defect against 0.3%
+when it is fixed.
+
 The build script compiles the shipping UI from
 `rust/freya-nle/ui/app.slint`, so the render always matches the code. The sample
 scenes, clips, and media rows live in `src/main.rs`; extend them when a new
