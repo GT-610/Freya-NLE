@@ -735,6 +735,64 @@ impl ObjectSettingsUi {
         }
     }
 
+    /// Saves the selected object's standard drawing and own effect as the
+    /// creation defaults for its type.
+    pub(super) fn save_object_default(&self, _effect_index: usize) {
+        let Some((object_id, effects)) = self
+            .model
+            .borrow()
+            .current_workspace()
+            .and_then(|workspace| workspace.object_default_parameters())
+        else {
+            return;
+        };
+        match crate::settings::save_object_default(
+            &mut self.settings.borrow_mut(),
+            &object_id,
+            &effects,
+        ) {
+            Ok(()) => {
+                if let Some(workspace) = self.model.borrow_mut().current_workspace_mut() {
+                    workspace.report_status(freya_nle_app::status_message!(
+                        "Saved the current object settings as the default for {object_id}",
+                        "已将 {object_id} 的当前设置保存为该类型的默认值",
+                        "{object_id} の現在の設定を既定値として保存しました"
+                    ));
+                }
+                self.sync();
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn clear_object_default(&self, _effect_index: usize) {
+        let Some(object_id) = self
+            .model
+            .borrow()
+            .current_workspace()
+            .and_then(|workspace| {
+                workspace
+                    .selected_clip_document()
+                    .map(|clip| clip.clip_type.clone())
+            })
+        else {
+            return;
+        };
+        match crate::settings::clear_object_default(&mut self.settings.borrow_mut(), &object_id) {
+            Ok(()) => {
+                if let Some(workspace) = self.model.borrow_mut().current_workspace_mut() {
+                    workspace.report_status(freya_nle_app::status_message!(
+                        "Cleared the default for {object_id}",
+                        "已清除 {object_id} 的默认值",
+                        "{object_id} の既定値を削除しました"
+                    ));
+                }
+                self.sync();
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
     pub(super) fn save_effect_default(&self, effect_index: usize) {
         let Some((id, params)) = self
             .model

@@ -321,6 +321,10 @@ export component EffectSidebarEntry inherits Rectangle {
     // Text presets are shared by every text object, unlike the per-effect
     // presets above, so they get their own manager.
     callback open-text-presets(int);
+    // Object-wide creation defaults: the standard drawing plus this object's
+    // own effect, which is what AviUtl2 saves as a media object's 初期値.
+    callback save-object-default(int);
+    callback clear-object-default(int);
     in-out property <[string]> preset-names;
     private property <bool> drag-active: false;
     private property <bool> drag-threshold-crossed: false;
@@ -409,6 +413,17 @@ export component EffectSidebarEntry inherits Rectangle {
                 title: @tr("Clear Default");
                 enabled: root.effects-mode;
                 activated => { root.clear-default(root.effect.index); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: @tr("Save Object Default");
+                enabled: root.effects-mode;
+                activated => { root.save-object-default(root.effect.index); }
+            }
+            MenuItem {
+                title: @tr("Clear Object Default");
+                enabled: root.effects-mode;
+                activated => { root.clear-object-default(root.effect.index); }
             }
         }
         HorizontalLayout {

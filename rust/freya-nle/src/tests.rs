@@ -1428,6 +1428,52 @@ fn text_presets_round_trip_and_feed_the_parser() {
 }
 
 #[test]
+fn object_defaults_round_trip_and_are_scoped_by_object_type() {
+    use freya_nle_app::settings::SettingsStore;
+    use serde_json::json;
+
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-object-defaults-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let (mut store, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    let mut effects = serde_json::Map::new();
+    let mut transform = serde_json::Map::new();
+    transform.insert("x".to_owned(), json!(320));
+    transform.insert("zoom".to_owned(), json!(150));
+    effects.insert("transform".to_owned(), json!(transform));
+    let mut text = serde_json::Map::new();
+    text.insert("fontSize".to_owned(), json!(96));
+    effects.insert("text".to_owned(), json!(text));
+
+    crate::settings::save_object_default(&mut store, "text", &effects).expect("object default");
+    // A later save replaces one effect's parameters and keeps the others.
+    let mut later = serde_json::Map::new();
+    later.insert("text".to_owned(), json!({"color": "#123456"}));
+    crate::settings::save_object_default(&mut store, "text", &later).expect("merged");
+
+    let saved = crate::settings::object_defaults_for(&store, "text");
+    assert_eq!(saved["transform"]["zoom"], json!(150));
+    assert_eq!(saved["text"]["color"], json!("#123456"));
+    assert!(
+        saved["text"].get("fontSize").is_none(),
+        "an effect's parameters are replaced as a set"
+    );
+    // Another object type is unaffected.
+    assert!(crate::settings::object_defaults_for(&store, "image").is_empty());
+    assert!(crate::settings::save_object_default(&mut store, "", &effects).is_err());
+
+    crate::settings::clear_object_default(&mut store, "text").expect("cleared");
+    assert!(crate::settings::object_defaults(&store).is_empty());
+    assert!(store.value("objectDefaults").is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn mark_timecodes_and_labels_follow_the_ruler_reading() {
     assert_eq!(mark_timecode(0, 60), "00:00:00.00");
     assert_eq!(mark_timecode(72, 60), "00:00:01.12");

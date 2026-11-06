@@ -210,6 +210,79 @@ pub(super) fn effect_defaults(settings: &SettingsStore) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+/// Per-object-type creation defaults: `{objectId: {effectId: params}}`.
+///
+/// AviUtl2 saves a media object's defaults as its input settings combined with
+/// the output (standard drawing), so a new object of that type starts at the
+/// position, scale and appearance the user last configured. Effect defaults
+/// stay separate because they apply to any object that gains that effect.
+pub(super) fn object_defaults(settings: &SettingsStore) -> Map<String, Value> {
+    settings
+        .value("objectDefaults")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The defaults for one object type, ready to merge over the effect defaults.
+pub(super) fn object_defaults_for(settings: &SettingsStore, object_id: &str) -> Map<String, Value> {
+    object_defaults(settings)
+        .remove(object_id)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+pub(super) fn save_object_default(
+    settings: &mut SettingsStore,
+    object_id: &str,
+    effects: &Map<String, Value>,
+) -> Result<(), String> {
+    if object_id.is_empty() || effects.is_empty() {
+        return Err("There is no object default to save".to_owned());
+    }
+    let mut root = settings.snapshot();
+    let mut defaults = root
+        .get("objectDefaults")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut entry = defaults
+        .get(object_id)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    // Each effect's parameters are replaced as a set: the caller always saves
+    // the whole effect, so merging key by key would keep a parameter the user
+    // has since removed from the catalog.
+    for (effect_id, params) in effects {
+        entry.insert(effect_id.clone(), params.clone());
+    }
+    defaults.insert(object_id.to_owned(), Value::Object(entry));
+    root.insert("objectDefaults".to_owned(), Value::Object(defaults));
+    settings.apply(root)
+}
+
+pub(super) fn clear_object_default(
+    settings: &mut SettingsStore,
+    object_id: &str,
+) -> Result<(), String> {
+    let mut root = settings.snapshot();
+    let empty = {
+        let Some(defaults) = root
+            .get_mut("objectDefaults")
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        defaults.remove(object_id);
+        defaults.is_empty()
+    };
+    if empty {
+        root.remove("objectDefaults");
+    }
+    settings.apply(root)
+}
+
 pub(super) fn save_effect_default(
     settings: &mut SettingsStore,
     effect_id: &str,

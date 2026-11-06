@@ -1336,6 +1336,32 @@ impl WorkspaceModel {
     }
 
     /// The id and current parameters of one effect, for saving creation defaults.
+    /// The parameters a new object of the selected clip's type should start
+    /// from: the standard drawing plus the object's own effect.
+    ///
+    /// Content and file parameters are left out for the same reason effect
+    /// defaults leave them out: a new text object must not repeat the previous
+    /// text and a new media object must not point at the previous file.
+    pub fn object_default_parameters(&self) -> Option<(String, Map<String, Value>)> {
+        let clip = self.selected_clip_document()?;
+        let mut effects = Map::new();
+        for effect in &clip.effects {
+            if effect.id != "transform" && effect.id != clip.clip_type {
+                continue;
+            }
+            let params = effect
+                .params
+                .iter()
+                .filter(|(name, _)| !matches!(name.as_str(), "text" | "path" | "source" | "file"))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect::<Map<String, Value>>();
+            if !params.is_empty() {
+                effects.insert(effect.id.clone(), Value::Object(params));
+            }
+        }
+        (!effects.is_empty()).then(|| (clip.clip_type.clone(), effects))
+    }
+
     pub fn effect_parameters(&self, effect_index: usize) -> Option<(String, Map<String, Value>)> {
         let clip = self.selected_clip_document()?;
         let effect = clip.effects.get(effect_index)?;
@@ -6297,6 +6323,79 @@ mod tests {
             .find(|effect| effect.id == "text")
             .expect("text effect exists");
         assert_eq!(text.params["fontSize"], json!(72));
+    }
+
+    #[test]
+    fn object_defaults_capture_the_drawing_and_the_own_effect_only() {
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let (object_id, effects) = workspace
+            .object_default_parameters()
+            .expect("the selected object has defaults");
+        assert_eq!(object_id, "rect");
+        // The object's own effect is captured. This fixture carries no standard
+        // drawing, so only that one entry is expected here; a real object also
+        // contributes its `transform` (covered by the creation test below).
+        assert!(
+            effects.contains_key("rect"),
+            "the object's own effect is part of its defaults: {:?}",
+            effects.keys().collect::<Vec<_>>()
+        );
+        // Effects the user added afterwards are not: they belong to effect
+        // defaults, which apply to any object that gains that effect.
+        assert!(!effects.contains_key("blur"));
+        // File and content parameters never carry over.
+        for (effect_id, params) in &effects {
+            let params = params.as_object().expect("an object of parameters");
+            for key in ["text", "path", "source", "file"] {
+                assert!(
+                    !params.contains_key(key),
+                    "{effect_id} must not carry {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn object_defaults_reach_a_newly_created_object() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        // A media object's defaults combine its output (standard drawing) with
+        // its own input settings, which is what AviUtl2 saves.
+        let mut transform = serde_json::Map::new();
+        transform.insert("x".to_owned(), json!(320));
+        let mut defaults = serde_json::Map::new();
+        defaults.insert("transform".to_owned(), json!(transform));
+        let mut text = serde_json::Map::new();
+        text.insert("fontSize".to_owned(), json!(96));
+        // The effect palette default says 72; the object type's own value wins.
+        let mut palette_default = serde_json::Map::new();
+        palette_default.insert("fontSize".to_owned(), json!(72));
+        defaults.insert("text".to_owned(), serde_json::Value::Object(text));
+        let mut merged = serde_json::Map::new();
+        merged.insert(
+            "text".to_owned(),
+            serde_json::Value::Object(palette_default),
+        );
+        for (effect_id, params) in &defaults {
+            merged.insert(effect_id.clone(), params.clone());
+        }
+        assert!(workspace.insert_catalog_object_at("text", 0, 0, 25, &catalog, Some("X"), &merged));
+        let clip = workspace
+            .selected_clip_document()
+            .expect("the new object is selected");
+        let text = clip
+            .effects
+            .iter()
+            .find(|effect| effect.id == "text")
+            .expect("text effect exists");
+        assert_eq!(text.params["fontSize"], json!(96));
+        let transform = clip
+            .effects
+            .iter()
+            .find(|effect| effect.id == "transform")
+            .expect("standard drawing exists");
+        assert_eq!(transform.params["x"], json!(320));
     }
 
     #[test]

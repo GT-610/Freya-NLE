@@ -1556,6 +1556,12 @@ msgstr "保存为默认值"
 msgid "Clear Default"
 msgstr "清除默认值"
 
+msgid "Save Object Default"
+msgstr "保存为该对象的默认值"
+
+msgid "Clear Object Default"
+msgstr "清除该对象的默认值"
+
 msgid "Keep a version history of saved projects"
 msgstr "保留已保存项目的版本历史"
 

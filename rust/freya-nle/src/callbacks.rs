@@ -658,6 +658,14 @@ pub(super) fn install_callbacks(
     object_settings.on_clear_effect_default(move |index| {
         object_clear_default_ui.clear_effect_default(index.max(0) as usize);
     });
+    let object_save_object_default_ui = object_settings_ui.clone();
+    object_settings.on_save_object_default(move |index| {
+        object_save_object_default_ui.save_object_default(index.max(0) as usize);
+    });
+    let object_clear_object_default_ui = object_settings_ui.clone();
+    object_settings.on_clear_object_default(move |index| {
+        object_clear_object_default_ui.clear_object_default(index.max(0) as usize);
+    });
 
     let object_remove_ui = object_settings_ui.clone();
     object_settings.on_remove_effect(move |index| {
@@ -2346,7 +2354,15 @@ pub(super) fn install_callbacks(
             .borrow()
             .i32_value("defaultClipDuration", 100)
             .max(1);
-        let effect_defaults = crate::settings::effect_defaults(&object_add_settings.borrow());
+        let mut effect_defaults = crate::settings::effect_defaults(&object_add_settings.borrow());
+        // AviUtl2 saves a media object's defaults as its input settings combined
+        // with the output, so the object type's own entry wins over an effect
+        // default for the same effect.
+        for (effect_id, params) in
+            crate::settings::object_defaults_for(&object_add_settings.borrow(), object_id.as_str())
+        {
+            effect_defaults.insert(effect_id, params);
+        }
         let catalog = object_add_catalog.borrow();
         let added = object_add_model
             .borrow_mut()

@@ -107,6 +107,8 @@ export component ObjectSettingsWindow inherits Window {
     callback paste-effect(int);
     callback save-effect-default(int);
     callback clear-effect-default(int);
+    callback save-object-default(int);
+    callback clear-object-default(int);
     callback remove-effect(int);
     callback remove-effect-selection(int);
     callback delete-selected-effects();
@@ -313,6 +315,8 @@ export component ObjectSettingsWindow inherits Window {
                             paste-effect(index) => { root.paste-effect(index); }
                             save-default(index) => { root.save-effect-default(index); }
                             clear-default(index) => { root.clear-effect-default(index); }
+                            save-object-default(index) => { root.save-object-default(index); }
+                            clear-object-default(index) => { root.clear-object-default(index); }
                             remove-selection(index) => { root.remove-effect-selection(index); }
                             reorder(index, delta-y) => { root.reorder-effect(index, delta-y); }
                             edit-expression(index) => { root.open-expression(index); }
