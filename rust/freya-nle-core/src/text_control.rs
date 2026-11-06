@@ -12,6 +12,13 @@
 //! - `<sNN>`, `<s+NN>`, `<s-NN>`, `<s*1.5>`: absolute or relative font size,
 //!   with `<s>` restoring the object size;
 //! - `<gwNN>`: letter spacing, with `<gw>` restoring the object spacing;
+//! - `<@Family[,3BI]>`: font family with an optional decoration digit and
+//!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
+//!   `<@+B>` / `<@-B>` add or remove one style on the current font;
+//! - `<sNN,Family,BI>`: the extended size form, which also sets the family and
+//!   style letters (AviUtl's trailing outline size is accepted and ignored);
+//! - `<// comment //>`: a comment that renders nothing, and `</>`: a block
+//!   separator that renders nothing until ruby needs the boundaries;
 //! - `<rNN>`: characters per second, with `<r>` restoring the object speed and
 //!   `<r0>` revealing instantly;
 //! - `<wNN>` / `<w*0.2>`: wait before the following characters, the `*` form
@@ -32,15 +39,44 @@ pub struct TextRun {
     pub outline_color: RgbaColor,
     pub font_size: f32,
     pub letter_spacing: f32,
+    /// Family requested by `<@...>`; `None` keeps the object's family.
+    pub font_family: Option<String>,
+    pub bold: bool,
+    pub italic: bool,
+    pub strikethrough: bool,
 }
 
 /// The values a run starts from when no directive has changed them.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextBaseStyle {
     pub color: RgbaColor,
     pub outline_color: RgbaColor,
     pub font_size: f32,
     pub letter_spacing: f32,
+    /// The object's own family, restored by `<@>`.
+    pub font_family: Option<String>,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+/// The font half of a run: family and the three style switches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FontStyle {
+    family: Option<String>,
+    bold: bool,
+    italic: bool,
+    strikethrough: bool,
+}
+
+impl FontStyle {
+    fn from_base(base: &TextBaseStyle) -> Self {
+        Self {
+            family: base.font_family.clone(),
+            bold: base.bold,
+            italic: base.italic,
+            strikethrough: false,
+        }
+    }
 }
 
 const MIN_FONT_SIZE: f32 = 1.0;
@@ -86,6 +122,7 @@ struct TimedChar {
 #[derive(Debug, Clone)]
 struct TimedRun {
     style: TextBaseStyle,
+    font: FontStyle,
     characters: Vec<TimedChar>,
 }
 
@@ -99,6 +136,7 @@ struct TextBlock {
 struct Parser {
     base: TextBaseStyle,
     style: TextBaseStyle,
+    font: FontStyle,
     base_speed: f32,
     speed: f32,
     cursor: f32,
@@ -111,9 +149,11 @@ struct Parser {
 
 impl Parser {
     fn new(base: TextBaseStyle, base_speed: f32) -> Self {
+        let font = FontStyle::from_base(&base);
         Self {
+            style: base.clone(),
             base,
-            style: base,
+            font,
             base_speed,
             speed: base_speed,
             cursor: 0.0,
@@ -126,10 +166,14 @@ impl Parser {
     }
 
     fn push_char(&mut self, character: char) {
-        let needs_run = self.runs.last().is_none_or(|run| run.style != self.style);
+        let needs_run = self
+            .runs
+            .last()
+            .is_none_or(|run| run.style != self.style || run.font != self.font);
         if needs_run {
             self.runs.push(TimedRun {
-                style: self.style,
+                style: self.style.clone(),
+                font: self.font.clone(),
                 characters: Vec::new(),
             });
         }
@@ -154,10 +198,13 @@ impl Parser {
         match marker {
             '#' => self.apply_color(&directive[1..]),
             's' => self.apply_size(&directive[1..]),
+            '@' => self.apply_font(&directive[1..]),
             'g' => self.apply_spacing(&directive[1..]),
             'r' => self.apply_speed(&directive[1..]),
             'w' => self.apply_wait(&directive[1..]),
             'c' => self.apply_clear(&directive[1..]),
+            // `</>` only separates blocks, which ruby will need later.
+            '/' => directive.len() == 1,
             _ => false,
         }
     }
@@ -191,7 +238,8 @@ impl Parser {
     }
 
     fn apply_size(&mut self, value: &str) -> bool {
-        let size = value.split(',').next().unwrap_or_default().trim();
+        let mut parts = value.split(',');
+        let size = parts.next().unwrap_or_default().trim();
         let font_size = if size.is_empty() {
             self.base.font_size
         } else {
@@ -200,7 +248,93 @@ impl Parser {
                 None => return false,
             }
         };
+        let family = match parts.next().map(str::trim) {
+            None | Some("") => None,
+            Some(family) => match normalize_family(family) {
+                Some(family) => Some(family),
+                None => return false,
+            },
+        };
+        let decoration = match parts.next() {
+            None => None,
+            Some(decoration) => match parse_decoration(decoration) {
+                Some(styles) => Some(styles),
+                None => return false,
+            },
+        };
+        // AviUtl's fourth field is the outline size, which this build keeps
+        // per effect rather than per run; it is accepted and ignored.
+        let _outline_size = parts.next();
+        if parts.next().is_some() {
+            return false;
+        }
         self.style.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        if let Some(family) = family {
+            self.font.family = Some(family);
+        }
+        if let Some((bold, italic, strikethrough)) = decoration {
+            self.font.bold = bold;
+            self.font.italic = italic;
+            self.font.strikethrough = strikethrough;
+        }
+        true
+    }
+
+    fn apply_font(&mut self, value: &str) -> bool {
+        let value = value.trim();
+        if value.is_empty() {
+            self.font = FontStyle::from_base(&self.base);
+            return true;
+        }
+        if let Some(letters) = value.strip_prefix('+') {
+            return self.apply_style_letters(letters, true);
+        }
+        if let Some(letters) = value.strip_prefix('-') {
+            return self.apply_style_letters(letters, false);
+        }
+        let mut parts = value.split(',');
+        let family = parts.next().unwrap_or_default().trim();
+        let decoration = parts.next();
+        if parts.next().is_some() {
+            return false;
+        }
+        let family = if family.is_empty() {
+            self.base.font_family.clone()
+        } else {
+            match normalize_family(family) {
+                Some(family) => Some(family),
+                None => return false,
+            }
+        };
+        let mut font = self.font.clone();
+        font.family = family;
+        if let Some(decoration) = decoration {
+            let Some((bold, italic, strikethrough)) = parse_decoration(decoration) else {
+                return false;
+            };
+            font.bold = bold;
+            font.italic = italic;
+            font.strikethrough = strikethrough;
+        }
+        self.font = font;
+        true
+    }
+
+    fn apply_style_letters(&mut self, letters: &str, add: bool) -> bool {
+        let letters = letters.trim();
+        if letters.is_empty() {
+            return false;
+        }
+        let mut font = self.font.clone();
+        for letter in letters.chars() {
+            match letter.to_ascii_uppercase() {
+                'B' => font.bold = add,
+                'I' => font.italic = add,
+                'S' => font.strikethrough = add,
+                _ => return false,
+            }
+        }
+        self.font = font;
         true
     }
 
@@ -291,6 +425,14 @@ fn parse_blocks(input: &str, base: TextBaseStyle, base_speed: f32) -> Vec<TextBl
     let mut parser = Parser::new(base, base_speed);
     let mut index = 0;
     while index < input.len() {
+        // Comments may contain `>`, so they are skipped before the directive
+        // scan would stop at the first one.
+        if input[index..].starts_with("<//")
+            && let Some(relative_end) = input[index + 3..].find("//>")
+        {
+            index += 3 + relative_end + 3;
+            continue;
+        }
         if parser.skip_newline {
             parser.skip_newline = false;
             if input[index..].starts_with('\n') {
@@ -341,9 +483,61 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             outline_color: run.style.outline_color,
             font_size: run.style.font_size,
             letter_spacing: run.style.letter_spacing,
+            font_family: run.font.family.clone(),
+            bold: run.font.bold,
+            italic: run.font.italic,
+            strikethrough: run.font.strikethrough,
         });
     }
     runs
+}
+
+/// Validates a family name from a control character.
+///
+/// `<` and `>` never appear inside a directive, and a control character would
+/// make the font query meaningless, so both reject the directive rather than
+/// passing it on.
+fn normalize_family(family: &str) -> Option<String> {
+    let family = family.trim();
+    if family.is_empty()
+        || family.chars().count() > 128
+        || family
+            .chars()
+            .any(|character| character == '<' || character == '>' || character.is_control())
+    {
+        return None;
+    }
+    Some(family.to_owned())
+}
+
+/// Parses `3BI`-style decoration specs into the three style switches.
+///
+/// The leading digit is AviUtl's shadow/outline decoration (0 = standard,
+/// 1-6 = outline variants). Only the digit's presence matters here: per-run
+/// outline styles would need every run to carry the object's outline
+/// settings, so the object's outline still applies and the digit is accepted
+/// without changing it.
+fn parse_decoration(spec: &str) -> Option<(bool, bool, bool)> {
+    let spec = spec.trim();
+    let mut rest = spec;
+    let mut digits = 0;
+    while rest.starts_with(|character: char| character.is_ascii_digit()) {
+        rest = &rest[1..];
+        digits += 1;
+    }
+    if digits > 1 {
+        return None;
+    }
+    let mut styles = (false, false, false);
+    for letter in rest.chars() {
+        match letter.to_ascii_uppercase() {
+            'B' => styles.0 = true,
+            'I' => styles.1 = true,
+            'S' => styles.2 = true,
+            _ => return None,
+        }
+    }
+    Some(styles)
 }
 
 fn parse_scaled_seconds(value: &str, displayed: usize) -> Option<f32> {
@@ -444,6 +638,9 @@ mod tests {
             },
             font_size: 48.0,
             letter_spacing: 0.0,
+            font_family: None,
+            bold: false,
+            italic: false,
         }
     }
 
@@ -605,5 +802,55 @@ mod tests {
         assert_eq!(text(&reset), "a");
         let instant = parse_text_runs_at("a<r0>b", base(), 1.0, 1.0);
         assert_eq!(text(&instant), "ab");
+    }
+
+    #[test]
+    fn font_directives_change_the_family_and_the_style_switches() {
+        let runs = parse_text_runs("<@Meiryo>a<@Meiryo,3BI>b<@+S>c<@-B>d<@>e", base());
+        assert_eq!(text(&runs), "abcde");
+        assert_eq!(runs.len(), 5);
+
+        assert_eq!(runs[0].font_family.as_deref(), Some("Meiryo"));
+        assert!(!runs[0].bold && !runs[0].italic && !runs[0].strikethrough);
+
+        assert_eq!(runs[1].font_family.as_deref(), Some("Meiryo"));
+        assert!(runs[1].bold && runs[1].italic && !runs[1].strikethrough);
+
+        // `+`/`-` change only the named styles on the current font.
+        assert!(runs[2].strikethrough);
+        assert!(runs[2].bold && runs[2].italic);
+        assert!(!runs[3].bold);
+        assert!(runs[3].strikethrough);
+
+        // `<@>` returns to the object's family and styles.
+        assert_eq!(runs[4].font_family, None);
+        assert!(!runs[4].bold && !runs[4].strikethrough);
+    }
+
+    #[test]
+    fn the_extended_size_directive_sets_family_and_style() {
+        let runs = parse_text_runs("<s32,Meiryo,BI>a<s>b", base());
+        assert_eq!(runs[0].font_size, 32.0);
+        assert_eq!(runs[0].font_family.as_deref(), Some("Meiryo"));
+        assert!(runs[0].bold && runs[0].italic);
+        // `<s>` restores size only; the family and styles keep.
+        assert_eq!(runs[1].font_size, 48.0);
+        assert_eq!(runs[1].font_family.as_deref(), Some("Meiryo"));
+    }
+
+    #[test]
+    fn malformed_font_directives_stay_literal() {
+        for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
+            assert_eq!(text(&parse_text_runs(input, base())), input);
+        }
+    }
+
+    #[test]
+    fn comments_and_block_separators_render_nothing() {
+        let runs = parse_text_runs("a<// a > sign inside //>b</>c", base());
+        assert_eq!(text(&runs), "abc");
+        // A comment may span a newline, and it disappears including it.
+        let multiline = parse_text_runs("a<// one\ntwo //>b", base());
+        assert_eq!(text(&multiline), "ab");
     }
 }

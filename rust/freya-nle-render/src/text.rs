@@ -3,8 +3,11 @@ use freya_nle_core::api::{RgbaColor, TextAlignment, TextRenderPlan};
 use freya_nle_media::VideoFrame;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::{Face, UnicodeBuffer};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use tiny_skia::{
     Color, FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform,
 };
@@ -48,8 +51,14 @@ impl Display for TextRasterError {
 impl Error for TextRasterError {}
 
 /// Owns the platform font catalog used by the Rust preview worker.
+/// One face's bytes plus the index inside those bytes.
+type FaceBytes = (Arc<[u8]>, u32);
+
 pub struct TextRasterizer {
     database: Database,
+    /// Bytes of every face a run asked for, so a styled run does not re-read
+    /// the same font file for each glyph batch.
+    face_bytes: RefCell<HashMap<ID, FaceBytes>>,
 }
 
 impl TextRasterizer {
@@ -61,7 +70,10 @@ impl TextRasterizer {
     pub fn new() -> Self {
         let mut database = Database::new();
         database.load_system_fonts();
-        Self { database }
+        Self {
+            database,
+            face_bytes: RefCell::new(HashMap::new()),
+        }
     }
 
     /// Rasterizes one evaluated built-in text object into straight-alpha RGBA pixels.
@@ -71,8 +83,16 @@ impl TextRasterizer {
         timestamp_seconds: f64,
     ) -> Result<VideoFrame, TextRasterError> {
         validate_plan(plan)?;
+        if plan.runs_authoritative || plan.runs.len() > 1 {
+            return self.rasterize_styled_runs(plan, timestamp_seconds);
+        }
         let face_id = self
-            .select_face(plan)
+            .select_face_for(
+                plan.font_family.trim(),
+                plan.bold,
+                plan.italic,
+                &plan.content,
+            )
             .ok_or(TextRasterError::FontNotFound)?;
         self.database
             .with_face_data(face_id, |data, face_index| {
@@ -81,18 +101,53 @@ impl TextRasterizer {
             .ok_or(TextRasterError::InvalidFont)?
     }
 
-    fn select_face(&self, plan: &TextRenderPlan) -> Option<ID> {
-        let weight = if plan.bold {
-            Weight::BOLD
-        } else {
-            Weight::NORMAL
-        };
-        let style = if plan.italic {
-            Style::Italic
-        } else {
-            Style::Normal
-        };
-        let requested = requested_family(plan.font_family.trim());
+    /// Loads one face per run and rasterizes the runs that asked for their own
+    /// family or style.
+    fn rasterize_styled_runs(
+        &self,
+        plan: &TextRenderPlan,
+        timestamp_seconds: f64,
+    ) -> Result<VideoFrame, TextRasterError> {
+        let mut loaded = Vec::with_capacity(plan.runs.len());
+        for run in &plan.runs {
+            let family = run
+                .font_family
+                .as_deref()
+                .unwrap_or(plan.font_family.as_str());
+            let face = self
+                .select_face_for(family, run.bold, run.italic, &run.text)
+                .ok_or(TextRasterError::FontNotFound)?;
+            loaded.push(self.load_face(face)?);
+        }
+        let faces = loaded
+            .iter()
+            .map(|(bytes, index)| {
+                Face::from_slice(bytes, *index).ok_or(TextRasterError::InvalidFont)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        rasterize_runs(plan, timestamp_seconds, &faces)
+    }
+
+    /// Copies a face's bytes out of the database once.
+    ///
+    /// The layout needs every run's face at the same time, and `fontdb` only
+    /// lends one at a time, so the bytes are cached here instead.
+    fn load_face(&self, id: ID) -> Result<FaceBytes, TextRasterError> {
+        if let Some(cached) = self.face_bytes.borrow().get(&id) {
+            return Ok(cached.clone());
+        }
+        let loaded = self
+            .database
+            .with_face_data(id, |data, index| (Arc::from(data), index))
+            .ok_or(TextRasterError::FontNotFound)?;
+        self.face_bytes.borrow_mut().insert(id, loaded.clone());
+        Ok(loaded)
+    }
+
+    fn select_face_for(&self, family: &str, bold: bool, italic: bool, text: &str) -> Option<ID> {
+        let weight = if bold { Weight::BOLD } else { Weight::NORMAL };
+        let style = if italic { Style::Italic } else { Style::Normal };
+        let requested = requested_family(family.trim());
         let mut families = vec![requested];
         if requested != Family::SansSerif {
             families.push(Family::SansSerif);
@@ -104,7 +159,7 @@ impl TextRasterizer {
             style,
         };
         let primary = self.database.query(&query);
-        if primary.is_some_and(|id| self.face_supports_text(id, &plan.content)) {
+        if primary.is_some_and(|id| self.face_supports_text(id, text)) {
             return primary;
         }
 
@@ -117,7 +172,7 @@ impl TextRasterizer {
                 style,
             };
             if let Some(id) = self.database.query(&query)
-                && self.face_supports_text(id, &plan.content)
+                && self.face_supports_text(id, text)
             {
                 return Some(id);
             }
@@ -143,7 +198,7 @@ impl TextRasterizer {
         });
         candidates
             .into_iter()
-            .find(|id| self.face_supports_text(*id, &plan.content))
+            .find(|id| self.face_supports_text(*id, text))
             .or(primary)
     }
 
@@ -247,12 +302,9 @@ fn rasterize_with_face(
     face_index: u32,
 ) -> Result<VideoFrame, TextRasterError> {
     let face = Face::from_slice(data, face_index).ok_or(TextRasterError::InvalidFont)?;
-    // Text with control characters carries more than one styled run. The
-    // single-style path below stays in charge of plain text so its layout,
-    // justification and metrics do not change for existing projects.
-    if plan.runs_authoritative || plan.runs.len() > 1 {
-        return rasterize_runs(plan, timestamp_seconds, &face);
-    }
+    // Styled runs take the `rasterize_runs` path in `rasterize`; this stays in
+    // charge of plain text so its layout, justification and metrics do not
+    // change for existing projects.
     let units_per_em = face.units_per_em().max(1) as f32;
     let scale = plan.font_size / units_per_em;
     let ascent = (f32::from(face.ascender()) * scale).max(plan.font_size * 0.5);
@@ -452,6 +504,18 @@ struct RunSegment {
     outline_color: RgbaColor,
     font_size: f32,
     letter_spacing: f32,
+    /// Index into the per-run faces passed to the layout.
+    face_index: usize,
+    strikethrough: bool,
+}
+
+/// One horizontal rule drawn through a run that asked for `<@...S>`.
+struct StrikeLine {
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: RgbaColor,
 }
 
 struct ShapedSegment {
@@ -460,6 +524,9 @@ struct ShapedSegment {
     scale: f32,
     color: RgbaColor,
     outline_color: RgbaColor,
+    face_index: usize,
+    font_size: f32,
+    strikethrough: bool,
 }
 
 struct ShapedRunLine {
@@ -475,18 +542,17 @@ struct RunPath {
 
 /// Lays out and rasterizes text that carries more than one styled run.
 ///
-/// AviUtl's control characters can change size and colour mid-line. The runs
-/// share one face (the font directive is a later batch), so each segment is
-/// shaped at its own scale and placed on a common baseline; line metrics come
-/// from the tallest run so mixed sizes stay aligned. Justification is left to
-/// the single-style path: spreading words across runs with different advances
-/// needs a per-segment distribution that this batch does not claim.
+/// AviUtl's control characters can change size, colour and font mid-line, so
+/// each segment is shaped with its own face and scale and placed on a common
+/// baseline; line metrics come from the tallest run so mixed sizes stay
+/// aligned. Justification is left to the single-style path: spreading words
+/// across runs with different advances needs a per-segment distribution that
+/// this batch does not claim.
 fn rasterize_runs(
     plan: &TextRenderPlan,
     timestamp_seconds: f64,
-    face: &Face<'_>,
+    faces: &[Face<'_>],
 ) -> Result<VideoFrame, TextRasterError> {
-    let units_per_em = face.units_per_em().max(1) as f32;
     if plan.runs.is_empty() {
         // A timing directive cleared every character: draw an empty frame
         // instead of a background or outline with nothing inside it.
@@ -500,12 +566,15 @@ fn rasterize_runs(
     let segments = plan
         .runs
         .iter()
-        .map(|run| RunSegment {
+        .enumerate()
+        .map(|(index, run)| RunSegment {
             text: run.text.clone(),
             color: run.color,
             outline_color: run.outline_color,
             font_size: run.font_size.max(1.0),
             letter_spacing: run.letter_spacing,
+            face_index: index,
+            strikethrough: run.strikethrough,
         })
         .collect::<Vec<_>>();
     let mut ascent = 0.0_f32;
@@ -513,6 +582,8 @@ fn rasterize_runs(
     let mut natural_advance = 0.0_f32;
     let mut maximum_font_size = 0.0_f32;
     for segment in &segments {
+        let face = &faces[segment.face_index];
+        let units_per_em = face.units_per_em().max(1) as f32;
         let scale = segment.font_size / units_per_em;
         let segment_ascent = (f32::from(face.ascender()) * scale).max(segment.font_size * 0.5);
         let segment_descent = (-f32::from(face.descender()) * scale).max(segment.font_size * 0.1);
@@ -559,6 +630,8 @@ fn rasterize_runs(
         let mut width = 0.0_f32;
         for (index, text) in line {
             let segment = &segments[index];
+            let face = &faces[segment.face_index];
+            let units_per_em = face.units_per_em().max(1) as f32;
             let scale = segment.font_size / units_per_em;
             let layout = shape_line(face, &text, scale, segment.letter_spacing);
             width += layout.width;
@@ -568,6 +641,9 @@ fn rasterize_runs(
                 scale,
                 color: segment.color,
                 outline_color: segment.outline_color,
+                face_index: segment.face_index,
+                font_size: segment.font_size,
+                strikethrough: segment.strikethrough,
             });
         }
         lines.push(ShapedRunLine {
@@ -582,12 +658,14 @@ fn rasterize_runs(
     }
 
     let mut paths = Vec::new();
+    let mut strikes = Vec::new();
     let mut outlined_glyphs = 0_usize;
     for (line_index, line) in lines.iter().enumerate() {
         let line_x = alignment_offset(plan.alignment, logical_width, line.width);
         let baseline = ascent + line_index as f32 * line_advance;
         let mut segment_x = line_x;
         for segment in &line.segments {
+            let face = &faces[segment.face_index];
             let mut builder = PathBuilder::new();
             for glyph in &segment.glyphs {
                 let mut outline = GlyphOutline {
@@ -608,6 +686,15 @@ fn rasterize_runs(
                     path,
                     color: segment.color,
                     outline_color: segment.outline_color,
+                });
+            }
+            if segment.strikethrough && segment.width > 0.0 {
+                strikes.push(StrikeLine {
+                    x: segment_x,
+                    y: baseline - segment.font_size * 0.32,
+                    width: segment.width,
+                    thickness: (segment.font_size * 0.06).max(1.0),
+                    color: segment.color,
                 });
             }
             segment_x += segment.width;
@@ -733,6 +820,20 @@ fn rasterize_runs(
             );
         }
         fill_path(&mut pixmap, &run_path.path, run_path.color, transform);
+    }
+    for strike in &strikes {
+        if let Some(rect) = tiny_skia::Rect::from_xywh(
+            strike.x + translate_x,
+            strike.y + translate_y,
+            strike.width,
+            strike.thickness,
+        ) {
+            let mut builder = PathBuilder::new();
+            builder.push_rect(rect);
+            if let Some(path) = builder.finish() {
+                fill_path(&mut pixmap, &path, strike.color, Transform::identity());
+            }
+        }
     }
 
     Ok(VideoFrame {
@@ -1019,10 +1120,88 @@ mod tests {
         }
     }
 
+    fn run(text: &str, font_size: f32) -> freya_nle_core::api::TextRun {
+        freya_nle_core::api::TextRun {
+            text: text.to_owned(),
+            color: RgbaColor {
+                red: 255,
+                green: 255,
+                blue: 255,
+                alpha: 255,
+            },
+            outline_color: RgbaColor {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 255,
+            },
+            font_size,
+            letter_spacing: 0.0,
+            font_family: None,
+            bold: false,
+            italic: false,
+            strikethrough: false,
+        }
+    }
+
+    fn plain_plan(runs: Vec<freya_nle_core::api::TextRun>) -> TextRenderPlan {
+        let mut plan = plan();
+        plan.font_family = "remixicon".to_owned();
+        plan.alignment = TextAlignment::Left;
+        plan.outline_enabled = false;
+        plan.shadow_enabled = false;
+        plan.background_enabled = false;
+        plan.line_spacing = 0.0;
+        plan.content = runs.iter().map(|run| run.text.as_str()).collect();
+        plan.runs = runs;
+        plan.runs_authoritative = true;
+        plan
+    }
+
+    fn opaque_pixels(frame: &VideoFrame) -> usize {
+        frame
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] > 0)
+            .count()
+    }
+
+    #[test]
+    fn a_strikethrough_run_draws_a_rule_through_the_row() {
+        let rasterizer = test_rasterizer();
+        let plain = plain_plan(vec![run("\u{ea01}\u{ea02}", 64.0)]);
+        let mut struck_run = run("\u{ea01}\u{ea02}", 64.0);
+        struck_run.strikethrough = true;
+        let struck = plain_plan(vec![struck_run]);
+        let plain_frame = rasterizer.rasterize(&plain, 0.0).expect("plain frame");
+        let struck_frame = rasterizer.rasterize(&struck, 0.0).expect("struck frame");
+        assert!(
+            opaque_pixels(&struck_frame) > opaque_pixels(&plain_frame),
+            "the rule adds pixels between and behind the glyphs"
+        );
+    }
+
+    #[test]
+    fn a_run_can_ask_for_its_own_family_and_weight() {
+        let mut styled = run("\u{ea01}", 64.0);
+        styled.font_family = Some("remixicon".to_owned());
+        styled.bold = true;
+        styled.italic = true;
+        let frame = test_rasterizer()
+            .rasterize(&plain_plan(vec![styled]), 0.0)
+            .expect("a per-run family resolves through the same fallbacks");
+        assert!(opaque_pixels(&frame) > 0);
+    }
+
     fn test_rasterizer() -> TextRasterizer {
         let mut database = Database::new();
         database.load_font_data(include_bytes!("../../../assets/remixicon.ttf").to_vec());
-        TextRasterizer { database }
+        TextRasterizer {
+            database,
+            face_bytes: RefCell::new(HashMap::new()),
+        }
     }
 
     #[test]
@@ -1085,6 +1264,10 @@ mod tests {
                 outline_color: red,
                 font_size: 64.0,
                 letter_spacing: 0.0,
+                font_family: None,
+                bold: false,
+                italic: false,
+                strikethrough: false,
             },
             TextRun {
                 text: "\u{ea02}".to_owned(),
@@ -1092,6 +1275,10 @@ mod tests {
                 outline_color: green,
                 font_size: 128.0,
                 letter_spacing: 0.0,
+                font_family: None,
+                bold: false,
+                italic: false,
+                strikethrough: false,
             },
         ];
         let frame = test_rasterizer()
