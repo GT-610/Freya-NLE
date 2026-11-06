@@ -90,6 +90,9 @@ export component ObjectSettingsWindow inherits Window {
     in-out property <string> font-filter: "";
     in-out property <string> current-font-family: "";
     in property <bool> has-effect-clipboard: false;
+    // The highlighted effect row; the keyboard clipboard acts on it, like the
+    // row menu does.
+    in property <int> current-effect-index: -1;
     callback select-effect(int, bool, bool);
     callback context-select-effect(int);
     callback reorder-effect(int, float);
@@ -161,6 +164,40 @@ export component ObjectSettingsWindow inherits Window {
                 accept
             } else {
                 reject
+            }
+        }
+        // Copy, cut and paste follow the highlighted effect row. They are inert
+        // while a text field owns the focus (the scope is not focused then), so
+        // editing a parameter value still copies text.
+        KeyBinding {
+            keys: @keys(Control + C);
+            activated => {
+                if root.has-selection
+                    && !root.audio-plugin-mode
+                    && root.current-effect-index >= 0 {
+                    root.copy-effect(root.current-effect-index, false);
+                }
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + X);
+            activated => {
+                if root.has-selection
+                    && !root.audio-plugin-mode
+                    && root.current-effect-index >= 0 {
+                    root.cut-effect(root.current-effect-index);
+                }
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + V);
+            activated => {
+                if root.has-selection
+                    && !root.audio-plugin-mode
+                    && root.has-effect-clipboard
+                    && root.current-effect-index >= 0 {
+                    root.paste-effect(root.current-effect-index);
+                }
             }
         }
 

@@ -781,6 +781,7 @@ pub(super) fn sync_object_settings(
         window.set_selected_effect_count(0);
         window.set_selected_effects_removable(false);
         window.set_has_effect_clipboard(false);
+        window.set_current_effect_index(-1);
         update_vec_model(&window.get_effects(), Vec::new());
         update_vec_model(&window.get_setting_rows(), Vec::new());
         return;
@@ -800,6 +801,12 @@ pub(super) fn sync_object_settings(
         model
             .current_workspace()
             .is_some_and(|workspace| workspace.has_effect_clipboard()),
+    );
+    window.set_current_effect_index(
+        model
+            .current_workspace()
+            .and_then(|workspace| workspace.selected_effect_index())
+            .map_or(-1, |index| index as i32),
     );
     window.set_clip_title(SharedString::from(format!(
         "{}  (ID {})",
