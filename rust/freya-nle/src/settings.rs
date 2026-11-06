@@ -320,12 +320,24 @@ pub(super) fn clear_effect_default(
     settings.apply(root)
 }
 
-/// The user's named colours: `{name: "#rrggbb"}`.
+/// The user's named colours, as AviUtl2's 色設定 stores them: a list of
+/// palettes the user can create, rename, switch between and delete, each
+/// holding `{name: "#rrggbb"}` entries.
 ///
-/// AviUtl2's 色設定 gives each palette entry a preset name, and `<#name>` in a
-/// text resolves through it. The palette is application-wide like the text
-/// presets, so a project written on one machine keeps its colour names.
-const TEXT_PALETTE_KEY: &str = "textPalette";
+/// AviUtl2's strings call this out explicitly — パレットを切替, 新しいパレットを
+/// 作成, パレット名を変更, and 同名のパレットが存在しています for the duplicate
+/// case — so one fixed palette would be a visible gap rather than a simplification.
+/// The palette is application-wide like the text presets, so a project written
+/// on one machine keeps its colour names.
+const TEXT_PALETTES_KEY: &str = "textPalettes";
+
+/// The palette the interface shows and `<#name>` resolves through.
+const TEXT_PALETTE_ACTIVE_KEY: &str = "textPaletteActive";
+
+/// Where the single palette lived before there could be more than one.
+const LEGACY_TEXT_PALETTE_KEY: &str = "textPalette";
+
+const DEFAULT_PALETTE_NAME: &str = "Default";
 
 /// One palette entry as the interface sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,9 +347,15 @@ pub(super) struct PaletteEntry {
     pub color: String,
 }
 
-pub(super) fn text_palette(settings: &SettingsStore) -> Vec<PaletteEntry> {
-    let mut entries = settings
-        .value(TEXT_PALETTE_KEY)
+/// One named palette and the colours in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NamedPalette {
+    pub name: String,
+    pub entries: Vec<PaletteEntry>,
+}
+
+fn palette_entries_from(value: Option<&Value>) -> Vec<PaletteEntry> {
+    let mut entries = value
         .and_then(Value::as_object)
         .map(|palette| {
             palette
@@ -354,6 +372,190 @@ pub(super) fn text_palette(settings: &SettingsStore) -> Vec<PaletteEntry> {
         .unwrap_or_default();
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     entries
+}
+
+/// Every palette, in the order the user created them.
+///
+/// A settings file written before multiple palettes existed has a single flat
+/// `textPalette` object. It reads back as one palette named `Default` so the
+/// upgrade needs no migration pass: the first write stores the new shape and
+/// drops the old key.
+pub(super) fn named_palettes(settings: &SettingsStore) -> Vec<NamedPalette> {
+    if let Some(palettes) = settings.value(TEXT_PALETTES_KEY).and_then(Value::as_array) {
+        let mut named = Vec::new();
+        for palette in palettes {
+            let Some(object) = palette.as_object() else {
+                continue;
+            };
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(valid_palette_display_name);
+            let Some(name) = name else {
+                continue;
+            };
+            // A duplicate name would make the combo box ambiguous.
+            if named
+                .iter()
+                .any(|existing: &NamedPalette| existing.name == name)
+            {
+                continue;
+            }
+            named.push(NamedPalette {
+                name: name.to_owned(),
+                entries: palette_entries_from(object.get("colors")),
+            });
+        }
+        if !named.is_empty() {
+            return named;
+        }
+    }
+    // Legacy single palette, or no palette at all.
+    vec![NamedPalette {
+        name: DEFAULT_PALETTE_NAME.to_owned(),
+        entries: palette_entries_from(settings.value(LEGACY_TEXT_PALETTE_KEY)),
+    }]
+}
+
+/// The palette name `<#name>` and the dialog currently work with.
+pub(super) fn active_palette_name(settings: &SettingsStore) -> String {
+    let palettes = named_palettes(settings);
+    let requested = settings
+        .value(TEXT_PALETTE_ACTIVE_KEY)
+        .and_then(Value::as_str);
+    requested
+        .filter(|requested| palettes.iter().any(|palette| palette.name == *requested))
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            palettes
+                .first()
+                .map(|palette| palette.name.clone())
+                .unwrap_or_else(|| DEFAULT_PALETTE_NAME.to_owned())
+        })
+}
+
+/// Colours of the active palette, which is what `<#name>` resolves through.
+pub(super) fn text_palette(settings: &SettingsStore) -> Vec<PaletteEntry> {
+    let active = active_palette_name(settings);
+    named_palettes(settings)
+        .into_iter()
+        .find(|palette| palette.name == active)
+        .map(|palette| palette.entries)
+        .unwrap_or_default()
+}
+
+/// A palette's display name.
+///
+/// Unlike a colour name this never reaches a text directive, so `<` and `>`
+/// are allowed; it only has to be something the combo box can show and the
+/// user can type back. Control characters are still refused because they would
+/// break the list row.
+fn valid_palette_display_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    let valid =
+        !name.is_empty() && name.chars().count() <= 64 && !name.chars().any(char::is_control);
+    valid.then_some(name)
+}
+
+/// Serializes every palette back, dropping the legacy single-palette key.
+fn write_palettes(
+    settings: &mut SettingsStore,
+    palettes: &[NamedPalette],
+    active: &str,
+) -> Result<(), String> {
+    let value = Value::Array(
+        palettes
+            .iter()
+            .map(|palette| {
+                let colors = palette
+                    .entries
+                    .iter()
+                    .map(|entry| (entry.name.clone(), Value::String(entry.color.clone())))
+                    .collect::<Map<String, Value>>();
+                serde_json::json!({ "name": palette.name, "colors": colors })
+            })
+            .collect(),
+    );
+    let mut root = settings.snapshot();
+    root.insert(TEXT_PALETTES_KEY.to_owned(), value);
+    root.insert(
+        TEXT_PALETTE_ACTIVE_KEY.to_owned(),
+        Value::String(active.to_owned()),
+    );
+    root.remove(LEGACY_TEXT_PALETTE_KEY);
+    settings.apply(root)?;
+    sync_text_palette(settings);
+    Ok(())
+}
+
+/// Adds a palette. A name already in use is refused, matching AviUtl2's
+/// 同名のパレットが存在しています prompt rather than silently shadowing.
+pub(super) fn create_palette(settings: &mut SettingsStore, name: &str) -> Result<String, String> {
+    let name = valid_palette_display_name(name)
+        .ok_or_else(|| "A palette name cannot be empty or contain control characters".to_owned())?
+        .to_owned();
+    let mut palettes = named_palettes(settings);
+    if palettes.iter().any(|palette| palette.name == name) {
+        return Err(format!("A palette named {name} already exists"));
+    }
+    palettes.push(NamedPalette {
+        name: name.clone(),
+        entries: Vec::new(),
+    });
+    write_palettes(settings, &palettes, &name)?;
+    Ok(name)
+}
+
+/// Renames a palette in place. The active palette follows the rename.
+pub(super) fn rename_palette(
+    settings: &mut SettingsStore,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    let to = valid_palette_display_name(to)
+        .ok_or_else(|| "A palette name cannot be empty or contain control characters".to_owned())?
+        .to_owned();
+    let mut palettes = named_palettes(settings);
+    let Some(index) = palettes.iter().position(|palette| palette.name == from) else {
+        return Err(format!("No palette named {from}"));
+    };
+    if palettes.iter().any(|palette| palette.name == to) {
+        return Err(format!("A palette named {to} already exists"));
+    }
+    palettes[index].name = to.clone();
+    let active = if active_palette_name(settings) == from {
+        to
+    } else {
+        active_palette_name(settings)
+    };
+    write_palettes(settings, &palettes, &active)
+}
+
+/// Removes a palette. The last one cannot go: the dialog always needs a
+/// palette to show, and `<#name>` needs somewhere to resolve.
+pub(super) fn delete_palette(settings: &mut SettingsStore, name: &str) -> Result<(), String> {
+    let mut palettes = named_palettes(settings);
+    if palettes.len() <= 1 {
+        return Err("The last palette cannot be deleted".to_owned());
+    }
+    let before = palettes.len();
+    palettes.retain(|palette| palette.name != name);
+    if palettes.len() == before {
+        return Err(format!("No palette named {name}"));
+    }
+    let active = palettes
+        .first()
+        .map(|palette| palette.name.clone())
+        .unwrap_or_else(|| DEFAULT_PALETTE_NAME.to_owned());
+    write_palettes(settings, &palettes, &active)
+}
+
+pub(super) fn set_active_palette(settings: &mut SettingsStore, name: &str) -> Result<(), String> {
+    let palettes = named_palettes(settings);
+    if !palettes.iter().any(|palette| palette.name == name) {
+        return Err(format!("No palette named {name}"));
+    }
+    write_palettes(settings, &palettes, name)
 }
 
 /// `rrggbb` or `#rrggbb`, normalized to the latter.
@@ -387,37 +589,34 @@ pub(super) fn save_palette_color(
         .ok_or_else(|| "A colour name cannot be empty or contain <, >, , or #".to_owned())?;
     let color = valid_palette_color(color)
         .ok_or_else(|| "A palette colour must be written as #rrggbb".to_owned())?;
-    let mut root = settings.snapshot();
-    let mut palette = root
-        .get(TEXT_PALETTE_KEY)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    palette.insert(name.to_owned(), Value::String(color));
-    root.insert(TEXT_PALETTE_KEY.to_owned(), Value::Object(palette));
-    settings.apply(root)?;
-    sync_text_palette(settings);
-    Ok(())
+    let active = active_palette_name(settings);
+    let mut palettes = named_palettes(settings);
+    let Some(palette) = palettes.iter_mut().find(|palette| palette.name == active) else {
+        return Err(format!("No palette named {active}"));
+    };
+    // Saving an existing name overwrites it, which is what the dialog's
+    // "save" on a filled-in name means.
+    match palette.entries.iter_mut().find(|entry| entry.name == name) {
+        Some(entry) => entry.color = color,
+        None => palette.entries.push(PaletteEntry {
+            name: name.to_owned(),
+            color,
+        }),
+    }
+    palette
+        .entries
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    write_palettes(settings, &palettes, &active)
 }
 
 pub(super) fn delete_palette_color(settings: &mut SettingsStore, name: &str) -> Result<(), String> {
-    let mut root = settings.snapshot();
-    let empty = {
-        let Some(palette) = root
-            .get_mut(TEXT_PALETTE_KEY)
-            .and_then(Value::as_object_mut)
-        else {
-            return Ok(());
-        };
-        palette.remove(name);
-        palette.is_empty()
+    let active = active_palette_name(settings);
+    let mut palettes = named_palettes(settings);
+    let Some(palette) = palettes.iter_mut().find(|palette| palette.name == active) else {
+        return Ok(());
     };
-    if empty {
-        root.remove(TEXT_PALETTE_KEY);
-    }
-    settings.apply(root)?;
-    sync_text_palette(settings);
-    Ok(())
+    palette.entries.retain(|entry| entry.name != name);
+    write_palettes(settings, &palettes, &active)
 }
 
 /// Hands the stored palette to the text parser.

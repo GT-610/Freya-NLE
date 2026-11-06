@@ -1325,6 +1325,22 @@ pub(super) fn install_callbacks(
     object_settings.on_delete_palette_color(move |name| {
         palette_delete_ui.delete_palette_color(name.as_str());
     });
+    let palette_select_ui = object_settings_ui.clone();
+    object_settings.on_palette_selected(move |name| {
+        palette_select_ui.select_palette(name.as_str());
+    });
+    let palette_create_ui = object_settings_ui.clone();
+    object_settings.on_create_palette(move |name| {
+        palette_create_ui.create_palette(name.as_str());
+    });
+    let palette_rename_ui = object_settings_ui.clone();
+    object_settings.on_rename_palette(move |name| {
+        palette_rename_ui.rename_palette(name.as_str());
+    });
+    let palette_remove_ui = object_settings_ui.clone();
+    object_settings.on_delete_palette(move || {
+        palette_remove_ui.delete_palette();
+    });
     let text_preset_open_ui = object_settings_ui.clone();
     object_settings.on_open_text_presets(move |index| {
         text_preset_open_ui.open_text_presets(index.max(0) as usize);

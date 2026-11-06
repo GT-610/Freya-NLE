@@ -283,6 +283,11 @@ fn main() {
                         color: Color::from_rgb_u8(0x2a, 0x6f, 0x9a),
                     },
                 ])));
+                ui.set_palette_names(ModelRc::new(VecModel::from(vec![
+                    "Default".into(),
+                    "Print".into(),
+                ])));
+                ui.set_palette_index(1);
                 ui.set_palette_name("subtitle".into());
                 ui.set_palette_color("#dddddd".into());
                 ui.set_palette_visible(true);

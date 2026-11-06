@@ -1580,7 +1580,162 @@ fn palette_colours_round_trip_and_reach_the_parser() {
     crate::settings::delete_palette_color(&mut store, "accent").expect("deletes");
     crate::settings::delete_palette_color(&mut store, "plain").expect("deletes");
     assert!(crate::settings::text_palette(&store).is_empty());
+    // The flat single-palette key is replaced by the list shape on first write.
     assert!(store.value("textPalette").is_none());
+    assert!(store.value("textPalettes").is_some());
+    freya_nle_core::api::set_text_palette(Vec::new());
+    let _ = std::fs::remove_file(path);
+}
+
+/// AviUtl2 keeps several switchable palettes (パレットを切替) and lets the user
+/// create, rename and delete them, refusing a duplicate name with
+/// 同名のパレットが存在しています. One fixed palette was a visible gap.
+#[test]
+fn several_palettes_can_be_created_switched_renamed_and_deleted() {
+    use freya_nle_app::settings::SettingsStore;
+
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-palettes-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let (mut store, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+
+    // Nothing stored yet: one palette so the dialog always has something to show.
+    assert_eq!(
+        crate::settings::named_palettes(&store)
+            .iter()
+            .map(|palette| palette.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Default"]
+    );
+    assert_eq!(crate::settings::active_palette_name(&store), "Default");
+
+    // A second palette starts empty and becomes the active one.
+    assert_eq!(
+        crate::settings::create_palette(&mut store, "Print").expect("creates"),
+        "Print"
+    );
+    assert_eq!(crate::settings::active_palette_name(&store), "Print");
+    assert!(crate::settings::text_palette(&store).is_empty());
+
+    // A duplicate name is refused rather than shadowing the existing palette.
+    let duplicate = crate::settings::create_palette(&mut store, "Print").expect_err("duplicate");
+    assert!(duplicate.contains("already exists"), "{duplicate}");
+    let blank = crate::settings::create_palette(&mut store, "   ").expect_err("blank");
+    assert!(blank.contains("cannot be empty"), "{blank}");
+
+    // Colours land in the active palette only.
+    crate::settings::save_palette_color(&mut store, "ink", "#112233").expect("saves to Print");
+    assert_eq!(crate::settings::text_palette(&store).len(), 1);
+
+    // Switching back shows the other palette's colours, which are separate.
+    crate::settings::set_active_palette(&mut store, "Default").expect("switches");
+    assert_eq!(crate::settings::active_palette_name(&store), "Default");
+    assert!(crate::settings::text_palette(&store).is_empty());
+    crate::settings::save_palette_color(&mut store, "paper", "#ffffff").expect("saves to Default");
+    assert_eq!(
+        crate::settings::text_palette(&store)
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["paper"]
+    );
+
+    // Unknown names are refused instead of silently creating one.
+    assert!(crate::settings::set_active_palette(&mut store, "Nope").is_err());
+
+    // Renaming keeps the colours and drags the active selection along.
+    crate::settings::set_active_palette(&mut store, "Print").expect("switch to Print");
+    crate::settings::rename_palette(&mut store, "Print", "Ink").expect("renames");
+    assert_eq!(crate::settings::active_palette_name(&store), "Ink");
+    assert_eq!(
+        crate::settings::text_palette(&store)
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ink"]
+    );
+    let clash = crate::settings::rename_palette(&mut store, "Ink", "Default").expect_err("clash");
+    assert!(clash.contains("already exists"), "{clash}");
+
+    // Deleting falls back to a palette that still exists.
+    crate::settings::delete_palette(&mut store, "Ink").expect("deletes");
+    assert_eq!(crate::settings::active_palette_name(&store), "Default");
+    assert_eq!(crate::settings::named_palettes(&store).len(), 1);
+
+    // The last palette cannot be deleted: the dialog and `<#name>` need one.
+    let last = crate::settings::delete_palette(&mut store, "Default").expect_err("last");
+    assert!(last.contains("last palette"), "{last}");
+
+    // Everything survives a reload, so the list shape is really persisted.
+    let (reloaded, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    assert_eq!(
+        crate::settings::named_palettes(&reloaded)
+            .iter()
+            .map(|palette| palette.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Default"]
+    );
+    assert_eq!(crate::settings::active_palette_name(&reloaded), "Default");
+
+    freya_nle_core::api::set_text_palette(Vec::new());
+    let _ = std::fs::remove_file(path);
+}
+
+/// A settings file written before multiple palettes existed has one flat
+/// `textPalette` object. It has to read back as a usable palette, not vanish.
+#[test]
+fn a_single_palette_settings_file_upgrades_without_losing_colours() {
+    use freya_nle_app::settings::SettingsStore;
+
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-palette-legacy-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(
+        &path,
+        br##"{"textPalette":{"accent":"#112233","muted":"#445566"}}"##,
+    )
+    .expect("fixture writes");
+    let (mut store, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+
+    // The old shape is read as the Default palette, with its colours intact.
+    assert_eq!(crate::settings::active_palette_name(&store), "Default");
+    assert_eq!(
+        crate::settings::text_palette(&store)
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.color.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("accent", "#112233"), ("muted", "#445566")]
+    );
+
+    // Adding a second palette rewrites the file and drops the old key, so the
+    // upgrade happens once and does not leave two sources of truth.
+    crate::settings::create_palette(&mut store, "Print").expect("creates");
+    assert!(store.value("textPalette").is_none());
+    assert!(store.value("textPalettes").is_some());
+    let (reloaded, _) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    assert_eq!(
+        crate::settings::named_palettes(&reloaded)
+            .iter()
+            .map(|palette| palette.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Default", "Print"]
+    );
+    assert_eq!(
+        crate::settings::named_palettes(&reloaded)[0].entries.len(),
+        2,
+        "the legacy colours survived the rewrite"
+    );
+
     freya_nle_core::api::set_text_palette(Vec::new());
     let _ = std::fs::remove_file(path);
 }

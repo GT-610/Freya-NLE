@@ -78,6 +78,12 @@ export component ObjectSettingsWindow inherits Window {
     in-out property <string> palette-name: "";
     in-out property <string> palette-color: "#ffffff";
     in property <[PaletteEntryData]> palette-entries;
+    // AviUtl2 keeps several switchable palettes (パレットを切替) and lets the
+    // user create, rename and delete them, so the dialog carries the list plus
+    // the one currently in use.
+    in property <[string]> palette-names;
+    in-out property <int> palette-index: 0;
+    in-out property <string> palette-rename: "";
     in-out property <int> preset-effect-index: -1;
     in-out property <string> preset-effect-name: "";
     in-out property <string> preset-name: "";
@@ -126,6 +132,10 @@ export component ObjectSettingsWindow inherits Window {
     callback apply-palette-swatch(string);
     callback save-palette-color(string, string);
     callback delete-palette-color(string);
+    callback palette-selected(string);
+    callback create-palette(string);
+    callback rename-palette(string);
+    callback delete-palette();
     callback save-text-preset(int, string);
     callback delete-text-preset(string);
     callback preset-scope(int) -> [PresetScopeItemData];
@@ -822,6 +832,42 @@ export component ObjectSettingsWindow inherits Window {
                         color: AppTheme.muted-foreground;
                         font-size: 0.75rem;
                         wrap: word-wrap;
+                    }
+                    // The palette being edited. Switching, renaming and deleting
+                    // one is what makes several palettes usable.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ComboBox {
+                            model: root.palette-names;
+                            current-index: root.palette-index;
+                            horizontal-stretch: 1;
+                            accessible-label: @tr("Palette");
+                            selected(value) => { root.palette-selected(value); }
+                        }
+                        Button {
+                            text: @tr("Delete");
+                            enabled: root.palette-names.length > 1;
+                            clicked => { root.delete-palette(); }
+                        }
+                    }
+                    // New and Rename both need a name to work with, so the field
+                    // sits next to them rather than being implicit.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            text <=> root.palette-rename;
+                            placeholder-text: @tr("New palette name");
+                            accessible-label: @tr("New palette name");
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: @tr("New");
+                            clicked => { root.create-palette(root.palette-rename); }
+                        }
+                        Button {
+                            text: @tr("Rename");
+                            clicked => { root.rename-palette(root.palette-rename); }
+                        }
                     }
                     palette-name-field := LineEdit {
                         text <=> root.palette-name;

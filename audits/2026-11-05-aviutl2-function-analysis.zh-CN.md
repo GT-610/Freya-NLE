@@ -317,7 +317,7 @@ YUV 转换在 `ファイル出力の設定` 里关闭/开启。更关键的是**
 | B7（已实现） | 批量输出队列：批次项（含场景）、队列控制、完成后动作 | 队列可暂停/取消/重排；失败项保留错误与部分产物信息 |
 | B8（已实现） | 备份历史：每次保存留下一个版本、按项目与总量双重上限保留、列表里打开/删除、跨项目浏览、目录可配置、可按工程或整体清空 | 两条上限都在写入后淘汰；恢复为未保存副本；跨项目条目可打开与删除；相对路径被拒 |
 | B8.5（已实现） | 备份历史的设置（开关、上限）与手动打点 | 关闭后不再写副本；上限可在界面调整 |
-| B3.8（已实现） | 命名色调色板：用户色名优先于内置名，`<#name>` 与调色板窗口 | 色名随设置保存；非法名字与颜色被拒；删除后回到字面 |
+| B3.8（已实现） | 命名色调色板：用户色名优先于内置名，`<#name>` 与调色板窗口；多组调色板可新建/切换/改名/删除 | 色名随设置保存；非法名字与颜色被拒；删除后回到字面；切组后色名集合独立 |
 
 B1 的边界：只加场景级数据与时间线呈现，不碰渲染管线、编辑命令语义和快捷键表
 （快捷键只新增条目）。
@@ -2280,6 +2280,55 @@ UI 侧已把 `Err` 显示到 `error_message`（`callbacks.rs` 的 `on_recover_pr
 - `cargo test --workspace --all-features --locked` 通过（core 223、app 287、
   desktop 68、render 54、preview 28）；
 - `clippy --no-deps` 与 `fmt --check` 干净。
+
+### 7.57 B3.8（续）：多组调色板
+
+§7.44 记着"未做：AviUtl2 的调色板是多组可切换的（`パレットの作成変更`），这里
+只有一组"。这是一条有官方用法文档、也有二进制字符串双重支撑的缺口，本批补齐。
+
+| 位置 | 改动 |
+| --- | --- |
+| desktop | `settings.rs`：`named_palettes` / `active_palette_name` / `create_palette` / `rename_palette` / `delete_palette` / `set_active_palette`；存储改为 `textPalettes: [{name, colors}]` + `textPaletteActive` |
+| desktop | `save_palette_color` / `delete_palette_color` 改为只作用于当前调色板 |
+| desktop | `object_settings.rs`：`select_palette` / `create_palette` / `rename_palette` / `delete_palette`，`sync_palette` 一并推送组列表 |
+| UI | `object-settings.slint`：调色板下拉框 + 新建/改名/删除 + 名字输入框 |
+| 工具 | `ui-snapshot` 的 `UI_SNAPSHOT_PALETTE` 填两组名字，截图能看出切换器 |
+
+证据：
+
+- 官方用法文档 §色設定：「上部の切り替えアイコンからパレットの作成変更が出来ます」
+  「パレットの色にはプリセット名を設定することが出来ます」。
+- 二进制字符串：`パレットを切替`、`新しいパレットを作成`、`パレット名を変更`、
+  `同名のパレットが存在しています`、`上書きしますか？`。
+
+语义与取舍：
+
+- **旧文件零迁移步骤**：旧格式是单个扁平对象 `textPalette: {name: "#rrggbb"}`。
+  `named_palettes` 在找不到新键时把它读成名为 `Default` 的一组，第一次写入即换成
+  新形状并删掉旧键。没有一次性迁移函数，也就没有"迁移失败卡在中间"的状态。
+- **重名直接拒绝**：AviUtl2 用的是"同名のパレットが存在しています / 上書きしますか？"
+  二次确认；本项目没有确认对话框的通用设施，因此选择拒绝而不是静默覆盖——丢数据
+  比多按一次键更糟。
+- **最后一组不能删**：对话框总得有东西显示，`<#name>` 也得有地方解析。与之相对，
+  删除唯一一组里的某个**颜色**是允许的，那不是同一件事。
+- **`<#name>` 只认当前组**：切换组之后色名集合随之改变。这样"组"才有意义——
+  否则多组就只是同一个命名空间的分页。
+- **组名允许 `<` `>`，颜色名不允许**：组名永远不进文本指令，只进下拉框；颜色名会
+  进 `<#name>`。这条差异是刻意的，不是遗漏。
+
+验证：
+
+- desktop 新增两个测试：`several_palettes_can_be_created_switched_renamed_and_deleted`
+  与 `a_single_palette_settings_file_upgrades_without_losing_colours`；
+- 旧测试 `palette_colours_round_trip_and_reach_the_parser` 未改逻辑即通过，说明单组
+  行为向后兼容；只把 `store.value("textPalette").is_none()` 的断言补成"旧键消失、
+  新键出现"；
+- 离屏截图确认切换器、名字输入框与色块列表三段布局正常，且截图过程中发现
+  `New`/`Rename` 原本读取一个**没有输入框可填**的属性（只会提交空串），已补上输入框；
+- `cargo test --workspace --all-features --locked` 通过（core 223、app 287、
+  desktop 70、render 54、preview 28）；
+- `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟
+  `main_frames: 3`、`timeline_frames: 3`、`main_same_device: true`、`wgpu_errors: []`。
 
 ## 8. 验收与风险
 验收以可观察行为为准：标记在标尺上有清晰位置；前后跳转不越过场景时长；备注

@@ -748,7 +748,8 @@ impl ObjectSettingsUi {
     }
 
     fn sync_palette(&self, window: &ObjectSettingsWindow) {
-        let entries = crate::settings::text_palette(&self.settings.borrow())
+        let settings = self.settings.borrow();
+        let entries = crate::settings::text_palette(&settings)
             .into_iter()
             .map(|entry| PaletteEntryData {
                 name: SharedString::from(entry.name),
@@ -756,6 +757,67 @@ impl ObjectSettingsUi {
             })
             .collect::<Vec<_>>();
         window.set_palette_entries(ModelRc::new(VecModel::from(entries)));
+        let names = crate::settings::named_palettes(&settings)
+            .into_iter()
+            .map(|palette| SharedString::from(palette.name))
+            .collect::<Vec<_>>();
+        let active = crate::settings::active_palette_name(&settings);
+        let index = names
+            .iter()
+            .position(|name| name.as_str() == active)
+            .unwrap_or(0) as i32;
+        window.set_palette_names(ModelRc::new(VecModel::from(names)));
+        window.set_palette_index(index);
+    }
+
+    /// Switches the palette the dialog and `<#name>` work with.
+    pub(super) fn select_palette(&self, name: &str) {
+        match crate::settings::set_active_palette(&mut self.settings.borrow_mut(), name) {
+            Ok(()) => {
+                if let Some(window) = self.window.upgrade() {
+                    self.sync_palette(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn create_palette(&self, name: &str) {
+        match crate::settings::create_palette(&mut self.settings.borrow_mut(), name) {
+            Ok(_) => {
+                if let Some(window) = self.window.upgrade() {
+                    window.set_palette_rename(SharedString::new());
+                    self.sync_palette(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn rename_palette(&self, name: &str) {
+        let active = crate::settings::active_palette_name(&self.settings.borrow());
+        match crate::settings::rename_palette(&mut self.settings.borrow_mut(), &active, name) {
+            Ok(()) => {
+                if let Some(window) = self.window.upgrade() {
+                    window.set_palette_rename(SharedString::new());
+                    self.sync_palette(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
+    }
+
+    pub(super) fn delete_palette(&self) {
+        let active = crate::settings::active_palette_name(&self.settings.borrow());
+        match crate::settings::delete_palette(&mut self.settings.borrow_mut(), &active) {
+            Ok(()) => {
+                if let Some(window) = self.window.upgrade() {
+                    window.set_palette_rename(SharedString::new());
+                    self.sync_palette(&window);
+                }
+            }
+            Err(error) => show_error_dialog(&error),
+        }
     }
 
     /// Loads a palette colour into the open picker's sliders.
