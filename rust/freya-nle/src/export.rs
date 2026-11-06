@@ -297,6 +297,7 @@ pub(super) fn install_export_callbacks(
     let confirm_window = export.as_weak();
     let confirm_manager = manager.clone();
     let confirm_batch = batch.clone();
+    let confirm_model = model.clone();
     export.on_confirm_cancel(move || {
         confirm_manager.borrow_mut().cancel();
         // Cancelling the item must also stop the queue; otherwise the finish
@@ -307,6 +308,7 @@ pub(super) fn install_export_callbacks(
             "批次已停止",
             "バッチを停止しました",
         ));
+        restore_batch_scene(&confirm_model, &confirm_batch);
         if let Some(window) = confirm_window.upgrade() {
             window.set_cancel_confirmation_visible(false);
             sync_batch(&window, &confirm_batch.borrow());
@@ -331,6 +333,7 @@ pub(super) fn install_export_callbacks(
     let batch_add_codecs = codecs.clone();
     let batch_add_queue = batch.clone();
     let batch_add_settings = settings.clone();
+    let batch_add_model = model.clone();
     export.on_batch_add(move || {
         let Some(window) = batch_add_window.upgrade() else {
             return;
@@ -343,13 +346,31 @@ pub(super) fn install_export_callbacks(
                 return;
             }
         };
-        let label = request
+        let (scene, scene_name) = batch_add_model
+            .borrow()
+            .current_workspace()
+            .map(|workspace| {
+                (
+                    workspace.selected_scene(),
+                    workspace
+                        .selected_scene_document()
+                        .map(|scene| scene.name.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .unwrap_or((1, String::new()));
+        let stem = request
             .output_path
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let label = if scene_name.is_empty() {
+            stem
+        } else {
+            format!("{scene_name} · {stem}")
+        };
         let mut queue = batch_add_queue.borrow_mut();
-        if queue.push(label.clone(), request).is_none() {
+        if queue.push(label.clone(), scene, request).is_none() {
             queue.set_message(localized(
                 "The batch is full",
                 "批次已满",
@@ -457,6 +478,11 @@ pub(super) fn install_export_callbacks(
             sync_batch(&window, &batch_start_queue.borrow());
             return;
         }
+        if let Some(workspace) = batch_start_model.borrow().current_workspace() {
+            batch_start_queue
+                .borrow_mut()
+                .remember_scene(workspace.selected_scene());
+        }
         begin_batch_item(
             &window,
             &batch_start_model,
@@ -471,6 +497,7 @@ pub(super) fn install_export_callbacks(
     let batch_stop_window = export.as_weak();
     let batch_stop_manager = manager.clone();
     let batch_stop_queue = batch.clone();
+    let batch_stop_model = model.clone();
     export.on_batch_stop(move || {
         let Some(window) = batch_stop_window.upgrade() else {
             return;
@@ -487,6 +514,7 @@ pub(super) fn install_export_callbacks(
         if batch_stop_manager.borrow().is_exporting() {
             batch_stop_manager.borrow_mut().cancel();
         }
+        restore_batch_scene(&batch_stop_model, &batch_stop_queue);
         window.set_exporting(false);
         window.set_cancel_confirmation_visible(false);
         sync_batch(&window, &batch_stop_queue.borrow());
@@ -583,6 +611,12 @@ fn begin_batch_item(
     batch: &Rc<RefCell<BatchQueue>>,
     index: usize,
 ) {
+    if let Some(scene) = batch.borrow().scene_of(index)
+        && let Some(workspace) = model.borrow_mut().current_workspace_mut()
+        && workspace.selected_scene() != scene
+    {
+        let _ = workspace.switch_scene(scene);
+    }
     let Some((project_instance_id, project)) = current_export_project(&model.borrow()) else {
         let mut queue = batch.borrow_mut();
         queue.begin(index);
@@ -638,6 +672,18 @@ fn begin_batch_item(
         }
     }
     sync_batch(window, &batch.borrow());
+}
+
+/// Returns to the scene the user was on before the batch started.
+fn restore_batch_scene(model: &Rc<RefCell<ApplicationModel>>, batch: &Rc<RefCell<BatchQueue>>) {
+    let Some(scene) = batch.borrow_mut().take_restore_scene() else {
+        return;
+    };
+    if let Some(workspace) = model.borrow_mut().current_workspace_mut()
+        && workspace.selected_scene() != scene
+    {
+        let _ = workspace.switch_scene(scene);
+    }
 }
 
 fn batch_progress_label(number: usize, count: usize, done: i32, total: i32) -> String {
@@ -857,6 +903,7 @@ pub(super) fn update_export(
                         localized("failed", "失败", "失敗")
                     ));
                     sync_batch(&window, &batch.borrow());
+                    restore_batch_scene(model, batch);
                     if window.get_batch_completion_index() == 1 {
                         let _ = slint::quit_event_loop();
                     }

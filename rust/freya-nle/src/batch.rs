@@ -27,6 +27,8 @@ pub(super) enum BatchOutcome {
 #[derive(Debug, Clone)]
 pub(super) struct BatchItem {
     pub(super) label: String,
+    /// The scene this item exports; the runner switches to it first.
+    pub(super) scene: i32,
     pub(super) request: ExportRequest,
     pub(super) outcome: Option<BatchOutcome>,
 }
@@ -53,6 +55,8 @@ pub(super) struct BatchQueue {
     paused_after: Option<usize>,
     /// Set while an item runs, so it finishes before the queue stops.
     pause_requested: bool,
+    /// The scene the user was on when the batch started, restored afterwards.
+    restore_scene: Option<i32>,
     /// The line the export window shows under the batch list.
     message: String,
 }
@@ -95,17 +99,33 @@ impl BatchQueue {
     }
 
     /// Appends one item and returns its index, or `None` when the queue is full.
-    pub(super) fn push(&mut self, label: String, request: ExportRequest) -> Option<usize> {
+    pub(super) fn push(
+        &mut self,
+        label: String,
+        scene: i32,
+        request: ExportRequest,
+    ) -> Option<usize> {
         if self.items.len() >= MAX_BATCH_ITEMS {
             return None;
         }
         let label = truncate_label(&label);
         self.items.push(BatchItem {
             label,
+            scene,
             request,
             outcome: None,
         });
         Some(self.items.len() - 1)
+    }
+
+    /// Remembers the scene to return to once the queue is done.
+    pub(super) fn remember_scene(&mut self, scene: i32) {
+        self.restore_scene = Some(scene);
+    }
+
+    /// Takes the scene to restore, if a batch ran.
+    pub(super) fn take_restore_scene(&mut self) -> Option<i32> {
+        self.restore_scene.take()
     }
 
     pub(super) fn remove(&mut self, index: usize) -> bool {
@@ -162,6 +182,11 @@ impl BatchQueue {
         self.running = None;
         self.paused_after = None;
         self.pause_requested = false;
+    }
+
+    /// The scene of an item, used to switch before it starts.
+    pub(super) fn scene_of(&self, index: usize) -> Option<i32> {
+        self.items.get(index).map(|item| item.scene)
     }
 
     pub(super) fn pause_after(&mut self, next: usize) {
@@ -235,6 +260,7 @@ pub(super) fn to_json(queue: &BatchQueue) -> Value {
             .map(|item| {
                 json!({
                     "label": item.label,
+                    "scene": item.scene,
                     "mode": mode_name(item.request.mode),
                     "outputPath": item.request.output_path.to_string_lossy(),
                     "imageFormat": image_format_name(item.request.image_format),
@@ -262,8 +288,8 @@ pub(super) fn from_json(value: &Value) -> BatchQueue {
         return queue;
     };
     for item in items {
-        if let Some((label, request)) = item_from_json(item)
-            && queue.push(label, request).is_none()
+        if let Some((label, scene, request)) = item_from_json(item)
+            && queue.push(label, scene, request).is_none()
         {
             break;
         }
@@ -271,7 +297,7 @@ pub(super) fn from_json(value: &Value) -> BatchQueue {
     queue
 }
 
-fn item_from_json(value: &Value) -> Option<(String, ExportRequest)> {
+fn item_from_json(value: &Value) -> Option<(String, i32, ExportRequest)> {
     let object = value.as_object()?;
     let output_path = object.get("outputPath")?.as_str()?.trim();
     if output_path.is_empty() {
@@ -295,6 +321,11 @@ fn item_from_json(value: &Value) -> Option<(String, ExportRequest)> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let scene = object
+        .get("scene")
+        .and_then(Value::as_i64)
+        .and_then(|scene| i32::try_from(scene).ok())
+        .unwrap_or(1);
     let request = ExportRequest {
         mode: match object.get("mode").and_then(Value::as_str) {
             Some("image-sequence") => ExportMode::ImageSequence,
@@ -322,7 +353,7 @@ fn item_from_json(value: &Value) -> Option<(String, ExportRequest)> {
         start_frame: number("startFrame", 0),
         end_frame: number("endFrame", 0),
     };
-    Some((label, request))
+    Some((label, scene, request))
 }
 
 fn mode_name(mode: ExportMode) -> &'static str {
@@ -372,9 +403,9 @@ mod tests {
     #[test]
     fn items_move_and_remove_without_touching_the_running_item() {
         let mut queue = BatchQueue::default();
-        queue.push("first".to_owned(), request("/tmp/a.mkv", 0, 10));
-        queue.push("second".to_owned(), request("/tmp/b.mkv", 0, 10));
-        queue.push("third".to_owned(), request("/tmp/c.mkv", 0, 10));
+        queue.push("first".to_owned(), 1, request("/tmp/a.mkv", 0, 10));
+        queue.push("second".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
+        queue.push("third".to_owned(), 1, request("/tmp/c.mkv", 0, 10));
 
         assert_eq!(queue.move_by(2, -1), Some(1));
         assert_eq!(queue.items()[1].label, "third");
@@ -390,8 +421,8 @@ mod tests {
     #[test]
     fn finishing_an_item_records_its_result_and_stops_the_run() {
         let mut queue = BatchQueue::default();
-        queue.push("first".to_owned(), request("/tmp/a.mkv", 0, 10));
-        queue.push("second".to_owned(), request("/tmp/b.mkv", 0, 10));
+        queue.push("first".to_owned(), 1, request("/tmp/a.mkv", 0, 10));
+        queue.push("second".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
         assert!(queue.begin(0));
         assert_eq!(
             queue.finish_running(BatchOutcome::Succeeded),
@@ -408,8 +439,8 @@ mod tests {
     #[test]
     fn pausing_resumes_at_the_next_item() {
         let mut queue = BatchQueue::default();
-        queue.push("first".to_owned(), request("/tmp/a.mkv", 0, 10));
-        queue.push("second".to_owned(), request("/tmp/b.mkv", 0, 10));
+        queue.push("first".to_owned(), 1, request("/tmp/a.mkv", 0, 10));
+        queue.push("second".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
         queue.begin(0);
         queue.finish_running(BatchOutcome::Failed("codec missing".to_owned()));
         queue.pause_after(1);
@@ -423,16 +454,21 @@ mod tests {
     #[test]
     fn the_queue_round_trips_through_settings_json() {
         let mut queue = BatchQueue::default();
-        queue.push("scene 1".to_owned(), request("/tmp/out/scene1.mkv", 10, 90));
+        queue.push(
+            "scene 1".to_owned(),
+            2,
+            request("/tmp/out/scene1.mkv", 10, 90),
+        );
         let mut image = request("/tmp/out/frames", 0, 30);
         image.mode = ExportMode::ImageSequence;
         image.image_format = ExportImageFormat::Jpeg;
         image.crf = None;
-        queue.push("frames".to_owned(), image);
+        queue.push("frames".to_owned(), 1, image);
 
         let restored = from_json(&to_json(&queue));
         assert_eq!(restored.items().len(), 2);
         assert_eq!(restored.items()[0].label, "scene 1");
+        assert_eq!(restored.items()[0].scene, 2);
         assert_eq!(restored.items()[0].request.start_frame, 10);
         assert_eq!(restored.items()[1].request.mode, ExportMode::ImageSequence);
         assert_eq!(
@@ -446,17 +482,28 @@ mod tests {
     }
 
     #[test]
+    fn the_queue_remembers_the_scene_to_return_to() {
+        let mut queue = BatchQueue::default();
+        queue.push("first".to_owned(), 3, request("/tmp/a.mkv", 0, 10));
+        assert_eq!(queue.scene_of(0), Some(3));
+        assert_eq!(queue.take_restore_scene(), None, "no batch ran yet");
+        queue.remember_scene(7);
+        assert_eq!(queue.take_restore_scene(), Some(7));
+        assert_eq!(queue.take_restore_scene(), None, "restoring consumes it");
+    }
+
+    #[test]
     fn the_queue_refuses_more_items_than_the_cap() {
         let mut queue = BatchQueue::default();
         for index in 0..MAX_BATCH_ITEMS {
             assert!(
                 queue
-                    .push(format!("item {index}"), request("/tmp/a.mkv", 0, 10))
+                    .push(format!("item {index}"), 1, request("/tmp/a.mkv", 0, 10))
                     .is_some()
             );
         }
         assert_eq!(
-            queue.push("overflow".to_owned(), request("/tmp/b.mkv", 0, 10)),
+            queue.push("overflow".to_owned(), 1, request("/tmp/b.mkv", 0, 10)),
             None
         );
         assert_eq!(queue.items().len(), MAX_BATCH_ITEMS);
