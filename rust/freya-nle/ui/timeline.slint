@@ -1033,7 +1033,7 @@ export component TimelineWindow inherits Window {
                     MenuItem { title: "400"; activated => { root.apply-zoom-percent(400); } }
                 }
                 Rectangle {
-                    background: AppTheme.raised-background;
+                    background: AppTheme.dialog-background;
                     border-width: 1px;
                     border-color: AppTheme.subtle-border;
                     border-radius: AppTheme.control-radius;
@@ -1616,7 +1616,7 @@ export component TimelineWindow inherits Window {
             height: 240px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 6px;
@@ -1698,7 +1698,7 @@ export component TimelineWindow inherits Window {
             height: 330px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 6px;
@@ -1934,7 +1934,7 @@ export component TimelineWindow inherits Window {
                 8px,
                 max(parent.height - self.height - 8px, 8px)
             );
-            background: AppTheme.raised-background;
+            background: AppTheme.dialog-background;
             border-width: 1px;
             border-color: AppTheme.border;
             border-radius: 5px;
