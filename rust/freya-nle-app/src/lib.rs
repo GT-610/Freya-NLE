@@ -37,7 +37,10 @@ pub use project_io::{PROJECT_EXTENSION, ProjectDefaults, ProjectSession};
 pub use recovery::RecoveryEntry;
 pub use workspace::{LayerSettingsInput, ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
 
-use backup::{BackupEntry, BackupProject, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT};
+use backup::{
+    BackupEntry, BackupProject, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT,
+    DEFAULT_BACKUP_TOTAL_LIMIT_MB,
+};
 use lifecycle::{LifecycleContinuation, PendingLifecycle};
 use recovery::{
     DEFAULT_BACKUP_INTERVAL, RecoveryOperation, RecoveryStore, RecoveryWrite, generate_recovery_id,
@@ -68,6 +71,7 @@ pub struct ApplicationModel {
     recovery_errors: Vec<String>,
     backup_store: BackupStore,
     backup_limit: usize,
+    backup_total_limit_bytes: u64,
     backup_enabled: bool,
     backup_errors: Vec<String>,
 }
@@ -142,6 +146,7 @@ impl Default for ApplicationModel {
             recovery_errors: Vec::new(),
             backup_store,
             backup_limit: DEFAULT_BACKUP_HISTORY_LIMIT,
+            backup_total_limit_bytes: DEFAULT_BACKUP_TOTAL_LIMIT_MB * 1024 * 1024,
             backup_enabled: true,
             backup_errors: Vec::new(),
         }
@@ -165,6 +170,7 @@ impl ApplicationModel {
             suppressed_recovery_ids: HashSet::new(),
             recovery_errors: Vec::new(),
             backup_limit: DEFAULT_BACKUP_HISTORY_LIMIT,
+            backup_total_limit_bytes: DEFAULT_BACKUP_TOTAL_LIMIT_MB * 1024 * 1024,
             backup_enabled: true,
             backup_errors: Vec::new(),
         }
@@ -620,17 +626,46 @@ impl ApplicationModel {
             .snapshot_bytes()?;
         self.backup_store
             .record(&path, &bytes, self.backup_limit)
-            .map(|_| ())
+            .map(|_| ())?;
+        self.enforce_backup_budget();
+        Ok(())
     }
 
     pub fn backup_errors(&self) -> &[String] {
         &self.backup_errors
     }
 
-    /// Turns saved-version history on or off and bounds how many copies are kept.
-    pub fn set_backup_history(&mut self, enabled: bool, limit: usize) {
+    /// Turns saved-version history on or off, bounds how many copies are kept
+    /// per project, and bounds the whole store.
+    pub fn set_backup_history(&mut self, enabled: bool, limit: usize, total_limit_mb: u64) {
         self.backup_enabled = enabled;
         self.backup_limit = limit.clamp(1, 100);
+        self.backup_total_limit_bytes = total_limit_mb.clamp(
+            backup::MIN_BACKUP_TOTAL_LIMIT_MB,
+            backup::MAX_BACKUP_TOTAL_LIMIT_MB,
+        ) * 1024
+            * 1024;
+    }
+
+    /// The bytes every stored version takes; the settings page shows it so the
+    /// budget is not a number without a reference point.
+    pub fn backup_total_bytes(&self) -> u64 {
+        self.backup_store.total_size()
+    }
+
+    /// Prunes the oldest versions across projects until the store fits its
+    /// budget. Manual and automatic saves both call this.
+    fn enforce_backup_budget(&mut self) {
+        if !self.backup_enabled {
+            return;
+        }
+        match self
+            .backup_store
+            .enforce_total_budget(self.backup_total_limit_bytes)
+        {
+            Ok(_) => {}
+            Err(error) => self.backup_errors.push(error),
+        }
     }
 
     fn record_backup(&mut self, project_index: usize) {
@@ -658,6 +693,7 @@ impl ApplicationModel {
         if let Err(error) = self.backup_store.record(&path, &bytes, self.backup_limit) {
             self.backup_errors.push(error);
         }
+        self.enforce_backup_budget();
     }
 
     pub fn tabs(&self) -> Vec<ProjectTab> {
@@ -1160,12 +1196,12 @@ mod tests {
         assert_eq!(app.backup_entries(0).len(), 2);
 
         // The configured limit prunes older copies immediately.
-        app.set_backup_history(true, 1);
+        app.set_backup_history(true, 1, 512);
         app.record_backup_now(0).expect("a version is recorded");
         assert_eq!(app.backup_entries(0).len(), 1);
 
         // Turning history off refuses manual versions as well.
-        app.set_backup_history(false, 20);
+        app.set_backup_history(false, 20, 512);
         assert!(app.record_backup_now(0).is_err());
 
         std::fs::remove_file(path).expect("saved project removes");

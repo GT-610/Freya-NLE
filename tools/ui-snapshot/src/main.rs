@@ -214,6 +214,9 @@ fn main() {
                 .unwrap_or(2)
                 .clamp(0, 8);
             ui.set_tab_index(tab);
+            // The General page shows the backup budget; a sample size line makes
+            // that row reviewable without touching the real store.
+            ui.set_backup_size_text("12.4 MB of 512 MB in use".into());
             ui.show().expect("show the system settings window");
             save(&window, width, height, &output_name("system", preference));
         }

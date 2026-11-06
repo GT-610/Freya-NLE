@@ -454,12 +454,19 @@ pub(super) fn sync_scene_settings(
 }
 
 pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &SettingsStore) {
+    // The size line is informational, so an unreadable store simply shows the
+    // disk usage as zero rather than blocking the page.
+    window.set_backup_size_text(SharedString::from(backup_size_line(settings)));
     let defaults = project_defaults(settings);
     window.set_confirm_unsaved(settings.bool_value("showConfirmOnClose", true));
     window.set_auto_backup(settings.bool_value("enableAutoBackup", true));
     window.set_backup_interval(settings.i32_value("backupInterval", 5).clamp(1, 60));
     window.set_backup_history_enabled(settings.bool_value("backupHistoryEnabled", true));
     window.set_backup_history_limit(settings.i32_value("backupHistoryLimit", 20).clamp(1, 100));
+    window.set_backup_history_total_limit(settings.i32_value(
+        "backupHistoryTotalLimitMb",
+        freya_nle_app::backup::DEFAULT_BACKUP_TOTAL_LIMIT_MB as i32,
+    ));
     window
         .set_recent_project_max_count(settings.i32_value("recentProjectMaxCount", 10).clamp(1, 50));
     window.set_undo_count(settings.i32_value("undoCount", 32).clamp(1, 1_000));
@@ -641,6 +648,39 @@ fn choice_index_f64(value: f64, choices: &[f64], fallback: usize) -> i32 {
         .unwrap_or(fallback) as i32
 }
 
+/// `12.4 MB of 512 MB` summary for the backup budget row.
+fn backup_size_line(settings: &SettingsStore) -> String {
+    let used = freya_nle_app::backup::stored_bytes();
+    let limit = settings
+        .i32_value(
+            "backupHistoryTotalLimitMb",
+            freya_nle_app::backup::DEFAULT_BACKUP_TOTAL_LIMIT_MB as i32,
+        )
+        .clamp(
+            freya_nle_app::backup::MIN_BACKUP_TOTAL_LIMIT_MB as i32,
+            freya_nle_app::backup::MAX_BACKUP_TOTAL_LIMIT_MB as i32,
+        );
+    match current_ui_language() {
+        crate::localization::UiLanguage::SimplifiedChinese => {
+            format!("已用 {} / 上限 {limit} MB", backup_size_text(used))
+        }
+        crate::localization::UiLanguage::Japanese => {
+            format!("{} 使用 / 上限 {limit} MB", backup_size_text(used))
+        }
+        _ => format!("{} of {limit} MB in use", backup_size_text(used)),
+    }
+}
+
+fn backup_size_text(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 fn plugin_paths_text(settings: &SettingsStore, format: &str) -> String {
     settings
         .value(&format!("pluginPaths{format}"))
@@ -659,6 +699,15 @@ pub(super) fn apply_runtime_settings(model: &mut ApplicationModel, settings: &Se
     model.set_backup_history(
         settings.bool_value("backupHistoryEnabled", true),
         settings.i32_value("backupHistoryLimit", 20).clamp(1, 100) as usize,
+        settings
+            .i32_value(
+                "backupHistoryTotalLimitMb",
+                freya_nle_app::backup::DEFAULT_BACKUP_TOTAL_LIMIT_MB as i32,
+            )
+            .clamp(
+                freya_nle_app::backup::MIN_BACKUP_TOTAL_LIMIT_MB as i32,
+                freya_nle_app::backup::MAX_BACKUP_TOTAL_LIMIT_MB as i32,
+            ) as u64,
     );
     model.set_undo_limit(settings.i32_value("undoCount", 32).max(1) as usize);
 }
@@ -706,6 +755,13 @@ fn system_settings_replacement(
         (
             "backupHistoryLimit",
             serde_json::json!(window.get_backup_history_limit().clamp(1, 100)),
+        ),
+        (
+            "backupHistoryTotalLimitMb",
+            serde_json::json!(window.get_backup_history_total_limit().clamp(
+                freya_nle_app::backup::MIN_BACKUP_TOTAL_LIMIT_MB as i32,
+                freya_nle_app::backup::MAX_BACKUP_TOTAL_LIMIT_MB as i32,
+            )),
         ),
         (
             "recentProjectMaxCount",

@@ -1559,6 +1559,9 @@ msgstr "清除默认值"
 msgid "Keep a version history of saved projects"
 msgstr "保留已保存项目的版本历史"
 
+msgid "Backup storage limit (MB)"
+msgstr "备份占用上限（MB）"
+
 msgid "Versions kept per project"
 msgstr "每个项目保留的版本数"
 

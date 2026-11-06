@@ -123,6 +123,9 @@ export component SystemSettingsWindow inherits Window {
     in-out property <int> backup-interval: 5;
     in-out property <bool> backup-history-enabled: true;
     in-out property <int> backup-history-limit: 20;
+    in-out property <int> backup-history-total-limit: 512;
+    // What the store currently takes, so the budget has a reference point.
+    in property <string> backup-size-text: "";
     in-out property <int> recent-project-max-count: 10;
     in-out property <int> undo-count: 32;
     in-out property <int> max-image-size: 8192;
@@ -301,6 +304,21 @@ export component SystemSettingsWindow inherits Window {
                             minimum: 1;
                             maximum: 100;
                             interactive: root.backup-history-enabled;
+                        }
+                        SystemSettingSpinRow {
+                            label: @tr("Backup storage limit (MB)");
+                            value <=> root.backup-history-total-limit;
+                            minimum: 16;
+                            maximum: 16384;
+                            interactive: root.backup-history-enabled;
+                        }
+                        // Only shown once the size has been measured, so an
+                        // unreadable store does not leave a blank line.
+                        if root.backup-size-text != "" : Text {
+                            text: root.backup-size-text;
+                            color: AppTheme.muted-foreground;
+                            font-size: 0.75rem;
+                            wrap: word-wrap;
                         }
                         SystemSettingSpinRow {
                             label: @tr("Number of recent projects to keep");

@@ -17,6 +17,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// How many saved versions one project keeps by default.
 pub const DEFAULT_BACKUP_HISTORY_LIMIT: usize = 20;
+/// How much disk the whole backup store may take by default.
+pub const DEFAULT_BACKUP_TOTAL_LIMIT_MB: u64 = 512;
+/// The smallest budget the settings allow, so pruning cannot wipe the store.
+pub const MIN_BACKUP_TOTAL_LIMIT_MB: u64 = 16;
+/// The largest budget the settings allow.
+pub const MAX_BACKUP_TOTAL_LIMIT_MB: u64 = 16_384;
 
 const BACKUP_EXTENSION: &str = "freya";
 /// Records which project a backup directory belongs to, so the history can be
@@ -49,6 +55,21 @@ pub struct BackupProject {
 struct ProjectManifest {
     path: String,
     name: String,
+}
+
+/// Bytes the on-disk backup store takes, for the settings page.
+///
+/// A UI thread reads this once per page open, so it goes through the same
+/// scanner the pruning uses instead of keeping a running total in settings.
+pub fn stored_bytes() -> u64 {
+    #[cfg(not(test))]
+    {
+        BackupStore::new().total_size()
+    }
+    #[cfg(test)]
+    {
+        0
+    }
 }
 
 /// Directory-backed store for saved project versions.
@@ -86,6 +107,63 @@ impl BackupStore {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         self.root.join(key)
+    }
+
+    /// Removes the oldest versions across every project until the whole store
+    /// fits `budget_bytes`.
+    ///
+    /// The newest version overall always survives, so a budget smaller than one
+    /// project still leaves a single restorable copy instead of an empty list.
+    /// Returns how many files were deleted.
+    pub(crate) fn enforce_total_budget(&self, budget_bytes: u64) -> Result<usize, String> {
+        let Ok(read_dir) = fs::read_dir(&self.root) else {
+            return Ok(0);
+        };
+        let mut versions = read_dir
+            .flatten()
+            .filter(|entry| valid_project_key(&entry.file_name().to_string_lossy()))
+            .flat_map(|entry| {
+                let directory = entry.path();
+                list_entries(&directory)
+                    .into_iter()
+                    .map(move |backup| (directory.clone(), backup))
+            })
+            .collect::<Vec<_>>();
+        if versions.is_empty() {
+            return Ok(0);
+        }
+        let mut total = versions.iter().map(|(_, entry)| entry.size).sum::<u64>();
+        versions.sort_by(|left, right| left.1.file_name.cmp(&right.1.file_name));
+        let mut removed = 0;
+        // The last element is the newest version anywhere, and it stays even
+        // when it alone exceeds the budget.
+        for (directory, entry) in versions.iter().take(versions.len() - 1) {
+            if total <= budget_bytes {
+                break;
+            }
+            let path = directory.join(&entry.file_name);
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    total = total.saturating_sub(entry.size);
+                    removed += 1;
+                }
+                Err(error) => return Err(format!("{}: {error}", path.display())),
+            }
+        }
+        Ok(removed)
+    }
+
+    /// The bytes every stored version takes, for the settings description.
+    pub(crate) fn total_size(&self) -> u64 {
+        let Ok(read_dir) = fs::read_dir(&self.root) else {
+            return 0;
+        };
+        read_dir
+            .flatten()
+            .filter(|entry| valid_project_key(&entry.file_name().to_string_lossy()))
+            .flat_map(|entry| list_entries(&entry.path()))
+            .map(|entry| entry.size)
+            .sum()
     }
 
     /// Writes one copy and prunes older ones. A `limit` of zero disables it.
@@ -411,6 +489,47 @@ mod tests {
         assert_eq!(projects[0].label, "");
         assert_eq!(projects[0].path, None);
         assert_eq!(projects[0].entries.len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_total_budget_prunes_the_oldest_versions_across_projects() {
+        let root = test_root("budget");
+        let store = BackupStore::with_root(root.clone());
+        // Six 100-byte versions spread over two projects.
+        for index in 0..3u8 {
+            let body = vec![b'a'; 100];
+            store
+                .record(&root.join("one.freya"), &body, 10)
+                .expect("first project records");
+            let body = vec![b'b'; 100];
+            store
+                .record(&root.join("two.freya"), &body, 10)
+                .expect("second project records");
+            let _ = index;
+        }
+        assert_eq!(store.total_size(), 600);
+        // Room for four versions: the two oldest go, newest everywhere stays.
+        let removed = store.enforce_total_budget(400).expect("budget prunes");
+        assert_eq!(removed, 2);
+        assert_eq!(store.total_size(), 400);
+        let projects = store.projects();
+        let newest = projects
+            .iter()
+            .flat_map(|project| project.entries.iter())
+            .map(|entry| entry.file_name.clone())
+            .max()
+            .expect("a newest version remains");
+        assert!(
+            projects
+                .iter()
+                .flat_map(|project| project.entries.iter())
+                .any(|entry| entry.file_name == newest)
+        );
+        // Zero bytes still leaves one restorable copy.
+        let removed = store.enforce_total_budget(0).expect("empty budget prunes");
+        assert_eq!(removed, 3);
+        assert_eq!(store.total_size(), 100);
         let _ = fs::remove_dir_all(root);
     }
 
