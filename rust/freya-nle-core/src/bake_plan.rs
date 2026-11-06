@@ -82,6 +82,12 @@ pub struct CameraRenderPlan {
     pub field_of_view_degrees: f32,
 }
 
+/// Bound for one evaluated parameter before the `f64` to `f32` cast.
+///
+/// Far outside anything the interface can set, but small enough that the cast
+/// cannot overflow to infinity.
+const MAX_EVALUATED_VALUE: f64 = 1.0e30;
+
 /// Evaluated transform values for a render layer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvaluatedTransform {
@@ -887,7 +893,11 @@ impl CachedEffect {
     }
 
     fn float(&self, name: &str, frame: i32) -> f32 {
-        qt_double(Some(&self.value(name, frame))) as f32
+        // A JSON number is an `f64`, so a hand-edited `1e300` is valid input but
+        // becomes `inf` once cast. The compositor cannot use that, so the value
+        // is bounded before the cast rather than poisoning the frame.
+        qt_double(Some(&self.value(name, frame))).clamp(-MAX_EVALUATED_VALUE, MAX_EVALUATED_VALUE)
+            as f32
     }
 
     fn float_or(&self, name: &str, fallback: f32, frame: i32) -> f32 {

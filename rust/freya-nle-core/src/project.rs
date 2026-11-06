@@ -771,6 +771,187 @@ mod tests {
         serde_json::from_slice(&bytes).expect("normalized JSON")
     }
 
+    /// Parses, plans and evaluates without panicking, whichever way parsing goes.
+    ///
+    /// A damaged file must either be rejected or normalised into something the
+    /// render plan can consume; neither path may panic, and the evaluation is
+    /// included because that is where bad numbers would surface.
+    fn assert_survives(bytes: &[u8]) -> bool {
+        let Ok(document) = parse_project_document(bytes) else {
+            return false;
+        };
+        let mut planned = false;
+        for scene in &document.scenes {
+            let Ok(mut plan) = crate::api::SceneRenderPlan::from_document(&document, scene.id)
+            else {
+                continue;
+            };
+            for frame in [0, 1, 57] {
+                let plan_frame = plan.evaluate(frame);
+                // A normalised document must not reach the compositor with
+                // numbers it cannot use.
+                for layer in &plan_frame.layers {
+                    let transform = layer.transform;
+                    assert!(
+                        transform.x.is_finite()
+                            && transform.y.is_finite()
+                            && transform.z.is_finite()
+                            && transform.scale_percent.is_finite()
+                            && transform.opacity.is_finite()
+                            && transform.aspect.is_finite()
+                            && transform.rotation_x.is_finite()
+                            && transform.rotation_y.is_finite()
+                            && transform.rotation_z.is_finite()
+                            && transform.pivot_x.is_finite()
+                            && transform.pivot_y.is_finite()
+                            && transform.pivot_z.is_finite(),
+                        "a normalised document produced a non-finite transform: {transform:?}"
+                    );
+                    if let Some(shape) = &layer.shape {
+                        assert!(
+                            shape.width.is_finite()
+                                && shape.height.is_finite()
+                                && shape.sweep_degrees.is_finite()
+                                && shape.rotation_degrees.is_finite(),
+                            "a normalised document produced a non-finite shape: {shape:?}"
+                        );
+                    }
+                    if let Some(text) = &layer.text {
+                        assert!(
+                            text.font_size.is_finite()
+                                && text.letter_spacing.is_finite()
+                                && text.runs.iter().all(|run| run.font_size.is_finite()),
+                            "a normalised document produced non-finite text metrics"
+                        );
+                    }
+                }
+            }
+            planned = true;
+        }
+        planned
+    }
+
+    #[test]
+    fn malformed_project_documents_are_rejected_without_panicking() {
+        let valid = serde_json::to_vec(&serde_json::json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 30.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 120}],
+            "clips": [{
+                "id": 1, "sceneId": 1, "type": "text", "start": 0, "duration": 60, "layer": 0,
+                "effects": [{"id": "text", "params": {"text": "hello"}}]
+            }]
+        }))
+        .expect("serialize the fixture");
+
+        let mut corpus: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"{".to_vec(),
+            b"{}".to_vec(),
+            b"[]".to_vec(),
+            b"null".to_vec(),
+            b"{\"version\":3}".to_vec(),
+            b"{\"version\":99}".to_vec(),
+            vec![0xff, 0xfe, 0x00],
+            serde_json::to_vec(&serde_json::json!({
+                "version": 3,
+                "settings": {"width": 0, "height": -5, "fps": 0.0, "sampleRate": -1},
+                "scenes": [{"id": 1, "duration": -10, "lockedLayers": [-3, 999]}],
+                "clips": [{"id": 1, "sceneId": 1, "type": "video", "start": -20,
+                    "duration": -30, "layer": 100000, "effects": "not an array"}]
+            }))
+            .expect("serialize"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 3,
+                "settings": {"width": 1e300, "height": 1e300, "fps": 1e300},
+                "scenes": [{"id": 1, "duration": 1e300}],
+                "clips": [{"id": 1, "sceneId": 1, "type": "rect", "start": 0, "duration": 10,
+                    "layer": 0, "effects": [{"id": "transform", "params": {"x": 1e300, "scale": -1e300}}]}]
+            }))
+            .expect("serialize"),
+        ];
+        // Every truncation of a valid document, which is what a half-written
+        // file looks like after a crash.
+        corpus.extend(
+            (0..valid.len())
+                .step_by(17)
+                .map(|end| valid[..end].to_vec()),
+        );
+        // Deeper nesting than serde's recursion limit must fail, not overflow.
+        let deep = format!(
+            "{{\"version\":3,\"scenes\":{}{}{}",
+            "[".repeat(2000),
+            "]".repeat(2000),
+            "}"
+        );
+        corpus.push(deep.into_bytes());
+
+        let accepted = corpus.iter().filter(|bytes| assert_survives(bytes)).count();
+        // The corpus has to reach the planning path at least once, otherwise
+        // the test would only prove that garbage is rejected.
+        assert!(accepted > 0, "no malformed document reached the plan");
+    }
+
+    #[test]
+    fn randomly_mutated_documents_never_panic() {
+        let valid = serde_json::to_vec(&serde_json::json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 30.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 120}],
+            "clips": [{
+                "id": 1, "sceneId": 1, "type": "text", "start": 0, "duration": 60, "layer": 0,
+                "effects": [{"id": "text", "params": {"text": "hello", "fontSize": 48}}]
+            }]
+        }))
+        .expect("serialize the fixture");
+
+        // A fixed linear-congruential generator: the corpus is different on
+        // every iteration but identical between runs, so a failure is
+        // reproducible.
+        let mut accepted = 0usize;
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        for _ in 0..300 {
+            let mut bytes = valid.clone();
+            match next() % 4 {
+                0 => {
+                    // Flip a byte: the common single-byte corruption.
+                    let index = next() % bytes.len();
+                    bytes[index] ^= (next() % 256) as u8;
+                }
+                1 => {
+                    // Truncate, as an interrupted write would.
+                    let end = next() % bytes.len();
+                    bytes.truncate(end);
+                }
+                2 => {
+                    // Delete a slice.
+                    let start = next() % bytes.len();
+                    let end = (start + 1 + next() % 8).min(bytes.len());
+                    bytes.drain(start..end);
+                }
+                _ => {
+                    // Insert junk.
+                    let index = next() % bytes.len();
+                    let junk = (next() % 4) as u8;
+                    bytes.insert(index, [b'"', b'{', b'0', 0xff][junk as usize]);
+                }
+            }
+            accepted += usize::from(assert_survives(&bytes));
+        }
+        // Single-byte damage often leaves a parseable document; the count is a
+        // guard that the loop still exercises the normalisation path.
+        assert!(
+            accepted > 10,
+            "only {accepted} mutated documents reached the plan"
+        );
+    }
+
     #[test]
     fn normalizes_versions_settings_scenes_and_clips() {
         let normalized = normalize(
