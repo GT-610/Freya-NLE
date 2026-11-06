@@ -1931,14 +1931,27 @@ fn text_render_plan(
         8 => TextAlignment::Justify,
         _ => TextAlignment::Center,
     };
-    let content = value_as_string(value("text"), "テキスト");
+    let raw_content = value_as_string(value("text"), "テキスト");
+    // Scripts run before the control-character parse, so their output takes
+    // part in timing, colours and the rest of the text pipeline.
+    let seconds = relative_frame as f64 / fps.max(0.001);
+    let content = crate::expression::expand_text_scripts(
+        &raw_content,
+        &crate::expression::TextScriptClock {
+            time: seconds,
+            total_time: duration_frames as f64 / fps.max(0.001),
+            frame: relative_frame,
+            total_frames: duration_frames,
+            frame_rate: fps,
+        },
+    );
     let font_family = value_as_string(value("fontFamily"), "sans-serif");
     let font_size = value_as_f64(value("fontSize"), 48.0).clamp(1.0, 4_096.0) as f32;
     let letter_spacing = value_as_f64(value("letterSpacing"), 0.0) as f32;
     let color = value_as_color(value("color"), "#ffffff");
     let outline_color = value_as_color(value("outlineColor"), "#000000");
     let speed = value_as_f64(value("speed"), 0.0).clamp(0.0, 1_000.0) as f32;
-    let time = relative_frame as f32 / fps.max(0.001) as f32;
+    let time = seconds as f32;
     let line_spacing = value_as_f64(value("lineSpacing"), 0.0).max(0.0) as f32;
     let bold = value_as_bool(value("fontBold"), false);
     let italic = value_as_bool(value("fontItalic"), false);
@@ -3089,6 +3102,85 @@ mod tests {
         // The clear swaps the visible block at one second.
         assert_eq!(runs_at(&mut plan, 5, 2), "one");
         assert_eq!(runs_at(&mut plan, 10, 2), "two");
+    }
+
+    #[test]
+    fn text_scripts_expand_before_control_characters_are_parsed() {
+        let input = json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 10, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Scene", "duration": 120}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 60,
+                "layer": 0,
+                "params": {},
+                "audioPlugins": [],
+                "effects": [{
+                    "id": "text",
+                    "name": "Text",
+                    "enabled": true,
+                    "params": {
+                        "text": "A<?=2+3?>B<#ff0000>C",
+                        "fontSize": 48,
+                        "color": "#ffffff"
+                    }
+                }]
+            }, {
+                "id": 2,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 60,
+                "layer": 1,
+                "params": {},
+                "audioPlugins": [],
+                "effects": [{
+                    "id": "text",
+                    "name": "Text",
+                    "enabled": true,
+                    "params": {
+                        "text": "<? mes(math.floor(obj.time)) ?>/<? mes(obj.totalframe) ?>",
+                        "fontSize": 48
+                    }
+                }]
+            }]
+        });
+        let bytes = serde_json::to_vec(&input).expect("serialize project fixture");
+        let document = crate::project::parse_project_document(&bytes).expect("project parses");
+        let mut plan = SceneRenderPlan::from_document(&document, 1).expect("scene plan builds");
+        let frame = plan.evaluate(0);
+        let text = frame
+            .layers
+            .iter()
+            .find(|layer| layer.clip_id == 1)
+            .and_then(|layer| layer.text.as_ref())
+            .expect("text layer renders");
+        assert_eq!(text.content, "A5B<#ff0000>C");
+        assert_eq!(text.runs.len(), 2);
+        assert_eq!(text.runs[0].text, "A5B");
+        assert_eq!(text.runs[1].text, "C");
+        assert_eq!(
+            (
+                text.runs[1].color.red,
+                text.runs[1].color.green,
+                text.runs[1].color.blue
+            ),
+            (0xff, 0x00, 0x00)
+        );
+
+        // At 10 fps the 15th frame is 1.5 s, so the script prints 1 of 60.
+        let frame = plan.evaluate(15);
+        let text = frame
+            .layers
+            .iter()
+            .find(|layer| layer.clip_id == 2)
+            .and_then(|layer| layer.text.as_ref())
+            .expect("script text layer renders");
+        assert_eq!(text.content, "1/60");
     }
 
     #[test]

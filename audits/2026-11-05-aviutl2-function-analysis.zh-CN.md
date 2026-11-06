@@ -305,7 +305,7 @@ YUV 转换在 `ファイル出力の設定` 里关闭/开启。更关键的是**
 | B3（已实现） | 文本控制字符（第一批）：`<#...>` 文字色与影缘色、`<s...>` 绝对/相对字号、`<gw...>` 字距 | 同一段文本在预览与导出中一致；未识别或写错的指令按字面显示 |
 | B3.5（已实现） | 显示时序：`<r>` 显示速度、`<w>` 等待、`<c>` 清屏与块切换；文本对象新增「表示速度」参数 | 逐帧显示在预览/导出一致；`<r0>` 即时显示；`<c>` 之后按时切换块 |
 | B3.6（部分实现） | 字体与样式：`<@字体>`/`<@±BIS>`、扩展 `<s>`、`<// 注释 //>` 与 `</>` 块分隔 | 字体与样式在预览/导出一致；未知写法保持字面 |
-| B3.7（部分实现） | 文本控制字符（第四批）：`<gh>` 行距、`<p>` 坐标、`<tw>/<th>` 比例、`<tr>` 旋转、注音、表情已实现；内嵌脚本待做 | 坐标在预览/导出一致；表情缺图时回退文字 |
+| B3.7（部分实现） | 文本控制字符（第四批）：`<gh>` 行距、`<p>` 坐标、`<tw>/<th>` 比例、`<tr>` 旋转、注音、表情、内嵌脚本 `<?...?>` 已实现；表情缩放与其余 `obj` 字段待做 | 坐标在预览/导出一致；表情缺图时回退文字；脚本按帧输出 |
 | B4（部分实现） | 效果级剪贴板：复制、复制自身及之后、剪切、粘贴 | 复制"自身及之后"能完整替换；一次操作一条撤销；剪贴板为空时拒绝 |
 | B4.5（部分实现） | 新建/初始化默认值：效果右键「保存为默认值 / 清除默认值」，新增效果与新建对象时应用 | 默认值只影响新对象；未知参数被忽略 |
 | B4.6（已实现） | 逐项预设的作用域选择（只覆盖选中参数） | 预设可只覆盖选中参数 |
@@ -1244,6 +1244,61 @@ AviUtl2 的入口是"数值项目名称的点击菜单"；此前只能在效果�
 - `clippy --no-deps` 与 `fmt --check` 干净；`--frames 20` 启动冒烟 `main_frames: 3`、
   `wgpu_errors: []`。
 
+### 7.28 B3.7（第七批）：内嵌脚本 `<?...?>`
+
+文本里的 `<?...?>` 在每一帧求值，输出替换整段指令。AviUtl2 的语义在二进制里可以
+逐条确认，官方文档（控制字符的「スクリプト」一节与 Lua 变量表）也给出了一致的
+说明；本批按这两边实现，而不是按推测：
+
+- `0x1404599a8` 的正则 `<\?([^\x00]*?)\?>` 决定块边界（本实现用同样的"第一个
+  `?>`"规则，未闭合时保留字面）；
+- `FUN_1401af8c0` 在块首是 `=` 时删掉 `=`，改写成 `mes(<余下内容>)` 再交给脚本
+  宿主，因此 `<?=expr?>` 不是"表达式求值"，而是 `mes(expr)` 的语法糖；
+- `0x140480c60` 的 `mes(` 与 `0x140490058` 起的字段表（`time`、`totaltime`、
+  `totalframe`、`framerate`、`screen_w`、`screen_h`、`effect_layer`、
+  `originframe`、`frame_s`、`frame_e`、`ox`、`oy`、`z`、`rx`、`ry`、`rz`、`oz`、
+  `scene_id`、`index`、`num`、`h`、`id`、`effect_id`）说明脚本通过 `mes()` 输出，
+  `obj` 带的是对象与时间信息。
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| core | `expression.rs` | `TextScriptClock`（时间、总时长、帧、总帧、帧率）与 `expand_text_scripts`：逐块替换，`=` 块改写成 `mes(...)`；`TEXT_SCRIPT_PRELUDE` 建 `__text` 收集器、`mes` 与 `setfenv` 环境；失败保留字面 |
+| core | `bake_plan.rs` | `text_render_plan` 先展开脚本再 `parse_text_runs_at`，脚本输出照常参与颜色、字距、`<r>/<w>/<c>` 计时 |
+
+语义与取舍：
+
+- **输出靠 `mes()`**：与 AviUtl 一致；脚本只 `return` 不 `mes` 时该块输出为空，因为
+  AviUtl2 的宿主只取 `mes` 累积的字符串。`obj.mes(text)` 与 `mes(text)` 等价，两种
+  写法都提供（官方 Lua 文档把 `obj.mes` 列为正式形式，`mes` 是省略写法）。
+- **每块一个环境**：`setfenv(1, __env)` 让脚本里的赋值落在临时表，不污染共享 VM，
+  避免上一个对象/上一帧的全局变量漏进下一个脚本；`_G` 仍可读，`math`/`string` 可用。
+- **只读的一部分 `obj`**：官方文档把 `x/y/z`、`w/h`、`screen_w/h`、`framerate`、
+  `frame/time`、`totalframe/totaltime`、`layer/index/num`、`id/effect_id`、
+  `frame_s/frame_e`、`effect_layer/originframe/scene_id` 标为只读（ReadOnly ○），
+  其余 `ox/oy/oz`、`rx/ry/rz`、`cx/cy/cz`、`sx/sy/sz`、`zoom/aspect/alpha` 可写，
+  官方示例 `<?obj.rz=obj.time*360?>` 就是改写对象。本批只提供只读时间字段，可写
+  字段需要把脚本结果回灌到变换与效果求值里，记入 B3.7 的后续。
+- **失败保留字面**：语法错误、运行时错误、超长（>10 000 字符）都让整块原样显示，
+  作者能看到是哪一条没跑起来；AviUtl2 出错时的具体呈现未在二进制里确认，这里选了
+  更保守、可诊断的一种。
+- **尚未暴露的只读字段**：`screen_w/h`（场景尺寸没有传进文本计划）、
+  `frame_s/frame_e/effect_layer/originframe/scene_id`、`layer`、`w/h`（文本的像素
+  尺寸要等排版结果，存在先有鸡还是先有蛋的问题）与 `index/num/id/effect_id`
+  需要把场景与时间线上下文继续下传，本批只给时间四件套与 `framerate`，其余记入
+  B3.7 的后续。
+
+验证：
+
+- `cargo test --workspace --all-features --locked` 通过（core 209、app 275、
+  desktop 64、render 48、preview 25）；
+- core 测试：`<?=4+8?>` → `12`、`string.format` → `05`、`<? mes(obj.time) ?>` →
+  `1.5`、`obj.mes` 与多条 `mes` 拼接、`totaltime/totalframe`、失败与未闭合保留
+  字面、两个块之间全局变量不串；
+- bake 测试：`A<?=2+3?>B<#ff0000>C` 在帧计划里成为 `A5B` + 红色 `C`；10 fps 下
+  第 15 帧的 `math.floor(obj.time)` 为 `1`，`obj.totalframe` 为 `60`；
+- `clippy --no-deps` 与 `fmt --check` 干净；`--frames 20` 启动冒烟
+  `main_frames: 3`、`timeline_frames: 3`、`wgpu_errors: []`。
+
 ## 8. 验收与风险
 
 验收以可观察行为为准：标记在标尺上有清晰位置；前后跳转不越过场景时长；备注
@@ -1281,6 +1336,6 @@ AviUtl2 的入口是"数值项目名称的点击菜单"；此前只能在效果�
 | F2 | `aviutl2.exe` `.rdata` 宽字符串（偏移见正文） | 命令、设置项、面板标题 |
 | F3 | `aviutl2.exe` `.rdata` ASCII 符号 | 组件/对话框/服务类名与职责 |
 | F4 | `AviUtl2/style.conf`、`system.conf` | 界面度量、被拒绝的外部模块 |
-| F5 | <https://docs.aviutl2.jp/usage.md> | 官方用法与窗口职责 |
+| F5 | <https://docs.aviutl2.jp/usage.md>（控制字符与「スクリプト」）、[Luaスクリプト](https://github.com/aviutl2/aviutl2_modern_docs/blob/main/docs/lua/index.md)（`obj` 字段与 `obj.mes`） | 官方用法、窗口职责、文本脚本语义 |
 | F6 | [界面分析](./2026-11-05-aviutl2-ui-analysis.zh-CN.md) | 已完成的界面批次与度量 |
 | F7 | `rust/` 源码与 `CHANGELOG.md`（`8c1efccc`） | Freya 现状对照 |
