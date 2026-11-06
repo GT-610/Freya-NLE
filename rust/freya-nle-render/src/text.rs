@@ -1,10 +1,10 @@
 use fontdb::{Database, Family, ID, Query, Stretch, Style, Weight};
-use freya_nle_core::api::{RgbaColor, TextAlignment, TextAnchor, TextRenderPlan};
+use freya_nle_core::api::{RgbaColor, RubyRun, TextAlignment, TextAnchor, TextRenderPlan};
 use freya_nle_media::VideoFrame;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::{Face, UnicodeBuffer};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -517,6 +517,8 @@ struct RunSegment {
     line_spacing: Option<f32>,
     /// `<p...>` directive carried by the run.
     anchor: TextAnchor,
+    /// Ruby block membership, if the run is inside `</>...`.
+    ruby: Option<RubyRun>,
     /// Index into the per-run faces passed to the layout.
     face_index: usize,
     strikethrough: bool,
@@ -532,8 +534,12 @@ struct StrikeLine {
 }
 
 struct ShapedSegment {
+    /// Index of the run this segment came from, so ruby blocks can find their
+    /// base span after layout.
+    run_index: usize,
     glyphs: Vec<GlyphPlacement>,
     width: f32,
+    ascent: f32,
     scale: f32,
     x_scale: f32,
     y_scale: f32,
@@ -565,6 +571,83 @@ struct LineAnchor {
 struct DraftLine {
     segments: Vec<(usize, String)>,
     anchor: Option<LineAnchor>,
+}
+
+/// The base text and furigana of one `</>...` block, shaped before layout.
+#[derive(Default)]
+struct RubyBlockShape {
+    base_runs: Vec<usize>,
+    ruby_runs: Vec<usize>,
+    segments: Vec<ShapedSegment>,
+    width: f32,
+    ascent: f32,
+    descent: f32,
+    scale: f32,
+    expand: bool,
+}
+
+const RUBY_GAP: f32 = 2.0;
+
+fn collect_ruby_blocks(segments: &[RunSegment]) -> BTreeMap<u32, RubyBlockShape> {
+    let mut blocks: BTreeMap<u32, RubyBlockShape> = BTreeMap::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let Some(ruby) = segment.ruby else {
+            continue;
+        };
+        let block = blocks.entry(ruby.block).or_insert_with(|| RubyBlockShape {
+            scale: ruby.scale,
+            expand: ruby.expand,
+            ..RubyBlockShape::default()
+        });
+        if ruby.base {
+            block.base_runs.push(index);
+        } else {
+            block.ruby_runs.push(index);
+            block.scale = ruby.scale;
+            block.expand = ruby.expand;
+        }
+    }
+    // A block without both halves is a stray directive, not a ruby.
+    blocks.retain(|_, block| !block.base_runs.is_empty() && !block.ruby_runs.is_empty());
+    blocks
+}
+
+fn shape_ruby_block(block: &mut RubyBlockShape, segments: &[RunSegment], faces: &[Face<'_>]) {
+    let mut width = 0.0_f32;
+    let mut ascent = 0.0_f32;
+    let mut descent = 0.0_f32;
+    for &index in &block.ruby_runs {
+        let segment = &segments[index];
+        let face = &faces[segment.face_index];
+        let units_per_em = face.units_per_em().max(1) as f32;
+        let font_size = (segment.font_size * block.scale).max(1.0);
+        let scale = font_size / units_per_em;
+        let layout = shape_line(face, &segment.text, scale, segment.letter_spacing);
+        let segment_ascent = (f32::from(face.ascender()) * scale).max(font_size * 0.5);
+        let segment_descent = (-f32::from(face.descender()) * scale).max(font_size * 0.1);
+        width += layout.width;
+        ascent = ascent.max(segment_ascent);
+        descent = descent.max(segment_descent);
+        block.segments.push(ShapedSegment {
+            run_index: index,
+            glyphs: layout.glyphs,
+            width: layout.width,
+            ascent: segment_ascent,
+            scale,
+            x_scale: segment.x_scale,
+            y_scale: segment.y_scale,
+            rotation: segment.rotation,
+            color: segment.color,
+            outline_color: segment.outline_color,
+            face_index: segment.face_index,
+            font_size,
+            strikethrough: false,
+            line_spacing: None,
+        });
+    }
+    block.width = width;
+    block.ascent = ascent;
+    block.descent = descent;
 }
 
 struct RunPath {
@@ -611,6 +694,7 @@ fn rasterize_runs(
             rotation: run.rotation,
             line_spacing: run.line_spacing,
             anchor: run.anchor,
+            ruby: run.ruby,
             face_index: index,
             strikethrough: run.strikethrough,
         })
@@ -630,6 +714,11 @@ fn rasterize_runs(
         natural_advance = natural_advance
             .max((line_height + f32::from(face.line_gap()) * scale).max(line_height));
     }
+    let mut ruby_blocks = collect_ruby_blocks(&segments);
+    for block in ruby_blocks.values_mut() {
+        shape_ruby_block(block, &segments, faces);
+    }
+
     // Split every run on newlines, appending to the current logical line so a
     // directive can straddle one without moving the text that follows it.
     // Every draft line remembers an anchor when `<p...>` started it; a
@@ -638,6 +727,10 @@ fn rasterize_runs(
     let mut drafts: Vec<DraftLine> = vec![DraftLine::default()];
     let mut anchor_x: Option<f32> = None;
     for (index, segment) in segments.iter().enumerate() {
+        if segment.ruby.is_some_and(|ruby| !ruby.base) {
+            // Furigana is positioned over its base text after layout.
+            continue;
+        }
         if !matches!(segment.anchor, TextAnchor::Flow) {
             if !drafts.last().is_some_and(|line| line.segments.is_empty()) {
                 drafts.push(DraftLine::default());
@@ -696,8 +789,10 @@ fn rasterize_runs(
             .apply(layout);
             width += layout.width;
             shaped_segments.push(ShapedSegment {
+                run_index: segment.face_index,
                 glyphs: layout.glyphs,
                 width: layout.width,
+                ascent: (f32::from(face.ascender()) * scale).max(segment.font_size * 0.5),
                 scale,
                 x_scale: segment.x_scale,
                 y_scale: segment.y_scale,
@@ -735,13 +830,36 @@ fn rasterize_runs(
         .filter(|line| line.anchor.is_none())
         .map(|line| line.width)
         .fold(0.0_f32, f32::max);
+    // Which line each base run landed on, and how tall the tallest base glyph
+    // on that line is, decide where furigana sits and how much the previous
+    // line has to grow to make room for it.
+    let mut run_line: HashMap<usize, usize> = HashMap::new();
+    let mut line_base_ascent = vec![0.0_f32; lines.len()];
+    for (line_index, line) in lines.iter().enumerate() {
+        for segment in &line.segments {
+            run_line.insert(segment.run_index, line_index);
+            line_base_ascent[line_index] = line_base_ascent[line_index].max(segment.ascent);
+        }
+    }
+    let mut line_ruby_extra = vec![0.0_f32; lines.len()];
+    for block in ruby_blocks.values() {
+        if !block.expand {
+            continue;
+        }
+        let Some(&line_index) = block.base_runs.iter().find_map(|run| run_line.get(run)) else {
+            continue;
+        };
+        let extra = block.ascent + block.descent + RUBY_GAP;
+        line_ruby_extra[line_index] = line_ruby_extra[line_index].max(extra);
+    }
     // Normal lines flow below each other; anchored lines start where `<p...>`
     // put them and continue downwards at the same x.
     let mut positions = Vec::with_capacity(lines.len());
     let mut normal_baseline = ascent;
     let mut anchor_baseline: Option<f32> = None;
-    for line in &lines {
-        let advance = advance_after(line);
+    for (line_index, line) in lines.iter().enumerate() {
+        let advance =
+            advance_after(line) + line_ruby_extra.get(line_index + 1).copied().unwrap_or(0.0);
         match line.anchor {
             None => {
                 positions.push((
@@ -774,6 +892,16 @@ fn rasterize_runs(
         .fold(ascent, f32::max);
     if !logical_width.is_finite() || !logical_height.is_finite() {
         return Err(TextRasterError::InvalidDimensions);
+    }
+
+    let mut placed: Vec<Option<(usize, f32, f32)>> = vec![None; segments.len()];
+    for (line_index, line) in lines.iter().enumerate() {
+        let (line_x, _) = positions[line_index];
+        let mut segment_x = line_x;
+        for segment in &line.segments {
+            placed[segment.run_index] = Some((line_index, segment_x, segment.width));
+            segment_x += segment.width;
+        }
     }
 
     let mut paths = Vec::new();
@@ -820,6 +948,65 @@ fn rasterize_runs(
                     width: segment.width,
                     thickness: (segment.font_size * 0.06).max(1.0),
                     color: segment.color,
+                });
+            }
+            segment_x += segment.width;
+        }
+    }
+    // Furigana is drawn over its base span, centred and a little above the
+    // tallest base glyph on that line.
+    for block in ruby_blocks.values() {
+        let Some(line_index) = block
+            .base_runs
+            .iter()
+            .find_map(|run| run_line.get(run).copied())
+        else {
+            continue;
+        };
+        let mut start = f32::INFINITY;
+        let mut end = f32::NEG_INFINITY;
+        for run in &block.base_runs {
+            if let Some((_, x, width)) = placed[*run] {
+                start = start.min(x);
+                end = end.max(x + width);
+            }
+        }
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
+        let ruby_x = start + (end - start - block.width).max(0.0) / 2.0;
+        let (_, baseline) = positions[line_index];
+        let ruby_baseline = baseline - line_base_ascent[line_index] - RUBY_GAP - block.descent;
+        let mut segment_x = ruby_x;
+        for segment in &block.segments {
+            let face = &faces[segment.face_index];
+            let radians = segment.rotation.to_radians();
+            let mut builder = PathBuilder::new();
+            for glyph in &segment.glyphs {
+                let mut outline = GlyphOutline {
+                    path: &mut builder,
+                    origin_x: segment_x + glyph.x,
+                    baseline_y: ruby_baseline - glyph.y_offset,
+                    scale: segment.scale,
+                    x_scale: segment.x_scale,
+                    y_scale: segment.y_scale,
+                    pivot_x: segment_x,
+                    pivot_y: ruby_baseline,
+                    cos: radians.cos(),
+                    sin: radians.sin(),
+                };
+                if face
+                    .outline_glyph(GlyphId(glyph.glyph_id), &mut outline)
+                    .is_some()
+                {
+                    outlined_glyphs += 1;
+                }
+            }
+            if let Some(path) = builder.finish() {
+                paths.push(RunPath {
+                    path,
+                    color: segment.color,
+                    outline_color: segment.outline_color,
                 });
             }
             segment_x += segment.width;
@@ -1307,6 +1494,7 @@ mod tests {
             x_scale: 1.0,
             y_scale: 1.0,
             rotation: 0.0,
+            ruby: None,
             font_family: None,
             bold: false,
             italic: false,
@@ -1336,6 +1524,56 @@ mod tests {
             .iter()
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn furigana_is_drawn_above_the_base_text() {
+        use freya_nle_core::api::RubyRun;
+
+        let rasterizer = test_rasterizer();
+        let base = plain_plan(vec![run("\u{ea01}", 48.0)]);
+        let mut base_run = run("\u{ea01}", 48.0);
+        base_run.ruby = Some(RubyRun {
+            block: 1,
+            base: true,
+            scale: 0.5,
+            expand: false,
+        });
+        let mut ruby_run = run("\u{ea02}", 48.0);
+        ruby_run.ruby = Some(RubyRun {
+            block: 1,
+            base: false,
+            scale: 0.5,
+            expand: false,
+        });
+        let with_ruby = plain_plan(vec![base_run, ruby_run]);
+        let base_frame = rasterizer.rasterize(&base, 0.0).expect("base frame");
+        let ruby_frame = rasterizer.rasterize(&with_ruby, 0.0).expect("ruby frame");
+        assert!(
+            ruby_frame.height > base_frame.height,
+            "the furigana extends the frame above the base glyph"
+        );
+
+        // `<!+>` grows the line so the next one clears the furigana.
+        let mut expanded_base = run("\u{ea01}", 48.0);
+        expanded_base.ruby = Some(RubyRun {
+            block: 2,
+            base: true,
+            scale: 0.5,
+            expand: true,
+        });
+        let mut expanded_ruby = run("\u{ea02}", 48.0);
+        expanded_ruby.ruby = Some(RubyRun {
+            block: 2,
+            base: false,
+            scale: 0.5,
+            expand: true,
+        });
+        let expanded = plain_plan(vec![expanded_base, expanded_ruby]);
+        let expanded_frame = rasterizer
+            .rasterize(&expanded, 0.0)
+            .expect("expanded frame");
+        assert!(expanded_frame.height >= ruby_frame.height);
     }
 
     #[test]
@@ -1509,6 +1747,7 @@ mod tests {
                 x_scale: 1.0,
                 y_scale: 1.0,
                 rotation: 0.0,
+                ruby: None,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1525,6 +1764,7 @@ mod tests {
                 x_scale: 1.0,
                 y_scale: 1.0,
                 rotation: 0.0,
+                ruby: None,
                 font_family: None,
                 bold: false,
                 italic: false,

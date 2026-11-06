@@ -19,7 +19,9 @@
 //! - `<twN>` / `<thN>`: horizontal and vertical glyph scale, with `<tw>` /
 //!   `<th>` restoring 1.0;
 //! - `<trN>`: rotation in degrees, with a signed value relative to the current
-//!   angle and `<tr>` restoring 0.
+//!   angle and `<tr>` restoring 0;
+//! - `</>base<![scale][+]>ruby</>`: furigana over the base text, where `+`
+//!   expands the line so the ruby does not collide with the line above.
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -61,6 +63,21 @@ pub struct TextRun {
     pub y_scale: f32,
     /// Rotation in degrees from `<tr...>`.
     pub rotation: f32,
+    /// Ruby (furigana) block this run belongs to, when it is inside `</>...`.
+    pub ruby: Option<RubyRun>,
+}
+
+/// One run's part in a `</>base<![...]>ruby</>` block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RubyRun {
+    /// Pairs the base text with its annotation.
+    pub block: u32,
+    /// `true` for the base text, `false` for the furigana itself.
+    pub base: bool,
+    /// Furigana size relative to the base font size.
+    pub scale: f32,
+    /// Whether the line grows to fit the furigana.
+    pub expand: bool,
 }
 
 /// The text's position after a `<p...>` directive.
@@ -93,6 +110,7 @@ pub struct TextBaseStyle {
     pub x_scale: f32,
     pub y_scale: f32,
     pub rotation: f32,
+    pub ruby: Option<RubyRun>,
 }
 
 /// The font half of a run: family and the three style switches.
@@ -122,6 +140,9 @@ const MAX_LINE_SPACING: f32 = 4_096.0;
 const MAX_POSITION: f32 = 32_768.0;
 const MAX_GLYPH_SCALE: f32 = 100.0;
 const MAX_ROTATION: f32 = 3_600.0;
+const RUBY_DEFAULT_SCALE: f32 = 0.5;
+const RUBY_MIN_SCALE: f32 = 0.05;
+const RUBY_MAX_SCALE: f32 = 4.0;
 const MAX_SPEED: f32 = 1_000.0;
 const MAX_WAIT_SECONDS: f32 = 3_600.0;
 
@@ -185,6 +206,22 @@ struct Parser {
     runs: Vec<TimedRun>,
     blocks: Vec<TextBlock>,
     skip_newline: bool,
+    /// Current `</>...` state and the id handed to the next block.
+    ruby: RubyState,
+    next_ruby_block: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RubyState {
+    None,
+    Base {
+        block: u32,
+    },
+    Ruby {
+        block: u32,
+        scale: f32,
+        expand: bool,
+    },
 }
 
 impl Parser {
@@ -202,6 +239,8 @@ impl Parser {
             runs: Vec::new(),
             blocks: Vec::new(),
             skip_newline: false,
+            ruby: RubyState::None,
+            next_ruby_block: 0,
         }
     }
 
@@ -245,8 +284,9 @@ impl Parser {
             'r' => self.apply_speed(&directive[1..]),
             'w' => self.apply_wait(&directive[1..]),
             'c' => self.apply_clear(&directive[1..]),
-            // `</>` only separates blocks, which ruby will need later.
-            '/' => directive.len() == 1,
+            // `</>` opens or closes a ruby block.
+            '/' => self.apply_ruby_boundary(directive.len() == 1),
+            '!' => self.apply_ruby_options(&directive[1..]),
             _ => false,
         }
     }
@@ -319,6 +359,66 @@ impl Parser {
             self.font.italic = italic;
             self.font.strikethrough = strikethrough;
         }
+        true
+    }
+
+    /// `</>`: opens a ruby block on first use and closes it on second.
+    fn apply_ruby_boundary(&mut self, bare: bool) -> bool {
+        if !bare {
+            return false;
+        }
+        match self.ruby {
+            RubyState::None => {
+                self.next_ruby_block = self.next_ruby_block.wrapping_add(1);
+                let block = self.next_ruby_block;
+                self.ruby = RubyState::Base { block };
+                self.style.ruby = Some(RubyRun {
+                    block,
+                    base: true,
+                    scale: RUBY_DEFAULT_SCALE,
+                    expand: false,
+                });
+            }
+            RubyState::Ruby { .. } => {
+                self.ruby = RubyState::None;
+                self.style.ruby = None;
+            }
+            RubyState::Base { .. } => return false,
+        }
+        true
+    }
+
+    /// `<!>` / `<!0.4>` / `<!+>`: starts the furigana text of the open block.
+    fn apply_ruby_options(&mut self, value: &str) -> bool {
+        let RubyState::Base { block } = self.ruby else {
+            return false;
+        };
+        let value = value.trim();
+        let (scale, expand) = match value.strip_suffix('+') {
+            Some(scale) => (scale.trim(), true),
+            None => (value, false),
+        };
+        let scale = if scale.is_empty() {
+            RUBY_DEFAULT_SCALE
+        } else {
+            match scale.parse::<f32>() {
+                Ok(scale) if scale.is_finite() && scale > 0.0 => {
+                    scale.clamp(RUBY_MIN_SCALE, RUBY_MAX_SCALE)
+                }
+                _ => return false,
+            }
+        };
+        self.ruby = RubyState::Ruby {
+            block,
+            scale,
+            expand,
+        };
+        self.style.ruby = Some(RubyRun {
+            block,
+            base: false,
+            scale,
+            expand,
+        });
         true
     }
 
@@ -627,6 +727,7 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             x_scale: run.style.x_scale,
             y_scale: run.style.y_scale,
             rotation: run.style.rotation,
+            ruby: run.style.ruby,
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -803,6 +904,7 @@ mod tests {
             x_scale: 1.0,
             y_scale: 1.0,
             rotation: 0.0,
+            ruby: None,
             font_family: None,
             bold: false,
             italic: false,
@@ -1008,6 +1110,42 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn ruby_blocks_separate_the_base_text_from_its_furigana() {
+        let runs = parse_text_runs("</>漢字<!>かんじ</>", base());
+        assert_eq!(text(&runs), "漢字かんじ");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "漢字");
+        assert_eq!(
+            runs[0].ruby,
+            Some(RubyRun {
+                block: 1,
+                base: true,
+                scale: 0.5,
+                expand: false
+            })
+        );
+        assert_eq!(runs[1].text, "かんじ");
+        assert_eq!(
+            runs[1].ruby,
+            Some(RubyRun {
+                block: 1,
+                base: false,
+                scale: 0.5,
+                expand: false
+            })
+        );
+
+        let runs = parse_text_runs("</>字<!0.4+>じ</>", base());
+        let ruby = runs[1].ruby.expect("furigana run");
+        assert_eq!(ruby.scale, 0.4);
+        assert!(ruby.expand);
+        assert!(!ruby.base);
+
+        // `< !>` outside a block and an unclosed block stay readable.
+        assert_eq!(text(&parse_text_runs("<!>x</>", base())), "<!>x");
     }
 
     #[test]
