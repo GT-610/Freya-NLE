@@ -68,6 +68,9 @@ pub(crate) struct TextScriptClock {
     pub screen_width: i32,
     pub screen_height: i32,
     pub scene_id: i32,
+    /// The clip's document id, which a script sees as `obj.id` and
+    /// `obj.effect_id`; AviUtl2's ids are per launch, ours are per project.
+    pub clip_id: i32,
     /// The object's own transform, which a script may change.
     pub transform: TextScriptTransform,
 }
@@ -206,6 +209,12 @@ impl TextScriptVm {
             .with("screen_w", i64::from(clock.screen_width))
             .with("screen_h", i64::from(clock.screen_height))
             .with("scene_id", i64::from(clock.scene_id))
+            .with("id", i64::from(clock.clip_id))
+            .with("effect_id", i64::from(clock.clip_id))
+            // Individual objects are not modelled, so a text renders as one:
+            // AviUtl2 reports index 1 and num 1 for a single object too.
+            .with("index", 1_i64)
+            .with("num", 1_i64)
             // Writable transform fields, seeded from the object's own values.
             .with("ox", transform.x)
             .with("oy", transform.y)
@@ -476,6 +485,7 @@ mod tests {
             screen_width: 1920,
             screen_height: 1080,
             scene_id: 1,
+            clip_id: 7,
             transform: TextScriptTransform {
                 x: 0.0,
                 y: 0.0,
@@ -526,6 +536,15 @@ mod tests {
                 &clock
             ),
             "1920x1080/1"
+        );
+        // Individual objects are not modelled, so the object reports itself as
+        // the single one, with the clip id as both ids.
+        assert_eq!(
+            text(
+                "<? mes(obj.id) ?>/<? mes(obj.effect_id) ?>/<? mes(obj.index) ?>/<? mes(obj.num) ?>",
+                &clock
+            ),
+            "7/7/1/1"
         );
     }
 

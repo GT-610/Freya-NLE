@@ -63,6 +63,9 @@ impl ObjectSettingsUi {
                 &self.settings.borrow(),
             );
             self.sync_text_preset_names(&window);
+            // The colour picker shows the palette swatches, so they must be
+            // filled even when the palette window was never opened.
+            self.sync_palette(&window);
         }
     }
 
@@ -753,6 +756,24 @@ impl ObjectSettingsUi {
             })
             .collect::<Vec<_>>();
         window.set_palette_entries(ModelRc::new(VecModel::from(entries)));
+    }
+
+    /// Loads a palette colour into the open picker's sliders.
+    pub(super) fn apply_palette_swatch(&self, name: &str) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let Some(entry) = crate::settings::text_palette(&self.settings.borrow())
+            .into_iter()
+            .find(|entry| entry.name == name)
+        else {
+            return;
+        };
+        let [alpha, red, green, blue] = crate::dialogs::parse_qt_color(&entry.color);
+        window.set_picker_red(i32::from(red));
+        window.set_picker_green(i32::from(green));
+        window.set_picker_blue(i32::from(blue));
+        window.set_picker_alpha(i32::from(alpha));
     }
 
     pub(super) fn save_palette_color(&self, name: &str, color: &str) {

@@ -122,6 +122,8 @@ export component ObjectSettingsWindow inherits Window {
     callback save-effect-preset(int, string, [PresetScopeItemData]);
     callback open-text-presets(int);
     callback open-palette();
+    // Puts a palette colour into the picker's sliders.
+    callback apply-palette-swatch(string);
     callback save-palette-color(string, string);
     callback delete-palette-color(string);
     callback save-text-preset(int, string);
@@ -1044,6 +1046,32 @@ export component ObjectSettingsWindow inherits Window {
                 padding: 14px;
                 spacing: 10px;
                 Text { text: @tr("Select Color"); font-size: 1.15rem; font-weight: 700; }
+                // Named palette colours, so a project's own colours are one
+                // click away instead of re-entering the numbers.
+                if root.palette-entries.length > 0 : HorizontalLayout {
+                    alignment: start;
+                    spacing: 4px;
+                    Text {
+                        text: @tr("Palette");
+                        width: 52px;
+                        color: AppTheme.muted-foreground;
+                        font-size: 0.75rem;
+                        vertical-alignment: center;
+                    }
+                    for entry in root.palette-entries : Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: AppTheme.subtle-border;
+                        background: entry.color;
+                        accessible-role: button;
+                        accessible-label: entry.name;
+                        swatch-touch := TouchArea {
+                            clicked => { root.apply-palette-swatch(entry.name); }
+                        }
+                    }
+                }
                 Rectangle {
                     height: 72px;
                     background: rgba(

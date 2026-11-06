@@ -1704,6 +1704,7 @@ impl BakePlan {
                     self.fps,
                     &evaluated_effects,
                     &TextObjectContext {
+                        clip_id: clip.clip_id,
                         layer: clip.layer,
                         start_frame: clip.start_frame,
                         end_frame: clip.end_frame,
@@ -1893,6 +1894,7 @@ fn shape_render_plan(clip_type: &str, effects: &[EvaluatedEffect]) -> Option<Sha
 
 /// The scene and object facts a text script reads through `obj`.
 struct TextObjectContext {
+    clip_id: i32,
     layer: i32,
     start_frame: i32,
     end_frame: i32,
@@ -1993,6 +1995,7 @@ fn text_render_plan(
             screen_width: context.screen_width,
             screen_height: context.screen_height,
             scene_id: context.scene_id,
+            clip_id: context.clip_id,
             transform: crate::expression::TextScriptTransform {
                 x: transform.x,
                 y: transform.y,

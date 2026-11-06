@@ -1263,6 +1263,10 @@ pub(super) fn install_callbacks(
     object_settings.on_open_palette(move || {
         palette_open_ui.open_palette();
     });
+    let palette_swatch_ui = object_settings_ui.clone();
+    object_settings.on_apply_palette_swatch(move |name| {
+        palette_swatch_ui.apply_palette_swatch(name.as_str());
+    });
     let palette_save_ui = object_settings_ui.clone();
     object_settings.on_save_palette_color(move |name, color| {
         palette_save_ui.save_palette_color(name.as_str(), color.as_str());

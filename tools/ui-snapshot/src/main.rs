@@ -245,6 +245,32 @@ fn main() {
             }
             // `UI_SNAPSHOT_TEXT_PRESET=1` opens the text preset manager: it
             // lists shared presets instead of one effect's parameters.
+            // `UI_SNAPSHOT_COLOR=1` opens the colour picker with palette
+            // swatches, which is the surface a palette is picked from.
+            if std::env::var("UI_SNAPSHOT_COLOR").is_ok() {
+                ui.set_palette_entries(ModelRc::new(VecModel::from(vec![
+                    PaletteEntryData {
+                        name: "accent".into(),
+                        color: Color::from_rgb_u8(0x11, 0x22, 0x33),
+                    },
+                    PaletteEntryData {
+                        name: "harbor".into(),
+                        color: Color::from_rgb_u8(0x2a, 0x6f, 0x9a),
+                    },
+                    PaletteEntryData {
+                        name: "sunset".into(),
+                        color: Color::from_rgb_u8(0xff, 0x88, 0x44),
+                    },
+                ])));
+                ui.set_picker_effect_index(1);
+                ui.set_picker_param_name("color".into());
+                ui.set_picker_frame(0);
+                ui.set_picker_red(0x2a);
+                ui.set_picker_green(0x6f);
+                ui.set_picker_blue(0x9a);
+                ui.set_picker_alpha(255);
+                ui.set_color_picker_visible(true);
+            }
             // `UI_SNAPSHOT_PALETTE=1` opens the named-colour palette.
             if std::env::var("UI_SNAPSHOT_PALETTE").is_ok() {
                 ui.set_palette_entries(ModelRc::new(VecModel::from(vec![

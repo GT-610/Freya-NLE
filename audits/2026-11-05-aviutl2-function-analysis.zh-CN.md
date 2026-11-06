@@ -1316,8 +1316,7 @@ AviUtl2 的入口是"数值项目名称的点击菜单"；此前只能在效果�
 - **`frame_s`/`frame_e` 用场景内起止帧**：与官方"全体（シーン）基準"的说明一致，
   不是相对对象的帧号。
 - **仍缺的字段**：`w/h`（文本像素尺寸要等排版结果，存在先有鸡还是先有蛋的问题）、
-  `index/num/id/effect_id`（个别对象与运行期 ID 尚未建模）与可写变换字段，继续留在
-  B3.7 后续。
+  `index/num/id/effect_id`（在 §7.44 补上）与可写变换字段（在 §7.39 补上）。
 
 验证：
 
@@ -1828,6 +1827,40 @@ AviUtl 不同。本批让格子按图片自身的宽高比推进。
 - 离屏渲染 `UI_SNAPSHOT_PALETTE=1` 检查调色板窗口排版；
 - `clippy --no-deps` 与 `fmt --check` 干净；`--frames 30` 启动冒烟
   `main_frames: 3`、`timeline_frames: 3`、`wgpu_errors: []`。
+
+### 7.44 B3.8（第二批）：调色板进入取色器，补上 `obj.id` 一族
+
+§7.43 让 `<#名字>` 能解析调色板，但用户只有在文本里手写色名时才用得上；取色器仍然只有
+RGB 滑杆。本批把调色板色块放进取色器，并顺手补齐 `obj` 里最后一组只读字段。
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| ui | `object-settings.slint` | 取色器在预览块上方新增一行色块（有调色板时出现），点击把该颜色装进 RGB/Alpha 滑杆；新增 `apply-palette-swatch(string)` 回调 |
+| ui | `object_settings.rs`、`callbacks.rs` | `apply_palette_swatch` 读设置里的调色板并写入滑杆；`sync()` 每次都填色块，不再只在打开调色板窗口时填 |
+| core | `expression.rs`、`bake_plan.rs` | `TextScriptClock` 增加 `clip_id`；`obj.id`/`obj.effect_id` 取片段 id，`obj.index`/`obj.num` 固定 1/1 |
+| 工具 | `tools/ui-snapshot` | `UI_SNAPSHOT_COLOR=1` 渲染带色块的取色器 |
+
+语义与取舍：
+
+- **色块只装颜色，不直接写参数**：点色块后仍要按 OK，和手调滑杆是同一条路径，因此
+  中途放弃时不会改到参数。
+- **每次同步都填色块**：否则用户在没打开过调色板窗口时看不到色块；代价是每次同步
+  读一遍设置，量很小。
+- **`obj.id` 用片段 id**：AviUtl2 的 id 是启动期分配的不透明值，我们的片段 id 是工程内
+  稳定的，脚本拿它做比较仍然成立；`effect_id` 对文本对象与对象本身相同。
+- **`index`/`num` 固定 1**：个别对象尚未建模，文本对象在 AviUtl2 里也报 1/1，因此这是
+  当下正确的值而不是占位。
+
+验证：
+
+- `cargo test --workspace --all-features --locked` 通过（core 216、app 285、
+  desktop 67、render 50、preview 25）；
+- core 测试扩展为同时断言 `obj.id`/`effect_id`/`index`/`num` 输出 `7/7/1/1`；
+- 离屏渲染 `UI_SNAPSHOT_COLOR=1` 确认三个色块在取色器顶部一行显示（首次渲染色块被
+  `HorizontalLayout` 推到右侧，改为固定标签宽度后左对齐）；
+- `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟在显示唤醒后
+  `main_frames: 4`、`timeline_frames: 5`、`wgpu_errors: []`（连续几次
+  `main_frames: 0` 都是显示休眠，`pmset displaysleepnow` 后重试通过）。
 
 ## 8. 验收与风险
 
