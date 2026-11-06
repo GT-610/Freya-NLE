@@ -54,6 +54,12 @@ export component TimelineWindow inherits Window {
     in property <bool> mark-at-playhead: false;
     // Objects covering the playhead, for the object list panel.
     in property <[TimelineObjectData]> objects;
+    // Object-list rows after filtering, plus the filter's own state. The list
+    // is built here rather than in the panel so the rule stays testable.
+    in property <[TimelineObjectData]> object-rows;
+    in property <[string]> object-kind-filters;
+    in-out property <string> object-kind-filter-value: "";
+    in-out property <string> object-kind-label: "";
     in-out property <bool> object-list-visible: false;
     // The two right-hand docks share the width, so opening one closes the other.
     changed object-list-visible => {
@@ -271,6 +277,8 @@ export component TimelineWindow inherits Window {
     callback timeline-action(string, int, int);
     callback seek-audio-frame(int, int);
     callback filter-objects(string, int);
+    // Asks the host to rebuild the filtered object list for this kind index.
+    callback filter-object-kinds(string);
     callback filter-context-catalog(string, int);
     callback move-context-search-selection(int) -> int;
     callback add-catalog-object(string, int, int) -> bool;
@@ -1550,7 +1558,10 @@ export component TimelineWindow inherits Window {
                 ObjectListPanel {
                     width: parent.width;
                     vertical-stretch: 1;
-                    objects: root.objects;
+                    objects: root.object-rows;
+                    kind-filters: root.object-kind-filters;
+                    kind-filter-value: root.object-kind-label;
+                    filter-kinds(kind) => { root.filter-object-kinds(kind); }
                     select(clip-id) => { root.clip-selected(clip-id, false); }
                     open(clip-id) => {
                         root.clip-selected(clip-id, false);

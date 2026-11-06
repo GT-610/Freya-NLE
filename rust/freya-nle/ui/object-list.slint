@@ -1,4 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
+import { ComboBox, ScrollView } from "std-widgets.slint";
 import { PanelHeader } from "chrome.slint";
 import { TimelineObjectData } from "models.slint";
 import { AppTheme } from "theme.slint";
@@ -11,6 +11,11 @@ import { AppTheme } from "theme.slint";
 // (AviUtl2 offers its object operations from this list too).
 export component ObjectListPanel inherits Rectangle {
     in property <[TimelineObjectData]> objects;
+    // Rows shown after the kind filter; the header composes it from `objects`.
+    in property <[string]> kind-filters;
+    // The chosen label; empty means every kind.
+    in-out property <string> kind-filter-value: "";
+    callback filter-kinds(string);
     callback select(int);
     callback open(int);
     // Window coordinates, so the timeline can place the shared context menu.
@@ -56,6 +61,24 @@ export component ObjectListPanel inherits Rectangle {
                 if index == 0 {
                     root.close-requested();
                 }
+            }
+        }
+        // AviUtl2 lets the list be narrowed by object kind; with a busy frame
+        // the unfiltered list is mostly noise. The first entry is "All".
+        if root.kind-filters.length > 1 : Rectangle {
+            // A fixed height keeps the filter a header row instead of letting
+            // it absorb the panel's vertical stretch.
+            height: 28px;
+            ComboBox {
+                x: 6px;
+                width: parent.width - 12px;
+                height: 26px;
+                model: root.kind-filters;
+                current-value: root.kind-filter-value;
+                accessible-label: @tr("Filter by object kind");
+                // The widget reports the chosen label, which is what the host
+                // stores; the label is mapped back to a kind id there.
+                selected(value) => { root.filter-kinds(value); }
             }
         }
         ScrollView {

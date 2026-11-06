@@ -343,6 +343,23 @@ impl WorkspaceModel {
     ///
     /// The list mirrors AviUtl2's オブジェクトリスト: it answers "what is on this
     /// frame" without requiring the user to scan every layer.
+    /// The object kinds present at the playhead, as filter labels.
+    ///
+    /// The first entry is always "All", so the list only offers a filter when
+    /// there is more than one kind on the frame; the labels are the type ids
+    /// the rest of the interface already uses.
+    pub fn object_kinds_at_playhead(&self) -> Vec<String> {
+        let mut kinds = self
+            .objects_at_playhead()
+            .into_iter()
+            .map(|object| object.clip_type)
+            .collect::<Vec<_>>();
+        kinds.sort();
+        kinds.dedup();
+        kinds.insert(0, String::new());
+        kinds
+    }
+
     pub fn objects_at_playhead(&self) -> Vec<ObjectListEntry> {
         let frame = self.playhead;
         let mut objects = self
@@ -6437,6 +6454,28 @@ mod tests {
         workspace.seek(40);
         workspace.toggle_layer_lock(1);
         assert!(workspace.objects_at_playhead()[0].locked);
+    }
+
+    #[test]
+    fn object_kinds_list_every_kind_under_the_playhead_once() {
+        let mut workspace = workspace();
+        workspace.seek(10);
+        // Only a rectangle on this frame, so the filter offers "all" + one kind.
+        assert_eq!(
+            workspace.object_kinds_at_playhead(),
+            vec![String::new(), "rect".to_owned()]
+        );
+        workspace.seek(40);
+        // A text object on its own frame.
+        assert_eq!(
+            workspace.object_kinds_at_playhead(),
+            vec![String::new(), "text".to_owned()]
+        );
+        workspace.seek(25);
+        assert_eq!(workspace.object_kinds_at_playhead(), vec![String::new()]);
+        // With several kinds, each appears once and "all" stays first.
+        workspace.seek(10);
+        assert_eq!(workspace.objects_at_playhead().len(), 1);
     }
 
     #[test]

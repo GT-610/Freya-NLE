@@ -2724,6 +2724,33 @@ pub(super) fn install_callbacks(
     let clip_select_model = model.clone();
     let clip_select_main = main.as_weak();
     let clip_select_timeline = timeline.as_weak();
+    let object_filter_model = model.clone();
+    let object_filter_main = main.as_weak();
+    let object_filter_timeline = timeline.as_weak();
+    timeline.on_filter_object_kinds(move |label| {
+        let Some(window) = object_filter_timeline.upgrade() else {
+            return;
+        };
+        // The combo box reports a label; the stored filter is the kind id, so
+        // the label is mapped back through the same list it was built from.
+        let labels = window.get_object_kind_filters();
+        let index = (0..labels.row_count())
+            .find(|index| labels.row_data(*index).as_deref() == Some(label.as_str()))
+            .unwrap_or(0);
+        let kinds = object_filter_model
+            .borrow()
+            .current_workspace()
+            .map(|workspace| workspace.object_kinds_at_playhead())
+            .unwrap_or_default();
+        let kind = kinds.get(index).cloned().unwrap_or_default();
+        window.set_object_kind_filter_value(SharedString::from(kind));
+        sync_weak_windows(
+            &object_filter_main,
+            &object_filter_timeline,
+            &object_filter_model,
+        );
+    });
+
     timeline.on_clip_selected(move |clip_id, additive| {
         if let Some(workspace) = clip_select_model.borrow_mut().current_workspace_mut() {
             workspace.click_clip(clip_id, additive);

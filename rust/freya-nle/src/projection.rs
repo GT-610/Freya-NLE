@@ -144,9 +144,38 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         })
         .collect::<Vec<_>>();
     update_vec_model(&timeline.get_clips(), clips);
+    let kinds = workspace.object_kinds_at_playhead();
+    // The panel stores a kind id; the combo box shows its localized label. A
+    // kind that disappears from the frame falls back to "all" so the list never
+    // filters itself empty.
+    let labels = kinds
+        .iter()
+        .map(|kind| object_kind_label(kind))
+        .collect::<Vec<_>>();
+    let mut filter = timeline.get_object_kind_filter_value().to_string();
+    if !kinds.iter().any(|kind| kind == &filter) {
+        filter.clear();
+        timeline.set_object_kind_filter_value(SharedString::default());
+    }
+    let label = kinds
+        .iter()
+        .position(|kind| kind == &filter)
+        .and_then(|index| labels.get(index).cloned())
+        .unwrap_or_default();
+    if timeline.get_object_kind_label() != label {
+        timeline.set_object_kind_label(SharedString::from(label));
+    }
+    update_vec_model(
+        &timeline.get_object_kind_filters(),
+        labels
+            .into_iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    );
     let objects = workspace
         .objects_at_playhead()
         .into_iter()
+        .filter(|object| filter.is_empty() || object.clip_type == filter)
         .map(|object| TimelineObjectData {
             clip_id: object.clip_id,
             label: SharedString::from(localized_effect_metadata(&object.label).into_owned()),
@@ -157,7 +186,8 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
             clip_by_upper_object: object.clip_by_upper_object,
         })
         .collect::<Vec<_>>();
-    update_vec_model(&timeline.get_objects(), objects);
+    update_vec_model(&timeline.get_objects(), objects.clone());
+    update_vec_model(&timeline.get_object_rows(), objects);
     let selected_layer = workspace.selected_layer();
     let scene = workspace.selected_scene_document();
     let layer_settings = workspace.layer_settings();
@@ -332,6 +362,14 @@ pub(super) fn layer_background_color(value: &str) -> Option<Color> {
         )),
         _ => None,
     }
+}
+
+/// The label the object-kind filter shows for one kind id.
+fn object_kind_label(kind: &str) -> String {
+    if kind.is_empty() {
+        return localized("All kinds", "全部类型", "すべての種類").to_owned();
+    }
+    localized_effect_metadata(kind).into_owned()
 }
 
 pub(super) fn sync_project_tabs(

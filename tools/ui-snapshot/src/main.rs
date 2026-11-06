@@ -636,7 +636,7 @@ fn populate_timeline(ui: &TimelineWindow) {
     ui.set_playhead(240);
     // Three marks, one of them under the playhead, so the ruler ticks and the
     // checked "mark at playhead" state are both visible in the snapshot.
-    ui.set_objects(ModelRc::new(VecModel::from(vec![
+    ui.set_object_rows(ModelRc::new(VecModel::from(vec![
         TimelineObjectData {
             clip_id: 3,
             label: "camera_control".into(),
@@ -656,6 +656,14 @@ fn populate_timeline(ui: &TimelineWindow) {
             clip_by_upper_object: false,
         },
     ])));
+    // The object list offers a kind filter once a frame holds more than one
+    // kind; the sample names the two the rows use.
+    ui.set_object_kind_filters(ModelRc::new(VecModel::from(vec![
+        "All kinds".into(),
+        "camera_control".into(),
+        "audio".into(),
+    ])));
+    ui.set_object_kind_label("All kinds".into());
     ui.set_marks(ModelRc::new(VecModel::from(vec![
         TimelineMarkData {
             frame: 120,
