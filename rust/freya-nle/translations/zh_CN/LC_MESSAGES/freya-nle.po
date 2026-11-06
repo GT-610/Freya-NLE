@@ -1579,3 +1579,21 @@ msgstr "完成后退出"
 
 msgid "When the batch finishes"
 msgstr "批次完成时"
+
+msgid "Parameter Expressions..."
+msgstr "参数参照式..."
+
+msgid "Parameter Expression"
+msgstr "参数参照式"
+
+msgid "Parameter"
+msgstr "参数"
+
+msgid "Expression"
+msgstr "参照式"
+
+msgid "Reads other parameters by name, e.g. X, Blur.size, $, @min/@max/@abs/@clamp."
+msgstr "按名称读取其他参数，例如 X、Blur.size、$、@min/@max/@abs/@clamp"
+
+msgid "Layer and above/under references are not resolved yet."
+msgstr "图层以及 above/under 引用尚未解析"

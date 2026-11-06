@@ -1248,6 +1248,26 @@ pub(super) fn install_callbacks(
     object_settings.on_delete_effect_preset(move |index, name| {
         preset_delete_ui.delete_preset(index.max(0) as usize, name.as_str());
     });
+    let expression_open_ui = object_settings_ui.clone();
+    object_settings.on_open_expression(move |index| {
+        expression_open_ui.open_expression(index.max(0) as usize);
+    });
+    let expression_stored_ui = object_settings_ui.clone();
+    object_settings.on_stored_expression(move |index, param| {
+        expression_stored_ui.stored_expression(index.max(0) as usize, param.as_str())
+    });
+    let expression_save_ui = object_settings_ui.clone();
+    object_settings.on_save_expression(move |index, param, expression| {
+        expression_save_ui.save_expression(
+            index.max(0) as usize,
+            param.as_str(),
+            expression.as_str(),
+        );
+    });
+    let expression_clear_ui = object_settings_ui.clone();
+    object_settings.on_clear_expression(move |index, param| {
+        expression_clear_ui.clear_expression(index.max(0) as usize, param.as_str());
+    });
     let create_model = model.clone();
     let create_main = main.as_weak();
     let create_timeline = timeline.as_weak();

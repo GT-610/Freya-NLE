@@ -1579,3 +1579,21 @@ msgstr "完了時に終了する"
 
 msgid "When the batch finishes"
 msgstr "バッチ完了時の動作"
+
+msgid "Parameter Expressions..."
+msgstr "パラメータの参照式..."
+
+msgid "Parameter Expression"
+msgstr "パラメータの参照式"
+
+msgid "Parameter"
+msgstr "パラメータ"
+
+msgid "Expression"
+msgstr "参照式"
+
+msgid "Reads other parameters by name, e.g. X, Blur.size, $, @min/@max/@abs/@clamp."
+msgstr "他のパラメータを名前で参照します (例: X, Blur.size, $, @min/@max/@abs/@clamp)"
+
+msgid "Layer and above/under references are not resolved yet."
+msgstr "レイヤー参照と above/under にはまだ対応していません"

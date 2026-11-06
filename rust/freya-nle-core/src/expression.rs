@@ -88,7 +88,9 @@ impl Evaluator {
         let _ = vm.eval_chunk(
             "sin = math.sin; cos = math.cos; tan = math.tan; abs = math.abs; \
              max = math.max; min = math.min; floor = math.floor; ceil = math.ceil; \
-             pi = math.pi; random = math.random;",
+             pi = math.pi; random = math.random; \
+             clamp = function(value, low, high) if value < low then return low \
+             elseif value > high then return high else return value end end;",
             "=expression-shortcuts",
         );
         Self {

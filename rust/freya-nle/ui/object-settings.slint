@@ -72,6 +72,12 @@ export component ObjectSettingsWindow inherits Window {
     in-out property <string> preset-effect-name: "";
     in-out property <string> preset-name: "";
     in-out property <[PresetScopeItemData]> preset-scope-items;
+    in-out property <bool> expression-visible: false;
+    in-out property <int> expression-effect-index: -1;
+    in-out property <[string]> expression-param-names;
+    in-out property <[string]> expression-param-labels;
+    in-out property <int> expression-param-index: 0;
+    in-out property <string> expression-text: "";
     in-out property <bool> color-picker-visible: false;
     in-out property <bool> font-picker-visible: false;
     in-out property <int> picker-effect-index: -1;
@@ -100,6 +106,10 @@ export component ObjectSettingsWindow inherits Window {
     callback add-effect(string);
     callback save-effect-preset(int, string, [PresetScopeItemData]);
     callback preset-scope(int) -> [PresetScopeItemData];
+    callback open-expression(int);
+    callback stored-expression(int, string) -> string;
+    callback save-expression(int, string, string);
+    callback clear-expression(int, string);
     callback load-effect-preset(int, string);
     callback delete-effect-preset(int, string);
     callback preset-names(int) -> [string];
@@ -256,6 +266,7 @@ export component ObjectSettingsWindow inherits Window {
                             clear-default(index) => { root.clear-effect-default(index); }
                             remove-selection(index) => { root.remove-effect-selection(index); }
                             reorder(index, delta-y) => { root.reorder-effect(index, delta-y); }
+                            edit-expression(index) => { root.open-expression(index); }
                             save-preset(index, effect-name) => {
                                 root.preset-effect-index = index;
                                 root.preset-effect-name = effect-name;
@@ -583,6 +594,107 @@ export component ObjectSettingsWindow inherits Window {
         }
         }
     }
+    if root.expression-visible : expression-focus := FocusScope {
+        z: 115;
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.expression-visible = false;
+                accept
+            } else {
+                reject
+            }
+        }
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: AppTheme.scrim;
+            TouchArea { clicked => { root.expression-visible = false; } }
+        }
+        Rectangle {
+            width: min(parent.width - 48px, 480px);
+            height: 260px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: AppTheme.dialog-background;
+            border-width: 1px;
+            border-color: AppTheme.border;
+            border-radius: 4px;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 10px;
+                Text { text: @tr("Parameter Expression"); font-size: 1.15rem; font-weight: 700; }
+                ComboBox {
+                    model: root.expression-param-labels;
+                    current-index <=> root.expression-param-index;
+                    accessible-label: @tr("Parameter");
+                    changed current-index => {
+                        if root.expression-param-index >= 0
+                            && root.expression-param-index < root.expression-param-names.length {
+                            root.expression-text = root.stored-expression(
+                                root.expression-effect-index,
+                                root.expression-param-names[root.expression-param-index]
+                            );
+                        }
+                    }
+                }
+                LineEdit {
+                    text <=> root.expression-text;
+                    placeholder-text: @tr("X * 2 + Blur.size");
+                    accessible-label: @tr("Expression");
+                }
+                Text {
+                    text: @tr("Reads other parameters by name, e.g. X, Blur.size, $, @min/@max/@abs/@clamp.");
+                    color: AppTheme.muted-foreground;
+                    font-size: 0.72rem;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("Layer and above/under references are not resolved yet.");
+                    color: AppTheme.muted-foreground;
+                    font-size: 0.72rem;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: @tr("Clear");
+                        clicked => {
+                            if root.expression-param-index >= 0
+                                && root.expression-param-index < root.expression-param-names.length {
+                                root.clear-expression(
+                                    root.expression-effect-index,
+                                    root.expression-param-names[root.expression-param-index]
+                                );
+                            }
+                            root.expression-visible = false;
+                        }
+                    }
+                    Button { text: @tr("Cancel"); clicked => { root.expression-visible = false; } }
+                    Button {
+                        text: @tr("Save");
+                        enabled: root.expression-param-index >= 0
+                            && root.expression-param-index < root.expression-param-names.length;
+                        clicked => {
+                            if root.expression-param-index >= 0
+                                && root.expression-param-index < root.expression-param-names.length {
+                                root.save-expression(
+                                    root.expression-effect-index,
+                                    root.expression-param-names[root.expression-param-index],
+                                    root.expression-text
+                                );
+                            }
+                            root.expression-visible = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if root.color-picker-visible : color-picker-focus := FocusScope {
         z: 120;
         width: 100%;

@@ -200,6 +200,22 @@ fn main() {
             populate_settings(&ui);
             // `UI_SNAPSHOT_PRESET=1` opens the save-preset dialog, which is the
             // only surface with a per-parameter scope list.
+            if std::env::var("UI_SNAPSHOT_EXPRESSION").is_ok() {
+                ui.set_expression_effect_index(1);
+                ui.set_expression_param_names(ModelRc::new(VecModel::from(vec![
+                    "size".into(),
+                    "quality".into(),
+                    "aspect".into(),
+                ])));
+                ui.set_expression_param_labels(ModelRc::new(VecModel::from(vec![
+                    "範囲".into(),
+                    "品質".into(),
+                    "縦横比".into(),
+                ])));
+                ui.set_expression_param_index(0);
+                ui.set_expression_text("above.size * 2".into());
+                ui.set_expression_visible(true);
+            }
             if std::env::var("UI_SNAPSHOT_PRESET").is_ok() {
                 ui.set_preset_effect_index(1);
                 ui.set_preset_effect_name("ぼかし".into());

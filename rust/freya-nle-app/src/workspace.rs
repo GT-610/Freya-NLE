@@ -1484,6 +1484,56 @@ impl WorkspaceModel {
         !self.effect_clipboard.is_empty()
     }
 
+    /// Attaches or clears a reference expression on one parameter.
+    ///
+    /// The numeric value is untouched, so clearing the expression restores the
+    /// number the parameter already had.
+    pub fn set_effect_expression(
+        &mut self,
+        effect_index: usize,
+        param_name: &str,
+        expression: Option<&str>,
+    ) -> bool {
+        let Some(clip_id) = self.selected_clip_document().map(|clip| clip.id) else {
+            return false;
+        };
+        let applied = self.execute(TimelineCommand::SetEffectExpression {
+            clip_id,
+            effect_index,
+            param_name: param_name.to_owned(),
+            expression: expression.map(str::to_owned),
+        });
+        if applied {
+            match expression {
+                Some(expression) if !expression.trim().is_empty() => {
+                    self.set_status(status_message!(
+                        "Expression set: {}",
+                        "已设置参照式：{}",
+                        "参照式を設定: {}",
+                        expression
+                    ));
+                }
+                _ => self.set_status(status_message!(
+                    "Parameter expression cleared",
+                    "已清除参数参照式",
+                    "参照式を解除しました"
+                )),
+            }
+        }
+        applied
+    }
+
+    /// The reference expression stored on a parameter, if any.
+    pub fn effect_expression(&self, effect_index: usize, param_name: &str) -> Option<String> {
+        self.selected_clip_document()
+            .and_then(|clip| clip.effects.get(effect_index))
+            .and_then(|effect| effect.extra.get("expressions"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|expressions| expressions.get(param_name))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    }
+
     pub fn set_effect_parameter_at_frame(
         &mut self,
         effect_index: usize,
@@ -9135,6 +9185,57 @@ mod tests {
         assert!(workspace.delete_effect_preset(&store, 0, "Current"));
         assert!(store.names("rect").is_empty());
         std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn parameter_expressions_are_stored_beside_the_value_and_clear_back_to_it() {
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let before = workspace.document().clips[0].effects[1].params["size"].clone();
+
+        assert!(workspace.set_effect_expression(1, "size", Some("10 * 2")));
+        assert_eq!(
+            workspace.effect_expression(1, "size").as_deref(),
+            Some("10 * 2")
+        );
+        assert_eq!(
+            workspace.document().clips[0].effects[1].extra["expressions"]["size"],
+            json!("10 * 2"),
+            "the expression lives beside the value, not in place of it"
+        );
+
+        assert!(workspace.set_effect_expression(1, "size", None));
+        assert_eq!(workspace.effect_expression(1, "size"), None);
+        assert_eq!(
+            workspace.document().clips[0].effects[1].params["size"],
+            before,
+            "clearing the expression restores the number the user had"
+        );
+        assert!(!workspace.set_effect_expression(1, "missing", Some("1")));
+    }
+
+    #[test]
+    fn a_parameter_expression_reaches_the_scene_plan() {
+        use freya_nle_core::api::SceneRenderPlan;
+
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(3.0)));
+        assert!(workspace.set_effect_expression(0, "count", Some("2 * 2")));
+
+        let mut plan = SceneRenderPlan::from_document(workspace.document(), 1)
+            .expect("the scene plans from the document");
+        let frame = plan.evaluate(0);
+        let rect = frame.layers[0]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "rect")
+            .expect("rect effect");
+        assert_eq!(
+            rect.params["count"],
+            json!(4.0),
+            "the expression wins over the stored literal"
+        );
     }
 
     #[test]

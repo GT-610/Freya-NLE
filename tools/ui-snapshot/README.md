@@ -20,6 +20,7 @@ Set `UI_SNAPSHOT_THEME=light` to render the light palette; the Rust tool then
 writes `timeline-light.*`, and `python3 snapshot.py` with no arguments picks the
 same names up. Other modes: `settings`, `system`, `confirm`, `mark`, `layer`,
 `backup`, `export`, `packages`. `UI_SNAPSHOT_PRESET=1` opens the save-preset dialog
+and `UI_SNAPSHOT_EXPRESSION=1` the parameter-expression dialog
 on the `settings` render, `UI_SNAPSHOT_TAB=0` picks the preferences page
 the `system` render opens (default 2, Timeline), `UI_SNAPSHOT_SIZE=680x600`
 overrides the window size, `UI_SNAPSHOT_IMAGE=/path/to.png` supplies a stand-in

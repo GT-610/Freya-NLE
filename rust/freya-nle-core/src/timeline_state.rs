@@ -518,6 +518,54 @@ impl TimelineState {
                 }
                 plan_clip_replacements(&self.document, vec![(clip_id, clip)])
             }
+            EditRequest::SetEffectExpression {
+                clip_id,
+                effect_index,
+                param_name,
+                expression,
+            } => {
+                let mut clip = self
+                    .document
+                    .clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .cloned()
+                    .ok_or(StateError::InvalidArgument)?;
+                let effect = clip
+                    .effects
+                    .get_mut(effect_index)
+                    .ok_or(StateError::InvalidArgument)?;
+                if !effect.params.contains_key(&param_name)
+                    && !effect
+                        .keyframes
+                        .as_ref()
+                        .is_some_and(|tracks| tracks.contains_key(&param_name))
+                {
+                    return Err(StateError::InvalidArgument);
+                }
+                let mut expressions = effect
+                    .extra
+                    .get("expressions")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                match expression {
+                    Some(expression) if !expression.trim().is_empty() => {
+                        expressions.insert(param_name.clone(), Value::String(expression));
+                    }
+                    _ => {
+                        expressions.remove(&param_name);
+                    }
+                }
+                if expressions.is_empty() {
+                    effect.extra.remove("expressions");
+                } else {
+                    effect
+                        .extra
+                        .insert("expressions".to_owned(), Value::Object(expressions));
+                }
+                plan_clip_replacements(&self.document, vec![(clip_id, clip)])
+            }
             EditRequest::SetEffectKeyframe {
                 clip_id,
                 effect_index,
@@ -1109,6 +1157,17 @@ pub enum EditRequest {
         value: Value,
         #[serde(default)]
         media_duration_seconds: Option<f64>,
+    },
+    /// Attaches or clears a reference expression for one parameter.
+    ///
+    /// The value stays where it is, so clearing the expression falls back to the
+    /// number the user last saw rather than to zero.
+    SetEffectExpression {
+        clip_id: i32,
+        effect_index: usize,
+        param_name: String,
+        #[serde(default)]
+        expression: Option<String>,
     },
     SetEffectKeyframe {
         clip_id: i32,

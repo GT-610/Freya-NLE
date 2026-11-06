@@ -454,6 +454,12 @@ struct ClipInput {
 struct EffectInput {
     #[serde(default)]
     id: String,
+    /// Display name, which `Effect.Param` references match.
+    #[serde(default)]
+    name: String,
+    /// Unknown fields ride along, including the `expressions` map.
+    #[serde(flatten)]
+    extra: ExtraFields,
     #[serde(default = "default_enabled")]
     enabled: bool,
     #[serde(default)]
@@ -631,6 +637,8 @@ impl ResolvedTrack {
 
 struct CachedEffect {
     id: String,
+    /// The document's display name, which `Effect.Param` references match.
+    name: String,
     enabled: bool,
     known: bool,
     fps: f64,
@@ -641,6 +649,12 @@ struct CachedEffect {
     numeric_track_count: usize,
     last_numeric_frame: Option<i32>,
     numeric_values: BTreeMap<String, f64>,
+    /// Values an expression resolved to for the current frame, keyed by the
+    /// parameter the expression is stored on.
+    resolved_expressions: BTreeMap<String, f64>,
+    /// Per-parameter reference expressions stored separately from the value,
+    /// so the numeric fallback survives when an expression cannot resolve.
+    expressions: BTreeMap<String, String>,
 }
 
 impl CachedEffect {
@@ -655,18 +669,22 @@ impl CachedEffect {
             tracks.insert(name, ResolvedTrack::new(keyframes, fallback, duration));
         }
         let numeric_track_count = tracks.values().filter(|track| track.numeric).count();
+        let expressions = expressions_from_extra(&input.extra);
         Self {
             id: input.id,
+            name: input.name,
             enabled: input.enabled,
             known: input.known,
             fps,
             params: input.params,
-            extra: ExtraFields::new(),
+            extra: input.extra,
             tracks,
             all_keys: all_keys.into_iter().collect(),
             numeric_track_count,
             last_numeric_frame: None,
             numeric_values: BTreeMap::new(),
+            resolved_expressions: BTreeMap::new(),
+            expressions,
         }
     }
 
@@ -690,8 +708,10 @@ impl CachedEffect {
             }
         }
         let numeric_track_count = tracks.values().filter(|track| track.numeric).count();
+        let expressions = expressions_from_extra(&effect.extra);
         Self {
             id: effect.id.clone(),
+            name: effect.name.clone(),
             enabled: effect.enabled,
             known: true,
             fps,
@@ -702,6 +722,8 @@ impl CachedEffect {
             numeric_track_count,
             last_numeric_frame: None,
             numeric_values: BTreeMap::new(),
+            resolved_expressions: BTreeMap::new(),
+            expressions,
         }
     }
 
@@ -726,6 +748,7 @@ impl CachedEffect {
         let numeric_track_count = tracks.values().filter(|track| track.numeric).count();
         Self {
             id: plugin.id.clone(),
+            name: String::new(),
             enabled: plugin.enabled,
             known: true,
             fps,
@@ -736,14 +759,21 @@ impl CachedEffect {
             numeric_track_count,
             last_numeric_frame: None,
             numeric_values: BTreeMap::new(),
+            resolved_expressions: BTreeMap::new(),
+            expressions: BTreeMap::new(),
         }
     }
 
     fn prepare_numeric(&mut self, frame: i32) {
-        if self.numeric_track_count == 0 || self.last_numeric_frame == Some(frame) {
+        if self.last_numeric_frame == Some(frame) {
             return;
         }
         self.numeric_values.clear();
+        self.resolved_expressions.clear();
+        self.last_numeric_frame = Some(frame);
+        if self.numeric_track_count == 0 {
+            return;
+        }
         for (name, track) in &self.tracks {
             if !track.numeric {
                 continue;
@@ -751,12 +781,14 @@ impl CachedEffect {
             let value = numeric_value(&track.evaluate(frame)).unwrap_or(0.0);
             self.numeric_values.insert(name.clone(), value);
         }
-        self.last_numeric_frame = Some(frame);
     }
 
     fn value(&self, name: &str, frame: i32) -> Value {
         if name == "time" {
             return Value::from(frame);
+        }
+        if let Some(value) = self.resolved_expressions.get(name) {
+            return Value::from(*value);
         }
         let base = if let Some(value) = self.numeric_values.get(name) {
             Value::from(*value)
@@ -766,6 +798,54 @@ impl CachedEffect {
             self.params.get(name).cloned().unwrap_or(Value::Null)
         };
         self.expression_value(name, frame, base)
+    }
+
+    /// Seconds from the start of the object, which both expression paths use.
+    fn time_seconds(&self, frame: i32) -> f64 {
+        if self.fps > 0.0 {
+            f64::from(frame) / self.fps
+        } else {
+            0.0
+        }
+    }
+
+    /// The stored expression for `name`, without its leading `=`.
+    fn expression_source(&self, name: &str) -> Option<&str> {
+        if let Some(expression) = self.expressions.get(name) {
+            return Some(expression);
+        }
+        // Imported projects may carry the AviUtl 1.x form, an `=` expressed
+        // directly in the parameter value.
+        let Value::String(expression) = self.params.get(name)? else {
+            return None;
+        };
+        expression::is_expression(expression).then(|| &expression[1..])
+    }
+
+    fn expression_names(&self) -> Vec<String> {
+        let mut names = self.expressions.keys().cloned().collect::<BTreeSet<_>>();
+        names.extend(
+            self.params
+                .iter()
+                .filter(|(_, value)| {
+                    matches!(value, Value::String(expression) if expression::is_expression(expression))
+                })
+                .map(|(name, _)| name.clone()),
+        );
+        names.into_iter().collect()
+    }
+
+    /// The frame value without applying the expression, so `$` and sibling
+    /// references read real numbers instead of recursing into the expression.
+    fn raw_numeric(&self, name: &str, frame: i32) -> Option<f64> {
+        let value = if let Some(value) = self.numeric_values.get(name) {
+            Value::from(*value)
+        } else if let Some(track) = self.tracks.get(name) {
+            track.evaluate(frame)
+        } else {
+            self.params.get(name).cloned()?
+        };
+        numeric_value(&value)
     }
 
     /// Applies an AviUtl `=expression` stored for `name` on top of the keyframe
@@ -778,11 +858,7 @@ impl CachedEffect {
             return base;
         }
         let current = numeric_value(&base).unwrap_or(0.0);
-        let time_seconds = if self.fps > 0.0 {
-            f64::from(frame) / self.fps
-        } else {
-            0.0
-        };
+        let time_seconds = self.time_seconds(frame);
         match expression::evaluate(&expression[1..], time_seconds, 0, current) {
             Some(value) => Value::from(value),
             // A broken expression keeps the literal fallback rather than
@@ -883,6 +959,207 @@ impl CachedClip {
             effects,
         }
     }
+
+    /// Resolves reference expressions in this clip's effects for one frame.
+    ///
+    /// AviUtl2 lets a parameter read other parameters by name: a bare `X` is
+    /// another parameter of the same effect, `ぼかし.範囲` another effect of the
+    /// same object, `$` the parameter's own base value, and `@min/@max/@abs/
+    /// @clamp` wrap the arithmetic. The references are substituted with numbers
+    /// and the rest of the expression is evaluated by the existing Lua path, so
+    /// both expression styles share one evaluator.
+    fn resolve_expressions(&mut self, frame: i32) {
+        let expressions = self
+            .effects
+            .iter()
+            .enumerate()
+            .flat_map(|(index, effect)| {
+                effect
+                    .expression_names()
+                    .into_iter()
+                    .map(move |name| (index, name))
+            })
+            .collect::<Vec<_>>();
+        if expressions.is_empty() {
+            return;
+        }
+        for (effect_index, name) in expressions {
+            let mut visiting = HashSet::new();
+            if let Some(value) =
+                resolve_effect_expression(&self.effects, effect_index, &name, frame, &mut visiting)
+            {
+                self.effects[effect_index]
+                    .resolved_expressions
+                    .insert(name, value);
+            }
+        }
+    }
+}
+
+/// Reads the `expressions` map an effect carries alongside its values.
+fn expressions_from_extra(extra: &ExtraFields) -> BTreeMap<String, String> {
+    extra
+        .get("expressions")
+        .and_then(Value::as_object)
+        .map(|expressions| {
+            expressions
+                .iter()
+                .filter_map(|(name, value)| {
+                    value.as_str().map(|value| (name.clone(), value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolves one parameter's expression, following references into siblings.
+///
+/// Returns `None` when the expression is unreadable, references something this
+/// batch cannot resolve (layers, above/under), or takes part in a cycle; the
+/// caller then leaves the parameter's literal value in place.
+fn resolve_effect_expression(
+    effects: &[CachedEffect],
+    effect_index: usize,
+    name: &str,
+    frame: i32,
+    visiting: &mut HashSet<(usize, String)>,
+) -> Option<f64> {
+    let effect = effects.get(effect_index)?;
+    let source = effect.expression_source(name)?;
+    if !visiting.insert((effect_index, name.to_owned())) {
+        return None;
+    }
+    let substituted = substitute_references(source, &mut |chain| {
+        resolve_reference(effects, effect_index, name, chain, frame, visiting)
+    });
+    let value = effect.raw_numeric(name, frame).unwrap_or(0.0);
+    let resolved = expression::evaluate(&substituted, effect.time_seconds(frame), 0, value);
+    visiting.remove(&(effect_index, name.to_owned()));
+    resolved
+}
+
+/// Resolves one reference chain such as `X`, `$`, or `ぼかし.範囲`.
+fn resolve_reference(
+    effects: &[CachedEffect],
+    effect_index: usize,
+    self_param: &str,
+    chain: &str,
+    frame: i32,
+    visiting: &mut HashSet<(usize, String)>,
+) -> Option<f64> {
+    if chain == "$" {
+        // `$` expands to the parameter's own name, so `$+1` reads `X+1`.
+        return resolve_parameter(
+            effects,
+            effect_index,
+            self_param,
+            self_param,
+            frame,
+            visiting,
+        );
+    }
+    let parts = chain.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [param] => resolve_parameter(effects, effect_index, self_param, param, frame, visiting),
+        [effect_name, param] => {
+            // `layer1.X`, `above.X`, `under2.X` and layer names need layer
+            // lookups that this batch does not carry into the clip cache.
+            if is_layer_reference(effect_name) {
+                return None;
+            }
+            let target = effects
+                .iter()
+                .position(|effect| effect.name == *effect_name || effect.id == *effect_name)?;
+            resolve_parameter(effects, target, self_param, param, frame, visiting)
+        }
+        _ => None,
+    }
+}
+
+fn resolve_parameter(
+    effects: &[CachedEffect],
+    effect_index: usize,
+    self_param: &str,
+    param: &str,
+    frame: i32,
+    visiting: &mut HashSet<(usize, String)>,
+) -> Option<f64> {
+    let param = if param == "$" { self_param } else { param };
+    let effect = effects.get(effect_index)?;
+    if effect.expression_source(param).is_some() {
+        return resolve_effect_expression(effects, effect_index, param, frame, visiting);
+    }
+    effect.raw_numeric(param, frame)
+}
+
+fn is_layer_reference(name: &str) -> bool {
+    name.eq_ignore_ascii_case("above")
+        || name.eq_ignore_ascii_case("under")
+        || name
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("layer"))
+        || name
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("above"))
+        || name
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("under"))
+}
+
+/// Replaces every resolvable reference chain with its number, leaving unknown
+/// chains untouched so the Lua parse fails and the literal value survives.
+fn substitute_references(source: &str, resolve: &mut impl FnMut(&str) -> Option<f64>) -> String {
+    let mut output = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(character) = rest.chars().next() {
+        if character == '@' {
+            let after = &rest[1..];
+            let name_len = after
+                .char_indices()
+                .take_while(|(_, character)| character.is_alphanumeric() || *character == '_')
+                .map(|(index, character)| index + character.len_utf8())
+                .last()
+                .unwrap_or(0);
+            if name_len > 0 && after[name_len..].starts_with('(') {
+                output.push_str(&after[..name_len]);
+                rest = &after[name_len..];
+                continue;
+            }
+            output.push(character);
+            rest = after;
+            continue;
+        }
+        if is_chain_start(character) {
+            let chain_len = rest
+                .char_indices()
+                .take_while(|(_, character)| is_chain_character(*character))
+                .map(|(index, character)| index + character.len_utf8())
+                .last()
+                .unwrap_or(0);
+            let chain = &rest[..chain_len];
+            match resolve(chain).and_then(format_resolved) {
+                Some(number) => output.push_str(&number),
+                None => output.push_str(chain),
+            }
+            rest = &rest[chain_len..];
+            continue;
+        }
+        output.push(character);
+        rest = &rest[character.len_utf8()..];
+    }
+    output
+}
+
+fn is_chain_start(character: char) -> bool {
+    character.is_alphabetic() || character == '_' || character == '$'
+}
+
+fn is_chain_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '_' | '$' | '.')
+}
+
+fn format_resolved(value: f64) -> Option<String> {
+    value.is_finite().then(|| format!("{value}"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1060,6 +1337,9 @@ impl BakePlan {
             for plugin in &mut clip.audio_plugins {
                 plugin.prepare_numeric(relative_frame);
             }
+            // Reference expressions read their siblings, so they are resolved
+            // after every effect has its own values for this frame.
+            clip.resolve_expressions(relative_frame);
         }
         let mut group_controls = selected
             .iter()
@@ -2042,6 +2322,170 @@ mod tests {
         let repeated = plan.compute_frame(key);
         assert_eq!(repeated.layers.len(), 1);
         assert_eq!(repeated.layers[0].transform.x, 50.0);
+    }
+
+    #[test]
+    fn references_resolve_to_sibling_parameters_and_values() {
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 1,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 120,
+                "type": "video",
+                "effects": [
+                    {
+                        "id": "blur",
+                        "name": "Blur",
+                        "enabled": true,
+                        "known": true,
+                        "params": {"size": 4.0, "x": 7.0}
+                    },
+                    {
+                        "id": "transform",
+                        "enabled": true,
+                        "known": true,
+                        "params": {
+                            "x": "=Blur.$",
+                            "y": "=x*2 + 1",
+                            "rotationZ": "=Blur.size * 3",
+                            "scale": "=@clamp(Blur.size * 10, 0, 20)"
+                        }
+                    }
+                ]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute_frame(EvaluationKey { current_frame: 0 });
+        let transform = output.layers[0]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "transform")
+            .expect("transform effect");
+        // `$` expands to this parameter's name on the referenced effect.
+        assert_eq!(transform.params["x"], json!(7.0));
+        assert_eq!(transform.params["y"], json!(15.0));
+        // Another effect of the same object is reachable by display name.
+        assert_eq!(transform.params["rotationZ"], json!(12.0));
+        // `@clamp` is the rule-based alias for the Lua helper.
+        assert_eq!(transform.params["scale"], json!(20.0));
+    }
+
+    #[test]
+    fn unresolvable_references_and_cycles_keep_the_literal_fallback() {
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 1,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 60,
+                "type": "video",
+                "effects": [{
+                    "id": "transform",
+                    "enabled": true,
+                    "known": true,
+                    "params": {
+                        "x": "=layer1.X + 1",
+                        "y": "=missing * 2",
+                        "scale": 100.0
+                    }
+                }]
+            }, {
+                "id": 2,
+                "layer": 1,
+                "startFrame": 0,
+                "durationFrames": 60,
+                "type": "video",
+                "effects": [{
+                    "id": "blur",
+                    "enabled": true,
+                    "known": true,
+                    "params": {"a": "=b + 1", "b": "=a + 1"}
+                }]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute_frame(EvaluationKey { current_frame: 0 });
+        let transform = output.layers[0]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "transform")
+            .expect("transform effect");
+        assert_eq!(transform.params["x"], json!("=layer1.X + 1"));
+        assert_eq!(transform.params["y"], json!("=missing * 2"));
+        let blur = output.layers[1]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "blur")
+            .expect("blur effect");
+        assert_eq!(blur.params["a"], json!("=b + 1"));
+        assert_eq!(blur.params["b"], json!("=a + 1"));
+    }
+
+    #[test]
+    fn expressions_stored_beside_values_keep_the_numeric_fallback() {
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 16,
+            "clips": [{
+                "id": 1,
+                "layer": 0,
+                "startFrame": 0,
+                "durationFrames": 60,
+                "type": "video",
+                "effects": [{
+                    "id": "blur",
+                    "name": "Blur",
+                    "enabled": true,
+                    "known": true,
+                    "params": {"size": 5.0, "quality": 2.0},
+                    "expressions": {"quality": "size * 2"},
+                    "keyframes": {"size": [
+                        {"frame": 0, "value": 5.0, "interp": "linear"},
+                        {"frame": 60, "value": 9.0, "interp": "linear"}
+                    ]}
+                }]
+            }]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let frame = plan.compute_frame(EvaluationKey { current_frame: 30 });
+        let blur = &frame.layers[0].effects[0];
+        // The reference follows the keyframe value at this frame (7), not the
+        // parameter's stored literal (5).
+        assert_eq!(blur.params["quality"], json!(14.0));
+    }
+
+    #[test]
+    fn reference_substitution_leaves_unknown_text_alone() {
+        let mut resolve = |chain: &str| match chain {
+            "X" => Some(3.0),
+            "$" => Some(0.5),
+            "blur.size" => Some(12.0),
+            _ => None,
+        };
+        assert_eq!(substitute_references("X*2 + 1", &mut resolve), "3*2 + 1");
+        assert_eq!(
+            substitute_references("@clamp(X, 0, 20)", &mut resolve),
+            "clamp(3, 0, 20)"
+        );
+        assert_eq!(
+            substitute_references("blur.size - $", &mut resolve),
+            "12 - 0.5"
+        );
+        // Unknown chains and decimal numbers keep their text.
+        assert_eq!(
+            substitute_references("above.X + 1.5", &mut resolve),
+            "above.X + 1.5"
+        );
+        // A reference chain directly after another one is still separate.
+        assert_eq!(substitute_references("X+blur.size", &mut resolve), "3+12");
     }
 
     #[test]

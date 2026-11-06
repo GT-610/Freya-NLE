@@ -314,6 +314,7 @@ export component EffectSidebarEntry inherits Rectangle {
     callback save-default(int);
     callback clear-default(int);
     callback save-preset(int, string);
+    callback edit-expression(int);
     callback load-preset(int, string);
     callback delete-preset(int, string);
     callback query-presets(int) -> [string];
@@ -380,6 +381,13 @@ export component EffectSidebarEntry inherits Rectangle {
                     title: preset;
                     activated => { root.delete-preset(root.effect.index, preset); }
                 }
+            }
+            MenuSeparator { }
+            // Parameter reference expressions (AviUtl2's 参照式).
+            MenuItem {
+                title: @tr("Parameter Expressions...");
+                enabled: root.effects-mode;
+                activated => { root.edit-expression(root.effect.index); }
             }
             MenuSeparator { }
             // Creation defaults: the parameters a new instance of this effect

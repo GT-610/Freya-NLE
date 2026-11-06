@@ -568,6 +568,86 @@ impl ObjectSettingsUi {
         self.sync();
     }
 
+    /// Opens the reference-expression dialog for one effect.
+    ///
+    /// The dialog lists the effect's parameters by their localized labels; the
+    /// names travel alongside so saving sends the parameter key back.
+    pub(super) fn open_expression(&self, effect_index: usize) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let model = self.model.borrow();
+        let catalog = self.catalog.borrow();
+        let controls = model
+            .current_workspace()
+            .and_then(|workspace| workspace.object_settings(&catalog))
+            .and_then(|settings| {
+                settings
+                    .effects
+                    .iter()
+                    .find(|effect| effect.index == effect_index)
+                    .map(|effect| effect.controls.clone())
+            })
+            .unwrap_or_default();
+        let params = controls
+            .iter()
+            .filter_map(|control| control.param.as_ref().map(|param| (param, control)))
+            .collect::<Vec<_>>();
+        let names = params
+            .iter()
+            .map(|(param, _)| SharedString::from(param.as_str()))
+            .collect::<Vec<_>>();
+        let labels = params
+            .iter()
+            .map(|(_, control)| {
+                SharedString::from(localized_effect_metadata(&control.label).into_owned())
+            })
+            .collect::<Vec<_>>();
+        let first = params.first().map(|(param, _)| param.as_str());
+        window.set_expression_effect_index(effect_index as i32);
+        window.set_expression_param_names(ModelRc::new(VecModel::from(names)));
+        window.set_expression_param_labels(ModelRc::new(VecModel::from(labels)));
+        window.set_expression_param_index(0);
+        window.set_expression_text(self.stored_expression(effect_index, first.unwrap_or_default()));
+        window.set_expression_visible(true);
+    }
+
+    pub(super) fn stored_expression(&self, effect_index: usize, param_name: &str) -> SharedString {
+        let expression = self
+            .model
+            .borrow()
+            .current_workspace()
+            .and_then(|workspace| workspace.effect_expression(effect_index, param_name))
+            .unwrap_or_default();
+        SharedString::from(expression)
+    }
+
+    pub(super) fn save_expression(&self, effect_index: usize, param_name: &str, expression: &str) {
+        let applied = self
+            .model
+            .borrow_mut()
+            .current_workspace_mut()
+            .is_some_and(|workspace| {
+                workspace.set_effect_expression(effect_index, param_name, Some(expression))
+            });
+        if applied {
+            self.sync();
+        }
+    }
+
+    pub(super) fn clear_expression(&self, effect_index: usize, param_name: &str) {
+        let applied = self
+            .model
+            .borrow_mut()
+            .current_workspace_mut()
+            .is_some_and(|workspace| {
+                workspace.set_effect_expression(effect_index, param_name, None)
+            });
+        if applied {
+            self.sync();
+        }
+    }
+
     pub(super) fn save_effect_default(&self, effect_index: usize) {
         let Some((id, params)) = self
             .model
