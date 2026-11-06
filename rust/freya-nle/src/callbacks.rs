@@ -1252,6 +1252,14 @@ pub(super) fn install_callbacks(
     object_settings.on_open_expression(move |index| {
         expression_open_ui.open_expression(index.max(0) as usize);
     });
+    let expression_row_open_ui = object_settings_ui.clone();
+    object_settings.on_edit_parameter_expression(move |index, param| {
+        expression_row_open_ui.open_expression_for(index.max(0) as usize, Some(param.as_str()));
+    });
+    let expression_row_clear_ui = object_settings_ui.clone();
+    object_settings.on_clear_parameter_expression(move |index, param| {
+        expression_row_clear_ui.clear_expression(index.max(0) as usize, param.as_str());
+    });
     let expression_stored_ui = object_settings_ui.clone();
     object_settings.on_stored_expression(move |index, param| {
         expression_stored_ui.stored_expression(index.max(0) as usize, param.as_str())

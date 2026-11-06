@@ -573,6 +573,11 @@ impl ObjectSettingsUi {
     /// The dialog lists the effect's parameters by their localized labels; the
     /// names travel alongside so saving sends the parameter key back.
     pub(super) fn open_expression(&self, effect_index: usize) {
+        self.open_expression_for(effect_index, None);
+    }
+
+    /// Opens the dialog with `param_name` selected when it is present.
+    pub(super) fn open_expression_for(&self, effect_index: usize, param_name: Option<&str>) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
@@ -603,12 +608,17 @@ impl ObjectSettingsUi {
                 SharedString::from(localized_effect_metadata(&control.label).into_owned())
             })
             .collect::<Vec<_>>();
-        let first = params.first().map(|(param, _)| param.as_str());
+        let selected = param_name
+            .and_then(|name| params.iter().position(|(param, _)| param.as_str() == name))
+            .unwrap_or(0);
+        let selected_param = params.get(selected).map(|(param, _)| param.as_str());
         window.set_expression_effect_index(effect_index as i32);
         window.set_expression_param_names(ModelRc::new(VecModel::from(names)));
         window.set_expression_param_labels(ModelRc::new(VecModel::from(labels)));
-        window.set_expression_param_index(0);
-        window.set_expression_text(self.stored_expression(effect_index, first.unwrap_or_default()));
+        window.set_expression_param_index(selected as i32);
+        window.set_expression_text(
+            self.stored_expression(effect_index, selected_param.unwrap_or_default()),
+        );
         window.set_expression_visible(true);
     }
 
@@ -1360,6 +1370,7 @@ fn push_object_settings_rows(
         interactive: true,
         checked: false,
         keyframed: false,
+        has_expression: false,
         range_mode: false,
         right_interactive: false,
         start_interactive: true,
@@ -1440,6 +1451,7 @@ fn push_object_settings_rows(
             interactive: (audio_plugin || enabled) && !control.disabled && control.param.is_some(),
             checked: control.bool_value_at(start_value),
             keyframed: control.keyframed,
+            has_expression: control.expression.is_some(),
             range_mode: !audio_plugin && supports_track && control.keyframed,
             right_interactive,
             start_interactive: true,

@@ -107,6 +107,8 @@ export component ObjectSettingsWindow inherits Window {
     callback save-effect-preset(int, string, [PresetScopeItemData]);
     callback preset-scope(int) -> [PresetScopeItemData];
     callback open-expression(int);
+    callback edit-parameter-expression(int, string);
+    callback clear-parameter-expression(int, string);
     callback stored-expression(int, string) -> string;
     callback save-expression(int, string, string);
     callback clear-expression(int, string);
@@ -354,6 +356,8 @@ export component ObjectSettingsWindow inherits Window {
                 for row in root.setting-rows : ObjectSettingRow {
                     row-data: row;
                     quick-easing(index, param, start, end, mode) => { root.quick-effect-easing(index, param, start, end, mode); }
+                    edit-parameter-expression(index, param) => { root.edit-parameter-expression(index, param); }
+                    clear-parameter-expression(index, param) => { root.clear-parameter-expression(index, param); }
                     toggle-fold(audio, index) => { root.toggle-effect-fold(audio, index); }
                     finish-edit => { root.finish-parameter-edit(); }
                     cancel-edit => { root.cancel-parameter-edit(); }

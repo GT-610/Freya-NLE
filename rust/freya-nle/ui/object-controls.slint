@@ -555,6 +555,8 @@ export component ObjectSettingRow inherits Rectangle {
     callback remove-keyframe(bool, int, string, int);
     callback move-keyframe(bool, int, string, int, int);
     callback open-easing(int, string, int, int);
+    callback edit-parameter-expression(int, string);
+    callback clear-parameter-expression(int, string);
     callback quick-easing(int, string, int, int, string);
     callback toggle-fold(bool, int);
     callback finish-edit();
@@ -875,6 +877,16 @@ export component ObjectSettingRow inherits Rectangle {
                 MenuItem { title: @tr("Ease in and out"); activated => { root.choose-easing("ease_in_out_quad"); } }
                 MenuSeparator { }
                 MenuItem { title: @tr("Advanced curve..."); activated => { root.open-easing(root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, root.row-data.end-frame); } }
+                MenuSeparator { }
+                MenuItem {
+                    title: @tr("Set Expression...");
+                    activated => { root.edit-parameter-expression(root.row-data.effect-index, root.row-data.param-name); }
+                }
+                MenuItem {
+                    title: @tr("Clear Expression");
+                    enabled: root.row-data.has-expression;
+                    activated => { root.clear-parameter-expression(root.row-data.effect-index, root.row-data.param-name); }
+                }
             }
             // Slint's Button sizes its text to the whole label, so a long
             // "{param} (ease in and out)" label used to draw past this fixed

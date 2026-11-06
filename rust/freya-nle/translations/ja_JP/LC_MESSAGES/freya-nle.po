@@ -1616,3 +1616,9 @@ msgstr "上へ"
 
 msgid "Down"
 msgstr "下へ"
+
+msgid "Set Expression..."
+msgstr "参照式を設定..."
+
+msgid "Clear Expression"
+msgstr "参照式を解除"

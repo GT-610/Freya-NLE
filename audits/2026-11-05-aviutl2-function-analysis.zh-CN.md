@@ -898,8 +898,9 @@ AviUtl2 的参照式让一个参数读取别的参数再计算：同一效果的
   不会把进程卡住。
 - **求值时机**：每帧在 `prepare_numeric` 之后、参数被读取之前解析一次，预览、导出与
   音频计划因此拿到同一份结果。
-- **行内标记**：带参照式的参数在设置列表里以 `ƒ` 后缀显示（`ObjectControl::expression`
-  由 `object_settings` 投影带出），与普通数值行区分；菜单入口仍是效果右键菜单。
+- **行内标记与入口**：带参照式的参数在设置列表里以 `ƒ` 后缀显示，并可在数值行的标签
+  菜单里直接设置/清除（§7.26）；效果右键菜单的「参数参照式...」保留为批量挑选入口。
+  `ObjectControl::expression` 由 `object_settings` 投影带出。
 - **尚未做**：参数名里含点号的转义、行内函数以外的 Lua 库。
 
 验证：
@@ -1189,6 +1190,34 @@ AviUtl 的 `<gh[行間]>` 在文本中途改变行距，`<gh>` 恢复对象设�
 - `clippy --no-deps` 与 `fmt --check` 干净；
 - GPU 冒烟本轮未取到帧（`main_frames: 0`、`wgpu_errors: []`，显示休眠），与前几轮
   同一现象，未宣称通过。
+
+### 7.26 B6（第三批）：从参数行设置参照式
+
+AviUtl2 的入口是"数值项目名称的点击菜单"；此前只能在效果右键菜单里打开对话框，再
+在对话框里挑参数。本批把入口放到参数行的标签按钮菜单里，打开时已选中该参数。
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| ui | `object-controls.slint` | 数值行的标签菜单（原本只有移动方式与高级曲线）新增「设置参照式...」与「清除参照式」，后者仅在参数已有参照式时可用 |
+| ui | `object-settings.slint`、`models.slint` | `ObjectSettingRowData` 增加 `has-expression`；行把两个回调转给窗口 |
+| ui | `object_settings.rs`、`callbacks.rs` | `open_expression_for(effect_index, param_name)` 打开对话框并预选该参数；清除走既有的 `clear_expression` |
+| i18n | `translations/{ja_JP,zh_CN}` | 2 条新文案 |
+
+语义与取舍：
+
+- **入口对齐 AviUtl2**：参数名 → 菜单 → 参照式；效果级入口（「参数参照式...」）保留，
+  用于一次挑选任意参数。
+- **预选**：对话框按参数名定位到对应行，并载入已存表达式；参数不在列表时回落到
+  第一项，不报错。
+- **清除的可用性**：`has-expression` 来自投影（§7.16 的 `ObjectControl::expression`），
+  没有参照式的行菜单项置灰，避免"点了没反应"。
+
+验证：
+
+- `cargo test --workspace --all-features` 通过（core 205、app 274、desktop 64、render 48、preview 25）；
+- `clippy --no-deps` 与 `fmt --check` 干净；Slint 编译覆盖新回调与 `has-expression` 字段；
+- 投影层已有测试确认 `ObjectControl::expression` 带出表达式，菜单可用性由它驱动；
+- `--frames 20` 启动冒烟 `main_frames: 4`、`timeline_frames: 5`、`wgpu_errors: []`。
 
 ## 8. 验收与风险
 

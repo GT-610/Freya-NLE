@@ -1616,3 +1616,9 @@ msgstr "上移"
 
 msgid "Down"
 msgstr "下移"
+
+msgid "Set Expression..."
+msgstr "设置参照式..."
+
+msgid "Clear Expression"
+msgstr "清除参照式"
