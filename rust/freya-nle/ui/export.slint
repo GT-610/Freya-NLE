@@ -16,7 +16,9 @@ import { AppTheme } from "theme.slint";
 export component ExportWindow inherits Window {
     title: @tr("Export Media");
     preferred-width: 620px;
-    preferred-height: 580px;
+    // Tall enough that the video, audio and range groups and the top of the
+    // batch queue are visible without scrolling; 580px hid the queue entirely.
+    preferred-height: 760px;
     min-width: 520px;
     min-height: 460px;
 
@@ -89,7 +91,10 @@ export component ExportWindow inherits Window {
 
     ScrollView {
         viewport-width: self.visible-width;
+        // `alignment: start` keeps every group at its natural height: a taller
+        // window adds space at the bottom instead of inflating combo boxes.
         VerticalLayout {
+            alignment: start;
             padding: 16px;
             spacing: 12px;
 
@@ -121,6 +126,7 @@ export component ExportWindow inherits Window {
             if root.format-index == 0 : GroupBox {
                 title: @tr("Video");
                 GridLayout {
+                    height: self.preferred-height;
                     padding: 10px;
                     spacing: 9px;
                     Row {
@@ -203,6 +209,7 @@ export component ExportWindow inherits Window {
             if root.format-index == 0 : GroupBox {
                 title: @tr("Audio");
                 GridLayout {
+                    height: self.preferred-height;
                     padding: 10px;
                     spacing: 9px;
                     Row {
