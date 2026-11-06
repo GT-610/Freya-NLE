@@ -7,11 +7,14 @@ import { AppTheme } from "theme.slint";
 //
 // The list is a navigation aid, not a second timeline: a single click selects
 // the object (the layer and object settings follow), a double click also opens
-// its settings.
+// its settings, and a right click opens the same object menu the timeline uses
+// (AviUtl2 offers its object operations from this list too).
 export component ObjectListPanel inherits Rectangle {
     in property <[TimelineObjectData]> objects;
     callback select(int);
     callback open(int);
+    // Window coordinates, so the timeline can place the shared context menu.
+    callback context-requested(int, length, length, bool, bool);
     callback close-requested();
 
     // A short glyph per object kind; the label carries the readable name.
@@ -110,6 +113,18 @@ export component ObjectListPanel inherits Rectangle {
                         accessible-item-selected: object.selected;
                         clicked => { root.select(object.clip-id); }
                         double-clicked => { root.open(object.clip-id); }
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down
+                                && event.button == PointerEventButton.right {
+                                root.context-requested(
+                                    object.clip-id,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y,
+                                    object.kind == "audio",
+                                    object.clip-by-upper-object
+                                );
+                            }
+                        }
                     }
                 }
                 if root.objects.length == 0 : Text {

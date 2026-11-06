@@ -447,6 +447,7 @@ fn row(kind: &str, label: &str, button: &str) -> ObjectSettingRowData {
         param_name: label.into(),
         label: label.into(),
         effect_enabled: true,
+        has_expression: false,
         header_toggle_visible: false,
         selected: kind == "effect",
         removable: false,
@@ -604,6 +605,7 @@ fn populate_timeline(ui: &TimelineWindow) {
             kind: "camera_control".into(),
             locked: false,
             selected: false,
+            clip_by_upper_object: false,
         },
         TimelineObjectData {
             clip_id: 4,
@@ -612,6 +614,7 @@ fn populate_timeline(ui: &TimelineWindow) {
             kind: "audio".into(),
             locked: true,
             selected: true,
+            clip_by_upper_object: false,
         },
     ])));
     ui.set_marks(ModelRc::new(VecModel::from(vec![

@@ -91,6 +91,9 @@ export struct TimelineObjectData {
     kind: string,
     locked: bool,
     selected: bool,
+    // The clip menu starts here with the clip's own "Clip by Upper Object"
+    // state, exactly as it does when the menu opens from the timeline.
+    clip-by-upper-object: bool,
 }
 
 export struct MediaBinGroupData {

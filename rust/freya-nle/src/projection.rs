@@ -154,6 +154,7 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
             kind: SharedString::from(object.clip_type),
             locked: object.locked,
             selected: object.selected,
+            clip_by_upper_object: object.clip_by_upper_object,
         })
         .collect::<Vec<_>>();
     update_vec_model(&timeline.get_objects(), objects);

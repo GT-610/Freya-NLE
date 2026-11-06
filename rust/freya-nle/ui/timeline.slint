@@ -605,6 +605,21 @@ export component TimelineWindow inherits Window {
         root.object-picker-visible = true;
     }
 
+    // Objects open the same menu from the timeline and from the object list,
+    // so both entry points share one selection + placement step.
+    function open-clip-context(
+        clip-id: int,
+        x: length,
+        y: length,
+        audio: bool,
+        clip-by-upper-object: bool
+    ) {
+        root.clip-context-selected(clip-id);
+        root.context-frame = root.file-drop-frame(x / 1px);
+        root.context-layer = root.file-drop-layer(y / 1px);
+        root.open-context-popup(audio ? 2 : 1, clip-id, x, y, clip-by-upper-object);
+    }
+
     function open-context-popup(kind: int, clip-id: int, x: length, y: length, clip-by-upper-object: bool) {
         root.context-target-kind = kind;
         root.context-clip-id = clip-id;
@@ -1411,14 +1426,11 @@ export component TimelineWindow inherits Window {
                     }
                     drag-ended => { root.drag-active = false; }
                     context-activate(clip-id, window-x, window-y) => {
-                        root.clip-context-selected(clip-id);
-                        root.context-frame = root.file-drop-frame(window-x);
-                        root.context-layer = root.file-drop-layer(window-y);
-                        root.open-context-popup(
-                            clip.audio ? 2 : 1,
+                        root.open-clip-context(
                             clip-id,
                             window-x * 1px,
                             window-y * 1px,
+                            clip.audio,
                             clip.clip-by-upper-object
                         );
                     }
@@ -1543,6 +1555,9 @@ export component TimelineWindow inherits Window {
                     open(clip-id) => {
                         root.clip-selected(clip-id, false);
                         root.show-object-settings();
+                    }
+                    context-requested(clip-id, x, y, audio, clip-by-upper-object) => {
+                        root.open-clip-context(clip-id, x, y, audio, clip-by-upper-object);
                     }
                     close-requested => { root.object-list-visible = false; }
                 }

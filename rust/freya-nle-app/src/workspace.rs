@@ -121,6 +121,8 @@ pub struct ObjectListEntry {
     pub audio: bool,
     pub locked: bool,
     pub selected: bool,
+    /// Carried so the shared clip menu opens with the right toggle state.
+    pub clip_by_upper_object: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -357,6 +359,7 @@ impl WorkspaceModel {
                 audio: clip.audio,
                 locked: clip.locked,
                 selected: clip.selected,
+                clip_by_upper_object: clip.clip_by_upper_object,
             })
             .collect::<Vec<_>>();
         objects.sort_by_key(|object| (object.layer, object.clip_id));
@@ -6321,6 +6324,12 @@ mod tests {
         workspace.seek(10);
         workspace.click_clip(1, false);
         assert!(workspace.objects_at_playhead()[0].selected);
+        // The row carries the clip's own menu state, so the shared context menu
+        // opens with "Clip by Upper Object" already checked or unchecked.
+        assert!(workspace.toggle_clip_by_upper_object(1));
+        assert!(workspace.objects_at_playhead()[0].clip_by_upper_object);
+        assert!(workspace.toggle_clip_by_upper_object(1));
+        assert!(!workspace.objects_at_playhead()[0].clip_by_upper_object);
         workspace.switch_scene(2);
         workspace.seek(10);
         assert_eq!(workspace.objects_at_playhead()[0].clip_id, 3);
