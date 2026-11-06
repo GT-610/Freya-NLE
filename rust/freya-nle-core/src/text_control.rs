@@ -15,7 +15,9 @@
 //! - `<ghNN>`: line spacing, with `<gh>` restoring the object's line spacing;
 //! - `<pX,Y>`: starts a positioned line at (`X`,`Y`) instead of following the
 //!   previous character; `<p>` returns to the normal flow. A number with a
-//!   sign is relative to the previous position.
+//!   sign is relative to the previous position;
+//! - `<twN>` / `<thN>`: horizontal and vertical glyph scale, with `<tw>` /
+//!   `<th>` restoring 1.0. (`<tr>` rotation is not implemented yet.)
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -52,6 +54,9 @@ pub struct TextRun {
     pub line_spacing: Option<f32>,
     /// Where `<p...>` put the text that starts with this run.
     pub anchor: TextAnchor,
+    /// Horizontal and vertical glyph scale from `<tw...>` / `<th...>`.
+    pub x_scale: f32,
+    pub y_scale: f32,
 }
 
 /// The text's position after a `<p...>` directive.
@@ -81,6 +86,8 @@ pub struct TextBaseStyle {
     pub line_spacing: Option<f32>,
     /// The object's own anchor, restored by `<p>`.
     pub anchor: TextAnchor,
+    pub x_scale: f32,
+    pub y_scale: f32,
 }
 
 /// The font half of a run: family and the three style switches.
@@ -108,6 +115,7 @@ const MAX_FONT_SIZE: f32 = 4_096.0;
 const MAX_LETTER_SPACING: f32 = 1_000.0;
 const MAX_LINE_SPACING: f32 = 4_096.0;
 const MAX_POSITION: f32 = 32_768.0;
+const MAX_GLYPH_SCALE: f32 = 100.0;
 const MAX_SPEED: f32 = 1_000.0;
 const MAX_WAIT_SECONDS: f32 = 3_600.0;
 
@@ -226,6 +234,7 @@ impl Parser {
             's' => self.apply_size(&directive[1..]),
             '@' => self.apply_font(&directive[1..]),
             'p' => self.apply_position(&directive[1..]),
+            't' => self.apply_transform(&directive[1..]),
             'g' => self.apply_spacing(&directive[1..]),
             'r' => self.apply_speed(&directive[1..]),
             'w' => self.apply_wait(&directive[1..]),
@@ -303,6 +312,28 @@ impl Parser {
             self.font.bold = bold;
             self.font.italic = italic;
             self.font.strikethrough = strikethrough;
+        }
+        true
+    }
+
+    /// `<twN>` / `<thN>`: horizontal and vertical glyph scale.
+    fn apply_transform(&mut self, value: &str) -> bool {
+        let Some((axis, value)) = value.split_at_checked(1) else {
+            return false;
+        };
+        let value = value.trim();
+        let scale = if value.is_empty() {
+            1.0
+        } else {
+            match value.parse::<f32>() {
+                Ok(value) if value.is_finite() => value.clamp(0.0, MAX_GLYPH_SCALE),
+                _ => return false,
+            }
+        };
+        match axis {
+            "w" => self.style.x_scale = scale,
+            "h" => self.style.y_scale = scale,
+            _ => return false,
         }
         true
     }
@@ -563,6 +594,8 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             letter_spacing: run.style.letter_spacing,
             line_spacing: run.style.line_spacing,
             anchor: run.style.anchor,
+            x_scale: run.style.x_scale,
+            y_scale: run.style.y_scale,
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -736,6 +769,8 @@ mod tests {
             letter_spacing: 0.0,
             line_spacing: None,
             anchor: TextAnchor::Flow,
+            x_scale: 1.0,
+            y_scale: 1.0,
             font_family: None,
             bold: false,
             italic: false,
@@ -941,6 +976,19 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn transform_directives_scale_the_glyphs() {
+        let runs = parse_text_runs("<tw0.5>a<th2>b<tw>c", base());
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].x_scale, 0.5);
+        assert_eq!(runs[0].y_scale, 1.0);
+        assert_eq!(runs[1].y_scale, 2.0);
+        // `<tw>` restores the horizontal scale only.
+        assert_eq!(runs[2].x_scale, 1.0);
+        assert_eq!(runs[2].y_scale, 2.0);
+        assert_eq!(text(&parse_text_runs("<tx1>a", base())), "<tx1>a");
     }
 
     #[test]

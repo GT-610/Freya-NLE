@@ -360,6 +360,8 @@ fn rasterize_with_face(
                 origin_x: x + glyph.x,
                 baseline_y: baseline - glyph.y_offset,
                 scale,
+                x_scale: 1.0,
+                y_scale: 1.0,
             };
             if face
                 .outline_glyph(GlyphId(glyph.glyph_id), &mut outline)
@@ -504,6 +506,8 @@ struct RunSegment {
     outline_color: RgbaColor,
     font_size: f32,
     letter_spacing: f32,
+    x_scale: f32,
+    y_scale: f32,
     /// Line spacing this run requests for the gap after its line.
     line_spacing: Option<f32>,
     /// `<p...>` directive carried by the run.
@@ -526,6 +530,8 @@ struct ShapedSegment {
     glyphs: Vec<GlyphPlacement>,
     width: f32,
     scale: f32,
+    x_scale: f32,
+    y_scale: f32,
     color: RgbaColor,
     outline_color: RgbaColor,
     face_index: usize,
@@ -594,6 +600,8 @@ fn rasterize_runs(
             outline_color: run.outline_color,
             font_size: run.font_size.max(1.0),
             letter_spacing: run.letter_spacing,
+            x_scale: run.x_scale.max(0.0),
+            y_scale: run.y_scale.max(0.0),
             line_spacing: run.line_spacing,
             anchor: run.anchor,
             face_index: index,
@@ -674,11 +682,18 @@ fn rasterize_runs(
             let units_per_em = face.units_per_em().max(1) as f32;
             let scale = segment.font_size / units_per_em;
             let layout = shape_line(face, &text, scale, segment.letter_spacing);
+            let layout = GlyphScale {
+                x: segment.x_scale,
+                y: segment.y_scale,
+            }
+            .apply(layout);
             width += layout.width;
             shaped_segments.push(ShapedSegment {
                 glyphs: layout.glyphs,
                 width: layout.width,
                 scale,
+                x_scale: segment.x_scale,
+                y_scale: segment.y_scale,
                 color: segment.color,
                 outline_color: segment.outline_color,
                 face_index: segment.face_index,
@@ -768,6 +783,8 @@ fn rasterize_runs(
                     origin_x: segment_x + glyph.x,
                     baseline_y: baseline - glyph.y_offset,
                     scale: segment.scale,
+                    x_scale: segment.x_scale,
+                    y_scale: segment.y_scale,
                 };
                 if face
                     .outline_glyph(GlyphId(glyph.glyph_id), &mut outline)
@@ -1052,14 +1069,42 @@ struct GlyphOutline<'a> {
     origin_x: f32,
     baseline_y: f32,
     scale: f32,
+    x_scale: f32,
+    y_scale: f32,
 }
 
 impl GlyphOutline<'_> {
     fn point(&self, x: f32, y: f32) -> (f32, f32) {
         (
-            self.origin_x + x * self.scale,
-            self.baseline_y - y * self.scale,
+            self.origin_x + x * self.x_scale * self.scale,
+            self.baseline_y - y * self.y_scale * self.scale,
         )
+    }
+}
+
+/// Applies `<tw...>` / `<th...>` to a shaped line.
+struct GlyphScale {
+    x: f32,
+    y: f32,
+}
+
+impl GlyphScale {
+    fn apply(&self, layout: LineLayout) -> LineLayout {
+        if self.x == 1.0 && self.y == 1.0 {
+            return layout;
+        }
+        LineLayout {
+            glyphs: layout
+                .glyphs
+                .into_iter()
+                .map(|glyph| GlyphPlacement {
+                    glyph_id: glyph.glyph_id,
+                    x: glyph.x * self.x,
+                    y_offset: glyph.y_offset * self.y,
+                })
+                .collect(),
+            width: layout.width * self.x,
+        }
     }
 }
 
@@ -1234,6 +1279,8 @@ mod tests {
             letter_spacing: 0.0,
             line_spacing: None,
             anchor: TextAnchor::Flow,
+            x_scale: 1.0,
+            y_scale: 1.0,
             font_family: None,
             bold: false,
             italic: false,
@@ -1263,6 +1310,21 @@ mod tests {
             .iter()
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn a_horizontally_scaled_run_is_narrower() {
+        let rasterizer = test_rasterizer();
+        let plain = plain_plan(vec![run("\u{ea01}\u{ea02}", 48.0)]);
+        let mut scaled_run = run("\u{ea01}\u{ea02}", 48.0);
+        scaled_run.x_scale = 0.5;
+        let scaled = plain_plan(vec![scaled_run]);
+        let plain_frame = rasterizer.rasterize(&plain, 0.0).expect("plain frame");
+        let scaled_frame = rasterizer.rasterize(&scaled, 0.0).expect("scaled frame");
+        assert!(
+            scaled_frame.width < plain_frame.width / 2 + 10,
+            "tw halves the glyph width and the run advance"
+        );
     }
 
     #[test]
@@ -1399,6 +1461,8 @@ mod tests {
                 letter_spacing: 0.0,
                 line_spacing: None,
                 anchor: TextAnchor::Flow,
+                x_scale: 1.0,
+                y_scale: 1.0,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1412,6 +1476,8 @@ mod tests {
                 letter_spacing: 0.0,
                 line_spacing: None,
                 anchor: TextAnchor::Flow,
+                x_scale: 1.0,
+                y_scale: 1.0,
                 font_family: None,
                 bold: false,
                 italic: false,
