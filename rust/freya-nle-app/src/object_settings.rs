@@ -59,6 +59,8 @@ pub struct ObjectControl {
     pub filter: String,
     pub disabled: bool,
     pub keyframed: bool,
+    /// Reference expression stored on this parameter, when it has one.
+    pub expression: Option<String>,
     pub value: Value,
     pub relative_frame: i32,
     pub clip_duration: i32,
@@ -366,6 +368,7 @@ fn unsupported_control(param: &str, label: &str, value: Value) -> ObjectControl 
         source_kind: "unsupported".to_owned(),
         param: Some(param.to_owned()),
         label: label.to_owned(),
+        expression: None,
         minimum: None,
         maximum: None,
         step: None,
@@ -426,6 +429,15 @@ fn effect_controls(
                 })
                 .cloned()
                 .unwrap_or(Value::Null);
+            let expression = param.as_deref().and_then(|name| {
+                effect
+                    .extra
+                    .get("expressions")
+                    .and_then(Value::as_object)
+                    .and_then(|expressions| expressions.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
             let track = param
                 .as_deref()
                 .and_then(|name| effect.keyframes.as_ref()?.get(name));
@@ -498,6 +510,7 @@ fn effect_controls(
                     && effect_source_is_video(effect)
                     && effect.params.get("linkedVideo").and_then(Value::as_bool) == Some(true),
                 keyframed: track.is_some(),
+                expression: expression.clone(),
                 value,
                 relative_frame,
                 clip_duration: clip_duration.max(0),
@@ -608,6 +621,7 @@ fn audio_plugin_controls(
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
                 keyframed: track.is_some(),
+                expression: None,
                 value,
                 relative_frame: frame,
                 clip_duration: duration,
@@ -852,6 +866,40 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_expression_is_exposed_on_its_control() {
+        let metadata =
+            parse_effect_metadata(include_bytes!("../../../catalog/effects/transform.json"))
+                .expect("transform metadata");
+        let mut extra = std::collections::BTreeMap::new();
+        extra.insert("expressions".to_owned(), json!({"x": "10 * 2"}));
+        let effect = EffectDocument {
+            id: "transform".to_owned(),
+            name: String::new(),
+            enabled: true,
+            params: metadata.params.clone(),
+            keyframes: None,
+            extra,
+        };
+        let document = TimelineState::from_json(
+            br#"{"version":3,"scenes":[{"id":1,"name":"Root","duration":300}],"clips":[]}"#,
+        )
+        .expect("document")
+        .snapshot();
+        let controls = effect_controls(&metadata, &effect, &document, 1, 0, 100);
+        let x = controls
+            .iter()
+            .find(|control| control.param.as_deref() == Some("x"))
+            .expect("x control");
+        assert_eq!(x.expression.as_deref(), Some("10 * 2"));
+        assert!(
+            controls
+                .iter()
+                .filter(|control| control.param.as_deref() != Some("x"))
+                .all(|control| control.expression.is_none())
+        );
+    }
+
+    #[test]
     fn path_filters_preserve_qt_string_and_array_metadata() {
         assert_eq!(control_filter(None), "");
         assert_eq!(
@@ -912,6 +960,7 @@ mod tests {
             filter: String::new(),
             disabled: false,
             keyframed: false,
+            expression: None,
             value: json!(0),
             relative_frame: 0,
             clip_duration: 100,

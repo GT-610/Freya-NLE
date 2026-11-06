@@ -1387,6 +1387,13 @@ fn push_object_settings_rows(
     for control in controls {
         let (minimum, maximum) = object_control_range(control);
         let localized_label = localized_effect_metadata(&control.label).into_owned();
+        // A parameter driven by a reference expression reads differently from
+        // a stored number; the marker keeps the two apart in the row.
+        let localized_label = if control.expression.is_some() {
+            format!("{localized_label} ƒ")
+        } else {
+            localized_label
+        };
         let option_labels = control
             .options
             .iter()
