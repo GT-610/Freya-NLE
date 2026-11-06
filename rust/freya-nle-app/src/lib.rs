@@ -559,6 +559,25 @@ impl ApplicationModel {
         Ok(self.add_project_entry(project, name))
     }
 
+    /// Records the current state as a saved version on demand.
+    pub fn record_backup_now(&mut self, project_index: usize) -> Result<(), String> {
+        if !self.backup_enabled {
+            return Err("backup history is disabled".to_owned());
+        }
+        let path = self
+            .projects
+            .get(project_index)
+            .and_then(|project| project.workspace.project().path.clone())
+            .ok_or_else(|| "save the project once before adding a version".to_owned())?;
+        let bytes = self.projects[project_index]
+            .workspace
+            .project()
+            .snapshot_bytes()?;
+        self.backup_store
+            .record(&path, &bytes, self.backup_limit)
+            .map(|_| ())
+    }
+
     pub fn backup_errors(&self) -> &[String] {
         &self.backup_errors
     }
@@ -1022,6 +1041,36 @@ mod tests {
             .expect("backup removes");
         assert_eq!(app.backup_entries(0).len(), 1);
         assert!(app.backup_errors().is_empty());
+
+        std::fs::remove_file(path).expect("saved project removes");
+    }
+
+    #[test]
+    fn manual_versions_respect_the_limit_and_the_switch() {
+        let mut app = ApplicationModel::default();
+        app.create_project(ProjectDefaults::default());
+        let path = temporary_project_path("manual-backup");
+        assert!(matches!(
+            app.request_save_current_project(),
+            LifecycleStep::ChooseSavePath { .. }
+        ));
+        assert_eq!(
+            app.complete_save_path(Some(&path)),
+            LifecycleStep::ProjectSaved { project_index: 0 }
+        );
+        assert_eq!(app.backup_entries(0).len(), 1);
+
+        app.record_backup_now(0).expect("a version is recorded");
+        assert_eq!(app.backup_entries(0).len(), 2);
+
+        // The configured limit prunes older copies immediately.
+        app.set_backup_history(true, 1);
+        app.record_backup_now(0).expect("a version is recorded");
+        assert_eq!(app.backup_entries(0).len(), 1);
+
+        // Turning history off refuses manual versions as well.
+        app.set_backup_history(false, 20);
+        assert!(app.record_backup_now(0).is_err());
 
         std::fs::remove_file(path).expect("saved project removes");
     }

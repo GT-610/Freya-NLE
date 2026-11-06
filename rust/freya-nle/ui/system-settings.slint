@@ -121,6 +121,8 @@ export component SystemSettingsWindow inherits Window {
     in-out property <bool> confirm-unsaved: true;
     in-out property <bool> auto-backup: true;
     in-out property <int> backup-interval: 5;
+    in-out property <bool> backup-history-enabled: true;
+    in-out property <int> backup-history-limit: 20;
     in-out property <int> recent-project-max-count: 10;
     in-out property <int> undo-count: 32;
     in-out property <int> max-image-size: 8192;
@@ -288,6 +290,17 @@ export component SystemSettingsWindow inherits Window {
                             minimum: 1;
                             maximum: 60;
                             interactive: root.auto-backup;
+                        }
+                        CheckBox {
+                            text: @tr("Keep a version history of saved projects");
+                            checked <=> root.backup-history-enabled;
+                        }
+                        SystemSettingSpinRow {
+                            label: @tr("Versions kept per project");
+                            value <=> root.backup-history-limit;
+                            minimum: 1;
+                            maximum: 100;
+                            interactive: root.backup-history-enabled;
                         }
                         SystemSettingSpinRow {
                             label: @tr("Number of recent projects to keep");

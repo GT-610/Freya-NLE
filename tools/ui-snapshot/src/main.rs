@@ -168,9 +168,17 @@ fn main() {
             ui.show().expect("show the layer settings window");
             save(&window, width, height, &output_name("layer", preference));
         }
-        "system" => {            let ui = SystemSettingsWindow::new().expect("create the system settings window");
+        "system" => {
+            let ui = SystemSettingsWindow::new().expect("create the system settings window");
             ui.global::<AppTheme>().set_preference_index(preference);
-            ui.set_tab_index(2);
+            // `UI_SNAPSHOT_TAB=0` renders a specific preferences page; the
+            // default stays on Timeline, whose rows are the tallest.
+            let tab = std::env::var("UI_SNAPSHOT_TAB")
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(2)
+                .clamp(0, 8);
+            ui.set_tab_index(tab);
             ui.show().expect("show the system settings window");
             save(&window, width, height, &output_name("system", preference));
         }

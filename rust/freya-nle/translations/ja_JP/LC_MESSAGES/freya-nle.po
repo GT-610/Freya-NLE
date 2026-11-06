@@ -1537,3 +1537,12 @@ msgstr "既定値として保存"
 
 msgid "Clear Default"
 msgstr "既定値を削除"
+
+msgid "Keep a version history of saved projects"
+msgstr "保存したプロジェクトの履歴を保持する"
+
+msgid "Versions kept per project"
+msgstr "プロジェクトごとの保持数"
+
+msgid "Save Version"
+msgstr "バージョンを保存"

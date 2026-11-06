@@ -19,6 +19,7 @@ export component BackupHistoryWindow inherits Window {
 
     callback open-entry(string);
     callback delete-entry(string);
+    callback save-version();
     callback close-window();
 
     Rectangle {
@@ -99,6 +100,11 @@ export component BackupHistoryWindow inherits Window {
             }
             HorizontalLayout {
                 alignment: end;
+                spacing: 8px;
+                Button {
+                    text: @tr("Save Version");
+                    clicked => { root.save-version(); }
+                }
                 Button {
                     text: @tr("Close");
                     clicked => { root.close-window(); }

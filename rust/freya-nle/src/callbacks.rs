@@ -537,6 +537,20 @@ pub(super) fn install_callbacks(
             Err(error) => show_error_dialog(&error),
         }
     });
+    let backup_save_ui = lifecycle_ui.clone();
+    backup_history.on_save_version(move || {
+        let recorded = {
+            let mut model = backup_save_ui.model.borrow_mut();
+            let Some(index) = model.current_project_index() else {
+                return;
+            };
+            model.record_backup_now(index)
+        };
+        match recorded {
+            Ok(()) => backup_save_ui.sync_backup_history(),
+            Err(error) => show_error_dialog(&error),
+        }
+    });
     let backup_close_window = backup_history.as_weak();
     backup_history.on_close_window(move || {
         if let Some(window) = backup_close_window.upgrade() {

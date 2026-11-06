@@ -311,6 +311,8 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
     window.set_confirm_unsaved(settings.bool_value("showConfirmOnClose", true));
     window.set_auto_backup(settings.bool_value("enableAutoBackup", true));
     window.set_backup_interval(settings.i32_value("backupInterval", 5).clamp(1, 60));
+    window.set_backup_history_enabled(settings.bool_value("backupHistoryEnabled", true));
+    window.set_backup_history_limit(settings.i32_value("backupHistoryLimit", 20).clamp(1, 100));
     window
         .set_recent_project_max_count(settings.i32_value("recentProjectMaxCount", 10).clamp(1, 50));
     window.set_undo_count(settings.i32_value("undoCount", 32).clamp(1, 1_000));
@@ -507,6 +509,10 @@ pub(super) fn apply_runtime_settings(model: &mut ApplicationModel, settings: &Se
     let backup_minutes = settings.i32_value("backupInterval", 5).clamp(1, 24 * 60) as u64;
     model.set_recovery_interval(Duration::from_secs(backup_minutes * 60));
     model.set_auto_backup_enabled(settings.bool_value("enableAutoBackup", true));
+    model.set_backup_history(
+        settings.bool_value("backupHistoryEnabled", true),
+        settings.i32_value("backupHistoryLimit", 20).clamp(1, 100) as usize,
+    );
     model.set_undo_limit(settings.i32_value("undoCount", 32).max(1) as usize);
 }
 
@@ -545,6 +551,14 @@ fn system_settings_replacement(
         (
             "backupInterval",
             serde_json::json!(window.get_backup_interval().clamp(1, 60)),
+        ),
+        (
+            "backupHistoryEnabled",
+            serde_json::json!(window.get_backup_history_enabled()),
+        ),
+        (
+            "backupHistoryLimit",
+            serde_json::json!(window.get_backup_history_limit().clamp(1, 100)),
         ),
         (
             "recentProjectMaxCount",
