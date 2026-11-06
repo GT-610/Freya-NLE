@@ -1592,8 +1592,6 @@ msgstr "参数"
 msgid "Expression"
 msgstr "参照式"
 
-msgid "Reads other parameters by name, e.g. X, Blur.size, $, @min/@max/@abs/@clamp."
-msgstr "按名称读取其他参数，例如 X、Blur.size、$、@min/@max/@abs/@clamp"
+msgid "Reads other parameters by name, e.g. X, Blur.size, above.X, layer1.X, $, @min/@max/@abs/@clamp."
+msgstr "按名称读取其他参数，例如 X、Blur.size、above.X、layer1.X、$、@min/@max/@abs/@clamp"
 
-msgid "Layer and above/under references are not resolved yet."
-msgstr "图层以及 above/under 引用尚未解析"

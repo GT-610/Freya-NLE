@@ -645,13 +645,7 @@ export component ObjectSettingsWindow inherits Window {
                     accessible-label: @tr("Expression");
                 }
                 Text {
-                    text: @tr("Reads other parameters by name, e.g. X, Blur.size, $, @min/@max/@abs/@clamp.");
-                    color: AppTheme.muted-foreground;
-                    font-size: 0.72rem;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: @tr("Layer and above/under references are not resolved yet.");
+                    text: @tr("Reads other parameters by name, e.g. X, Blur.size, above.X, layer1.X, $, @min/@max/@abs/@clamp.");
                     color: AppTheme.muted-foreground;
                     font-size: 0.72rem;
                     wrap: word-wrap;

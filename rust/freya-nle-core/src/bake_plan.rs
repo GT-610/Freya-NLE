@@ -427,6 +427,8 @@ struct SceneInput {
     max_clip_id: i32,
     #[serde(default)]
     clips: Vec<ClipInput>,
+    #[serde(default)]
+    layer_settings: Vec<LayerSettingDocument>,
 }
 
 #[derive(Deserialize)]
@@ -959,41 +961,6 @@ impl CachedClip {
             effects,
         }
     }
-
-    /// Resolves reference expressions in this clip's effects for one frame.
-    ///
-    /// AviUtl2 lets a parameter read other parameters by name: a bare `X` is
-    /// another parameter of the same effect, `ぼかし.範囲` another effect of the
-    /// same object, `$` the parameter's own base value, and `@min/@max/@abs/
-    /// @clamp` wrap the arithmetic. The references are substituted with numbers
-    /// and the rest of the expression is evaluated by the existing Lua path, so
-    /// both expression styles share one evaluator.
-    fn resolve_expressions(&mut self, frame: i32) {
-        let expressions = self
-            .effects
-            .iter()
-            .enumerate()
-            .flat_map(|(index, effect)| {
-                effect
-                    .expression_names()
-                    .into_iter()
-                    .map(move |name| (index, name))
-            })
-            .collect::<Vec<_>>();
-        if expressions.is_empty() {
-            return;
-        }
-        for (effect_index, name) in expressions {
-            let mut visiting = HashSet::new();
-            if let Some(value) =
-                resolve_effect_expression(&self.effects, effect_index, &name, frame, &mut visiting)
-            {
-                self.effects[effect_index]
-                    .resolved_expressions
-                    .insert(name, value);
-            }
-        }
-    }
 }
 
 /// Reads the `expressions` map an effect carries alongside its values.
@@ -1012,98 +979,278 @@ fn expressions_from_extra(extra: &ExtraFields) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// Resolves one parameter's expression, following references into siblings.
+/// Resolves the reference expressions of every active clip for one frame.
 ///
-/// Returns `None` when the expression is unreadable, references something this
-/// batch cannot resolve (layers, above/under), or takes part in a cycle; the
-/// caller then leaves the parameter's literal value in place.
-fn resolve_effect_expression(
-    effects: &[CachedEffect],
-    effect_index: usize,
-    name: &str,
-    frame: i32,
-    visiting: &mut HashSet<(usize, String)>,
-) -> Option<f64> {
-    let effect = effects.get(effect_index)?;
-    let source = effect.expression_source(name)?;
-    if !visiting.insert((effect_index, name.to_owned())) {
-        return None;
+/// AviUtl2 lets a parameter read other parameters by name: a bare `X` is
+/// another parameter of the same effect, `ぼかし.範囲` another effect of the same
+/// object, `above.X` / `layer1.X` / `レイヤー名.X` the same effect on another
+/// layer, and `$` the parameter's own name. References become numbers and the
+/// rest of the expression is evaluated by the existing Lua path, so both
+/// expression styles share one evaluator.
+fn resolve_scene_expressions(
+    clips: &mut [CachedClip],
+    active: &[usize],
+    current_frame: i32,
+    layer_settings: &BTreeMap<i32, LayerSetting>,
+) {
+    if clips.is_empty() || active.is_empty() {
+        return;
     }
-    let substituted = substitute_references(source, &mut |chain| {
-        resolve_reference(effects, effect_index, name, chain, frame, visiting)
-    });
-    let value = effect.raw_numeric(name, frame).unwrap_or(0.0);
-    let resolved = expression::evaluate(&substituted, effect.time_seconds(frame), 0, value);
-    visiting.remove(&(effect_index, name.to_owned()));
-    resolved
-}
-
-/// Resolves one reference chain such as `X`, `$`, or `ぼかし.範囲`.
-fn resolve_reference(
-    effects: &[CachedEffect],
-    effect_index: usize,
-    self_param: &str,
-    chain: &str,
-    frame: i32,
-    visiting: &mut HashSet<(usize, String)>,
-) -> Option<f64> {
-    if chain == "$" {
-        // `$` expands to the parameter's own name, so `$+1` reads `X+1`.
-        return resolve_parameter(
-            effects,
-            effect_index,
-            self_param,
-            self_param,
-            frame,
-            visiting,
-        );
-    }
-    let parts = chain.split('.').collect::<Vec<_>>();
-    match parts.as_slice() {
-        [param] => resolve_parameter(effects, effect_index, self_param, param, frame, visiting),
-        [effect_name, param] => {
-            // `layer1.X`, `above.X`, `under2.X` and layer names need layer
-            // lookups that this batch does not carry into the clip cache.
-            if is_layer_reference(effect_name) {
-                return None;
+    let scene = ExpressionScene {
+        clips,
+        active,
+        current_frame,
+        layer_settings,
+    };
+    let mut cache: HashMap<(usize, usize, String), Option<f64>> = HashMap::new();
+    let mut resolved = Vec::new();
+    for &clip_index in active {
+        let Some(clip) = scene.clips.get(clip_index) else {
+            continue;
+        };
+        for effect_index in 0..clip.effects.len() {
+            for name in scene.clips[clip_index].effects[effect_index].expression_names() {
+                let mut visiting = HashSet::new();
+                if let Some(value) =
+                    scene.resolve(clip_index, effect_index, &name, &mut visiting, &mut cache)
+                {
+                    resolved.push(((clip_index, effect_index, name), value));
+                }
             }
-            let target = effects
-                .iter()
-                .position(|effect| effect.name == *effect_name || effect.id == *effect_name)?;
-            resolve_parameter(effects, target, self_param, param, frame, visiting)
         }
-        _ => None,
+    }
+    for ((clip_index, effect_index, name), value) in resolved {
+        if let Some(effect) = clips
+            .get_mut(clip_index)
+            .and_then(|clip| clip.effects.get_mut(effect_index))
+        {
+            effect.resolved_expressions.insert(name, value);
+        }
     }
 }
 
-fn resolve_parameter(
-    effects: &[CachedEffect],
-    effect_index: usize,
-    self_param: &str,
-    param: &str,
-    frame: i32,
-    visiting: &mut HashSet<(usize, String)>,
-) -> Option<f64> {
-    let param = if param == "$" { self_param } else { param };
-    let effect = effects.get(effect_index)?;
-    if effect.expression_source(param).is_some() {
-        return resolve_effect_expression(effects, effect_index, param, frame, visiting);
-    }
-    effect.raw_numeric(param, frame)
+/// The active clips and layer names one frame's references resolve against.
+struct ExpressionScene<'a> {
+    clips: &'a [CachedClip],
+    active: &'a [usize],
+    current_frame: i32,
+    layer_settings: &'a BTreeMap<i32, LayerSetting>,
 }
 
-fn is_layer_reference(name: &str) -> bool {
-    name.eq_ignore_ascii_case("above")
-        || name.eq_ignore_ascii_case("under")
-        || name
-            .get(..5)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("layer"))
-        || name
-            .get(..5)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("above"))
-        || name
-            .get(..5)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("under"))
+impl ExpressionScene<'_> {
+    fn relative_frame(&self, clip_index: usize) -> i32 {
+        self.clips.get(clip_index).map_or(0, |clip| {
+            self.current_frame.saturating_sub(clip.start_frame).max(0)
+        })
+    }
+
+    fn resolve(
+        &self,
+        clip_index: usize,
+        effect_index: usize,
+        name: &str,
+        visiting: &mut HashSet<(usize, usize, String)>,
+        cache: &mut HashMap<(usize, usize, String), Option<f64>>,
+    ) -> Option<f64> {
+        let key = (clip_index, effect_index, name.to_owned());
+        if let Some(cached) = cache.get(&key) {
+            return *cached;
+        }
+        if !visiting.insert(key.clone()) {
+            return None;
+        }
+        let resolved = (|| {
+            let effect = self.clips.get(clip_index)?.effects.get(effect_index)?;
+            let source = effect.expression_source(name)?;
+            let frame = self.relative_frame(clip_index);
+            let substituted = substitute_references(source, &mut |chain| {
+                self.resolve_chain(clip_index, effect_index, name, chain, visiting, cache)
+            });
+            let value = effect.raw_numeric(name, frame).unwrap_or(0.0);
+            expression::evaluate(&substituted, effect.time_seconds(frame), 0, value)
+        })();
+        visiting.remove(&key);
+        cache.insert(key, resolved);
+        resolved
+    }
+
+    /// Resolves one chain such as `X`, `$`, `ぼかし.範囲`, `above.X` or
+    /// `layer1.ぼかし.範囲`.
+    fn resolve_chain(
+        &self,
+        clip_index: usize,
+        effect_index: usize,
+        self_param: &str,
+        chain: &str,
+        visiting: &mut HashSet<(usize, usize, String)>,
+        cache: &mut HashMap<(usize, usize, String), Option<f64>>,
+    ) -> Option<f64> {
+        if chain == "$" {
+            return self.resolve_parameter(
+                clip_index,
+                effect_index,
+                self_param,
+                self_param,
+                visiting,
+                cache,
+            );
+        }
+        let parts = chain.split('.').collect::<Vec<_>>();
+        match parts.as_slice() {
+            [param] => {
+                self.resolve_parameter(clip_index, effect_index, self_param, param, visiting, cache)
+            }
+            [scope, param] => {
+                if self.is_layer_scope(scope) {
+                    let target = self.layer_target(clip_index, scope)?;
+                    let target_effect = self.same_effect_on(target, clip_index, effect_index)?;
+                    return self.resolve_parameter(
+                        target,
+                        target_effect,
+                        self_param,
+                        param,
+                        visiting,
+                        cache,
+                    );
+                }
+                let target_effect = self.effect_by_name(clip_index, scope)?;
+                self.resolve_parameter(
+                    clip_index,
+                    target_effect,
+                    self_param,
+                    param,
+                    visiting,
+                    cache,
+                )
+            }
+            [scope, effect_name, param] => {
+                let target = self.layer_target(clip_index, scope)?;
+                let target_effect = self.effect_by_name(target, effect_name)?;
+                self.resolve_parameter(target, target_effect, self_param, param, visiting, cache)
+            }
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_parameter(
+        &self,
+        clip_index: usize,
+        effect_index: usize,
+        self_param: &str,
+        param: &str,
+        visiting: &mut HashSet<(usize, usize, String)>,
+        cache: &mut HashMap<(usize, usize, String), Option<f64>>,
+    ) -> Option<f64> {
+        let param = if param == "$" { self_param } else { param };
+        let effect = self.clips.get(clip_index)?.effects.get(effect_index)?;
+        if effect.expression_source(param).is_some() {
+            return self.resolve(clip_index, effect_index, param, visiting, cache);
+        }
+        effect.raw_numeric(param, self.relative_frame(clip_index))
+    }
+
+    fn effect_by_name(&self, clip_index: usize, name: &str) -> Option<usize> {
+        self.clips
+            .get(clip_index)?
+            .effects
+            .iter()
+            .position(|effect| effect.name == name || effect.id == name)
+    }
+
+    /// Finds the effect on another layer that corresponds to the referencing
+    /// one: same display name when both carry one, otherwise the same id.
+    fn same_effect_on(
+        &self,
+        target_clip: usize,
+        source_clip: usize,
+        source_effect: usize,
+    ) -> Option<usize> {
+        let source = self.clips.get(source_clip)?.effects.get(source_effect)?;
+        self.clips
+            .get(target_clip)?
+            .effects
+            .iter()
+            .position(|effect| {
+                (!source.name.is_empty() && effect.name == source.name) || effect.id == source.id
+            })
+    }
+
+    /// Whether a scope token names a layer rather than an effect.
+    fn is_layer_scope(&self, scope: &str) -> bool {
+        let lower = scope.to_ascii_lowercase();
+        lower.starts_with("layer")
+            || lower.starts_with("above")
+            || lower.starts_with("under")
+            || self
+                .layer_settings
+                .values()
+                .any(|setting| !setting.name.is_empty() && setting.name == scope)
+    }
+
+    fn layer_target(&self, from_clip: usize, scope: &str) -> Option<usize> {
+        let from_layer = self.clips.get(from_clip)?.layer;
+        let lower = scope.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("layer")
+            && let Ok(layer) = rest.parse::<i32>()
+        {
+            return self.clip_on_layer(layer);
+        }
+        if let Some(layer) = self
+            .layer_settings
+            .iter()
+            .find(|(_, setting)| !setting.name.is_empty() && setting.name == scope)
+            .map(|(layer, _)| *layer)
+        {
+            return self.clip_on_layer(layer);
+        }
+        let (direction, digits) = if let Some(rest) = lower.strip_prefix("above") {
+            (1, rest)
+        } else {
+            (-1, lower.strip_prefix("under")?)
+        };
+        let count = if digits.is_empty() {
+            1
+        } else {
+            digits.parse::<usize>().ok().filter(|count| *count > 0)?
+        };
+        let layers = self.active_layers();
+        let layer = if direction > 0 {
+            layers
+                .iter()
+                .copied()
+                .filter(|layer| *layer > from_layer)
+                .nth(count - 1)
+        } else {
+            layers
+                .iter()
+                .rev()
+                .copied()
+                .filter(|layer| *layer < from_layer)
+                .nth(count - 1)
+        }?;
+        self.clip_on_layer(layer)
+    }
+
+    /// Every layer that has an active clip at this frame, sorted ascending.
+    fn active_layers(&self) -> Vec<i32> {
+        let mut layers = self
+            .active
+            .iter()
+            .filter_map(|&index| self.clips.get(index).map(|clip| clip.layer))
+            .collect::<Vec<_>>();
+        layers.sort_unstable();
+        layers.dedup();
+        layers
+    }
+
+    fn clip_on_layer(&self, layer: i32) -> Option<usize> {
+        self.active.iter().copied().find(|&index| {
+            self.clips
+                .get(index)
+                .is_some_and(|clip| clip.layer == layer)
+        })
+    }
 }
 
 /// Replaces every resolvable reference chain with its number, leaving unknown
@@ -1178,8 +1325,10 @@ struct BakePlan {
 }
 
 /// A layer setting reduced to what the frame evaluator needs.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct LayerSetting {
+    /// The user's layer name; references may address a layer by it.
+    name: String,
     x: f32,
     y: f32,
     z: f32,
@@ -1198,6 +1347,7 @@ impl LayerSetting {
             1.0
         };
         Self {
+            name: setting.name.trim().to_owned(),
             x: finite_f32(setting.x),
             y: finite_f32(setting.y),
             z: finite_f32(setting.z),
@@ -1225,12 +1375,17 @@ impl BakePlan {
             .filter(|clip| clip.id >= 0 && clip.id < max_clip_id)
             .map(|clip| CachedClip::new(clip, fps))
             .collect();
+        let layer_settings = input
+            .layer_settings
+            .iter()
+            .map(|setting| (setting.layer, LayerSetting::from_document(setting)))
+            .collect();
         Ok(Self::from_clips(
             fps,
             input.height,
             clips,
             HashMap::new(),
-            BTreeMap::new(),
+            layer_settings,
         ))
     }
 
@@ -1337,10 +1492,15 @@ impl BakePlan {
             for plugin in &mut clip.audio_plugins {
                 plugin.prepare_numeric(relative_frame);
             }
-            // Reference expressions read their siblings, so they are resolved
-            // after every effect has its own values for this frame.
-            clip.resolve_expressions(relative_frame);
         }
+        // References can point at other layers, so they are resolved once every
+        // clip has its own values for this frame.
+        resolve_scene_expressions(
+            &mut self.clips,
+            &selected,
+            key.current_frame,
+            &self.layer_settings,
+        );
         let mut group_controls = selected
             .iter()
             .filter_map(|&index| {
@@ -2426,6 +2586,112 @@ mod tests {
             .expect("blur effect");
         assert_eq!(blur.params["a"], json!("=b + 1"));
         assert_eq!(blur.params["b"], json!("=a + 1"));
+    }
+
+    #[test]
+    fn references_reach_other_layers_by_number_and_by_name() {
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 32,
+            "layerSettings": [{"layer": 1, "name": "Titles"}],
+            "clips": [
+                {
+                    "id": 1,
+                    "layer": 0,
+                    "startFrame": 0,
+                    "durationFrames": 60,
+                    "type": "video",
+                    "effects": [{
+                        "id": "transform",
+                        "enabled": true,
+                        "known": true,
+                        "params": {
+                            "x": "=layer1.Blur.size + 1",
+                            "y": "=Titles.Blur.size * 2"
+                        }
+                    }]
+                },
+                {
+                    "id": 2,
+                    "layer": 1,
+                    "startFrame": 0,
+                    "durationFrames": 60,
+                    "type": "video",
+                    "effects": [{
+                        "id": "blur",
+                        "name": "Blur",
+                        "enabled": true,
+                        "known": true,
+                        "params": {"size": 4.0}
+                    }]
+                }
+            ]
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute_frame(EvaluationKey { current_frame: 0 });
+        let transform = output.layers[0]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "transform")
+            .expect("transform effect");
+        assert_eq!(transform.params["x"], json!(5.0));
+        assert_eq!(transform.params["y"], json!(8.0));
+    }
+
+    #[test]
+    fn above_and_under_count_layers_relative_to_the_referencing_clip() {
+        let clips = [0_i32, 2, 4, 6]
+            .into_iter()
+            .map(|layer| {
+                let id = layer + 1;
+                let position = f64::from(layer + 1) * 10.0;
+                json!({
+                    "id": id,
+                    "layer": layer,
+                    "startFrame": 0,
+                    "durationFrames": 60,
+                    "type": "video",
+                    "effects": if layer == 2 {
+                        json!([{
+                            "id": "transform",
+                            "enabled": true,
+                            "known": true,
+                            "params": {
+                                "x": "=above.x",
+                                "y": "=under.x",
+                                "z": "=above2.x"
+                            }
+                        }])
+                    } else {
+                        json!([{
+                            "id": "transform",
+                            "enabled": true,
+                            "known": true,
+                            "params": {"x": position}
+                        }])
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let bytes = serde_json::to_vec(&json!({
+            "fps": 60.0,
+            "maxClipId": 32,
+            "clips": clips
+        }))
+        .expect("serialize scene fixture");
+        let mut plan = BakePlan::parse(&bytes).expect("valid plan");
+        let output = plan.compute_frame(EvaluationKey { current_frame: 0 });
+        let transform = output
+            .layers
+            .iter()
+            .flat_map(|layer| layer.effects.iter())
+            .find(|effect| effect.id == "transform" && effect.params.contains_key("y"))
+            .expect("transform effect");
+        // Layers 4 and 6 are above layer 2, layer 0 is below it.
+        assert_eq!(transform.params["x"], json!(50.0));
+        assert_eq!(transform.params["y"], json!(10.0));
+        assert_eq!(transform.params["z"], json!(70.0));
     }
 
     #[test]

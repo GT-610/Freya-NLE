@@ -1592,8 +1592,6 @@ msgstr "パラメータ"
 msgid "Expression"
 msgstr "参照式"
 
-msgid "Reads other parameters by name, e.g. X, Blur.size, $, @min/@max/@abs/@clamp."
-msgstr "他のパラメータを名前で参照します (例: X, Blur.size, $, @min/@max/@abs/@clamp)"
+msgid "Reads other parameters by name, e.g. X, Blur.size, above.X, layer1.X, $, @min/@max/@abs/@clamp."
+msgstr "他のパラメータを名前で参照します (例: X, Blur.size, above.X, layer1.X, $, @min/@max/@abs/@clamp)"
 
-msgid "Layer and above/under references are not resolved yet."
-msgstr "レイヤー参照と above/under にはまだ対応していません"
