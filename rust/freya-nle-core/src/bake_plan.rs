@@ -99,7 +99,14 @@ pub struct EvaluatedTransform {
     pub rotation_z: f32,
     pub scale_percent: f32,
     pub opacity: f32,
-    /// Horizontal stretch from the standard drawing (`aspect`, 100 = square).
+    /// Aspect ratio from the standard drawing: `-1.0..=1.0`, positive squeezes
+    /// horizontally and negative squeezes vertically, 0 leaves it alone.
+    ///
+    /// These are the units AviUtl2's Lua reference documents for `obj.aspect`
+    /// and the ones the compositor's `LayerTransform` already computed with
+    /// (`1.0 + aspect` / `1.0 - aspect`), so the value travels without a second
+    /// conversion. A percentage here would make the twice-converted default of
+    /// 100 stretch every object 101x wide.
     pub aspect: f32,
     /// Pivot the object rotates and scales around (`cx`/`cy`/`cz`).
     pub pivot_x: f32,
@@ -118,7 +125,7 @@ impl Default for EvaluatedTransform {
             rotation_z: 0.0,
             scale_percent: 100.0,
             opacity: 1.0,
-            aspect: 100.0,
+            aspect: 0.0,
             pivot_x: 0.0,
             pivot_y: 0.0,
             pivot_z: 0.0,
@@ -1666,7 +1673,7 @@ impl BakePlan {
                 rotation_z: 0.0,
                 scale: 100.0,
                 opacity: 1.0,
-                aspect: 100.0,
+                aspect: 0.0,
                 pivot_x: 0.0,
                 pivot_y: 0.0,
                 pivot_z: 0.0,
@@ -1691,7 +1698,7 @@ impl BakePlan {
                     render_input.rotation_z = effect.float_or("rotationZ", 0.0, relative_frame);
                     render_input.scale = effect.float_or("scale", 100.0, relative_frame);
                     render_input.opacity = effect.float_or("opacity", 1.0, relative_frame);
-                    render_input.aspect = effect.float_or("aspect", 100.0, relative_frame);
+                    render_input.aspect = effect.float_or("aspect", 0.0, relative_frame);
                     render_input.pivot_x = effect.float_or("cx", 0.0, relative_frame);
                     render_input.pivot_y = effect.float_or("cy", 0.0, relative_frame);
                     render_input.pivot_z = effect.float_or("cz", 0.0, relative_frame);

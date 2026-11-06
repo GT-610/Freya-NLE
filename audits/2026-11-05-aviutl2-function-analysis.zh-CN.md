@@ -2198,6 +2198,55 @@ UI 侧已把 `Err` 显示到 `error_message`（`callbacks.rs` 的 `on_recover_pr
   desktop 68、render 51、preview 26）；
 - 新测试单独通过；`clippy --no-deps` 与 `fmt --check` 干净。
 
+### 7.55 修正：`aspect` 的单位在计划与合成器之间错了一次（我自己引入的回归）
+
+§7.49 把 `aspect` 与 `cx/cy/cz` 收进渲染计划时，注释写着"沿用面板的百分比约定
+（100 = 等倍），因此不需要第二次单位换算"。这句话是错的：合成器从来不用百分比。
+
+| 位置 | 改动 |
+| --- | --- |
+| core | `EvaluatedTransform::aspect` 的默认值与文档改为 `-1.0..=1.0`（0 = 不变形），`render_input.aspect` 的兜底值同步改为 0 |
+| core | `expression.rs` 的脚本读回处按 AviUtl2 文档把 `obj.aspect` 夹到 `-1.0..=1.0` |
+| core / preview | `timeline.rs` 与 `expression.rs` 的测试夹具由 100 改为 0 |
+| render | 3 个测试固定合成器契约：默认 0 不拉伸、正值放大 X、负值放大 Y、极值有限且不翻转 |
+
+缺陷链路（我引入的，`73b6b7c0`）：
+
+1. 改动前，预览层直接用 `effect_number(layer, "transform", "aspect")` 读参数，
+   缺失时**兜底为 0**，恰好和合成器 `1.0 + aspect` 的单位一致。
+2. 改动后改读 `layer.transform.aspect`，而这个字段的默认值是 **100**。
+3. 合成器算 `scale_x = 1.0 + 100 = 101`，任何**没有标准绘制效果**或**省略该参数**的
+   对象都会被横向拉宽 101 倍，整幅画面被推出屏幕。
+
+现在单位与 AviUtl2 官方文档一致：`obj.aspect` 是 `-1.0～1.0`，
+"プラス=横縮小/マイナス=縦縮小"。这也是原始 Qt 前端 `CompositeView.qml` 的用法：
+`pAspect` 缺失时兜底 `0`，`aspectX = 1 + pAspect`、`aspectY = 1 - pAspect`。
+
+语义与取舍：
+
+- **有源码比对，不是猜**：`.build_tmp/.../CompositeView.qml` 里的
+  `aspectX`/`aspectY` 与 `rust` 渲染器逐字一致，默认值也是 0。所以缺的是**计划这一侧**
+  的单位，不是合成器。只改计划，不动渲染器公式。
+- **不照抄文档的"プラス=横縮小"去反转符号**：渲染器与 Qt 都是"正值变宽"。这里的
+  方向可能有历史成因（Qt 注释明写 `pAspect<0` 时用 `1-pAspect` 而非 `1+|pAspect|`
+  是"元実装に合わせる"），本批只修单位，不改渲染语义——那是另一个决定，需要单独
+  的对照证据。
+- **脚本侧夹紧而不只是改默认值**：老脚本或从百分比语义迁移来的写法可能写
+  `obj.aspect=100`，夹到 1.0 只是 2 倍变形，而不是 101 倍。
+- **`.exo` 导入不动**：那里的"縦横比"是绘图对象自身的几何宽高比（-100..100 百分比），
+  会立即换算成 `sizeW`/`sizeH`，与运行时 `obj.aspect` 是两回事，已有测试覆盖。
+- **回归测试挂在合成器消费点上**：`an_object_without_a_standard_drawing_is_not_stretched`
+  断言的是 preview 交给合成器的值。临时把默认值改回 100 后它报
+  `aspect must reach the compositor as a ratio: 100`，证明这条测试真的抓得住。
+
+验证：
+
+- 先证明测试有效：把三处默认值回退为 100，preview 测试立即失败；恢复后通过。
+- `cargo test --workspace --all-features --locked` 通过（core 223、app 287、
+  desktop 68、render 54、preview 27）；
+- `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟
+  `main_frames: 3`、`timeline_frames: 3`、`main_same_device: true`、`wgpu_errors: []`。
+
 ## 8. 验收与风险
 验收以可观察行为为准：标记在标尺上有清晰位置；前后跳转不越过场景时长；备注
 编辑取消后不写入；撤销一次回到打点前；重开项目后标记还在；没有标记时菜单项

@@ -49,7 +49,9 @@ pub(crate) struct TextScriptTransform {
     pub rotation_z: f32,
     pub scale_percent: f32,
     pub opacity: f32,
-    /// Horizontal stretch (`aspect`, 100 = square).
+    /// Aspect ratio (`obj.aspect`), `-1.0..=1.0`: positive squeezes
+    /// horizontally, negative squeezes vertically, 0 is unchanged. The same
+    /// units the compositor's `LayerTransform` computes with.
     pub aspect: f32,
     /// Pivot the object rotates around.
     pub pivot_x: f32,
@@ -306,7 +308,12 @@ impl TextScriptVm {
             rotation_z: read("rz").unwrap_or(clock.transform.rotation_z),
             scale_percent: read("zoom").map_or(clock.transform.scale_percent, |zoom| zoom * 100.0),
             opacity: read("alpha").unwrap_or(clock.transform.opacity),
-            aspect: read("aspect").unwrap_or(clock.transform.aspect),
+            // AviUtl2 documents `obj.aspect` as `-1.0..=1.0`. The compositor
+            // multiplies by `1.0 + aspect`, so an unclamped 100 (a percentage
+            // written by an older script) would stretch the object 101x.
+            aspect: read("aspect")
+                .unwrap_or(clock.transform.aspect)
+                .clamp(-1.0, 1.0),
             pivot_x: read("cx").unwrap_or(clock.transform.pivot_x),
             pivot_y: read("cy").unwrap_or(clock.transform.pivot_y),
             pivot_z: read("cz").unwrap_or(clock.transform.pivot_z),
@@ -513,7 +520,7 @@ mod tests {
                 rotation_z: 0.0,
                 scale_percent: 100.0,
                 opacity: 1.0,
-                aspect: 100.0,
+                aspect: 0.0,
                 pivot_x: 0.0,
                 pivot_y: 0.0,
                 pivot_z: 0.0,
@@ -582,7 +589,7 @@ mod tests {
             rotation_z: 10.0,
             scale_percent: 100.0,
             opacity: 1.0,
-            aspect: 100.0,
+            aspect: 0.0,
             pivot_x: 0.0,
             pivot_y: 0.0,
             pivot_z: 0.0,
@@ -618,14 +625,38 @@ mod tests {
         // `zoom` is a multiplier of the object's scale.
         let (_, transform) = expand_text_scripts("<?obj.zoom=2?>", &clock);
         assert_eq!(transform.expect("changed").scale_percent, 200.0);
-        // AviUtl marks `aspect` and the pivot (`cx`/`cy`/`cz`) writable too.
+        // AviUtl marks `aspect` and the pivot (`cx`/`cy`/`cz`) writable too,
+        // in the documented `-1.0..=1.0` range.
         let (printed, transform) =
-            expand_text_scripts("<?obj.aspect=150?><?obj.cx=32?><?=obj.aspect?>", &clock);
-        assert_eq!(printed, "150");
+            expand_text_scripts("<?obj.aspect=0.5?><?obj.cx=32?><?=obj.aspect?>", &clock);
+        assert_eq!(printed, "0.5");
         let transform = transform.expect("aspect and pivot changed");
-        assert_eq!(transform.aspect, 150.0);
+        assert_eq!(transform.aspect, 0.5);
         assert_eq!(transform.pivot_x, 32.0);
         assert_eq!(transform.pivot_y, 0.0, "an untouched pivot keeps its value");
+    }
+
+    /// `aspect` is a ratio, not a percentage: the compositor stretches by
+    /// `1.0 + aspect`, so a script written against the old percentage
+    /// convention has to be clamped instead of blowing the object up 101x.
+    #[test]
+    fn a_script_written_aspect_is_clamped_to_the_documented_range() {
+        let clock = clock(0.0, 1.0);
+        for (script, expected) in [
+            ("<?obj.aspect=100?>", 1.0),
+            ("<?obj.aspect=150?>", 1.0),
+            ("<?obj.aspect=-100?>", -1.0),
+            ("<?obj.aspect=0.25?>", 0.25),
+            ("<?obj.aspect=-0.5?>", -0.5),
+        ] {
+            let (_, transform) = expand_text_scripts(script, &clock);
+            let transform = transform.expect("the script wrote aspect");
+            assert_eq!(transform.aspect, expected, "{script}");
+        }
+        // Leaving it alone keeps the object's own value rather than clamping it
+        // into range, so an untouched object is not silently normalised.
+        let (_, transform) = expand_text_scripts("<?obj.cx=5?>", &clock);
+        assert_eq!(transform.expect("pivot changed").aspect, 0.0);
     }
 
     #[test]

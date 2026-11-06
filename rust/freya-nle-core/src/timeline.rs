@@ -73,7 +73,7 @@ mod tests {
             rotation_z: 6.0,
             scale: 125.0,
             opacity: 0.75,
-            aspect: 100.0,
+            aspect: 0.0,
             pivot_x: 0.0,
             pivot_y: 0.0,
             pivot_z: 0.0,

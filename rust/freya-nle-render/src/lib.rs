@@ -3712,6 +3712,89 @@ mod tests {
         ]
     }
 
+    /// `LayerTransform::aspect` is a ratio whose default is 0 (no stretch).
+    ///
+    /// The multipliers are what a caller's value turns into, so this pins the
+    /// contract where it is computed: 0 leaves the quad alone, a positive
+    /// value scales X, a negative one scales Y. The formula is the one the Qt
+    /// frontend used (`aspectX = 1 + aspect`, `aspectY = 1 - aspect`, default
+    /// `0`), including the historical asymmetry on the negative side.
+    ///
+    /// The value that used to arrive here was 100 — the panel's percentage
+    /// convention — which `1 + aspect` turned into a 101x wider quad and pushed
+    /// the whole picture off screen.
+    fn aspect_uniform(aspect: f32) -> [f32; 24] {
+        layer_uniform(
+            (1920, 1080),
+            (200, 100),
+            LayerTransform {
+                aspect,
+                ..Default::default()
+            },
+            LayerCrop::default(),
+            BlendMode::Normal,
+            None,
+            false,
+        )
+    }
+
+    fn quad_extent(uniform: &[f32; 24]) -> (f32, f32) {
+        (
+            ndc(uniform, 1)[0] - ndc(uniform, 0)[0],
+            ndc(uniform, 2)[1] - ndc(uniform, 0)[1],
+        )
+    }
+
+    #[test]
+    fn the_default_aspect_does_not_stretch_the_quad() {
+        let (width, height) = quad_extent(&aspect_uniform(0.0));
+        assert!(width > f32::EPSILON, "the quad has to be visible");
+        assert!(height > f32::EPSILON, "the quad has to be visible");
+        // An aspect of 0 has to be the same quad as leaving the field unset,
+        // which is what `LayerTransform::default()` means to a caller.
+        let (default_width, default_height) = quad_extent(&layer_uniform(
+            (1920, 1080),
+            (200, 100),
+            LayerTransform::default(),
+            LayerCrop::default(),
+            BlendMode::Normal,
+            None,
+            false,
+        ));
+        assert!((width - default_width).abs() < f32::EPSILON);
+        assert!((height - default_height).abs() < f32::EPSILON);
+    }
+
+    /// The stretch is a ratio, so the widest legal value is 2x, not 101x.
+    #[test]
+    fn aspect_scales_one_axis_by_the_ratio() {
+        let unchanged = quad_extent(&aspect_uniform(0.0));
+        let wide = quad_extent(&aspect_uniform(0.5));
+        let tallest = quad_extent(&aspect_uniform(-0.5));
+
+        // A positive aspect multiplies X and leaves Y alone.
+        assert!((wide.0 / unchanged.0 - 1.5).abs() < 0.01, "{wide:?}");
+        assert!((wide.1 - unchanged.1).abs() < 0.01, "{wide:?}");
+        // A negative aspect multiplies Y and leaves X alone.
+        assert!((tallest.0 - unchanged.0).abs() < 0.01, "{tallest:?}");
+        assert!((tallest.1 / unchanged.1 - 1.5).abs() < 0.01, "{tallest:?}");
+    }
+
+    /// The documented range has to stay finite and unflipped end to end, and
+    /// a value from the old percentage convention must not blow up the quad.
+    #[test]
+    fn aspect_extremes_stay_finite() {
+        for aspect in [-1.0, -0.5, 0.0, 0.5, 1.0, 100.0, -100.0] {
+            let uniform = aspect_uniform(aspect);
+            assert!(
+                uniform.iter().all(|value| value.is_finite()),
+                "aspect {aspect} produced a non-finite vertex"
+            );
+            let (width, height) = quad_extent(&uniform);
+            assert!(width >= 0.0 && height >= 0.0, "aspect {aspect} flipped");
+        }
+    }
+
     #[test]
     fn transform_maps_pixels_to_clip_space() {
         let uniform = layer_uniform(

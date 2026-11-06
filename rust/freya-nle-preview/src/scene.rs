@@ -1462,8 +1462,8 @@ mod tests {
                 "duration": 120,
                 "layer": 0,
                 "effects": [
-                    {"id": "text", "params": {"text": "<?obj.aspect=150?><?obj.cx=40?>"}},
-                    {"id": "transform", "params": {"x": 10, "aspect": 100, "cx": 0}}
+                    {"id": "text", "params": {"text": "<?obj.aspect=0.5?><?obj.cx=40?>"}},
+                    {"id": "transform", "params": {"x": 10, "aspect": 0, "cx": 0}}
                 ]
             }]
         }));
@@ -1471,9 +1471,51 @@ mod tests {
         let planned = planner.build(&document, 1, 0).expect("scene plans");
         let transform = planned.scene.layers[0].transform;
         // The script writes reach the layer transform the compositor consumes.
-        assert_eq!(transform.aspect, 150.0);
+        assert_eq!(transform.aspect, 0.5);
         assert_eq!(transform.pivot_x, 40.0);
         assert_eq!(transform.x, 10.0, "the object's own x is untouched");
+    }
+
+    /// A plain object must not be stretched.
+    ///
+    /// `aspect` reaches the compositor, which multiplies by `1.0 + aspect`.
+    /// An object with no standard drawing, or one that omits the parameter,
+    /// therefore has to arrive as 0. It used to arrive as 100 (the panel's
+    /// percentage convention), which multiplied the quad by 101 in X — the
+    /// whole picture pushed off screen.
+    #[test]
+    fn an_object_without_a_standard_drawing_is_not_stretched() {
+        for effects in [
+            json!([{"id": "text", "params": {"text": "hello"}}]),
+            json!([
+                {"id": "transform", "params": {"x": 10}},
+                {"id": "text", "params": {"text": "hello"}}
+            ]),
+        ] {
+            let document = document(json!({
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 10.0, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1,
+                    "sceneId": 1,
+                    "type": "text",
+                    "start": 0,
+                    "duration": 120,
+                    "layer": 0,
+                    "effects": effects
+                }]
+            }));
+            let mut planner = PreviewPlanner::new(&document, None);
+            let planned = planner.build(&document, 1, 0).expect("scene plans");
+            let transform = planned.scene.layers[0].transform;
+            assert_eq!(
+                transform.aspect, 0.0,
+                "aspect must reach the compositor as a ratio: {}",
+                transform.aspect
+            );
+            assert_eq!(transform.scale_percent, 100.0);
+        }
     }
 
     #[test]
