@@ -1176,6 +1176,17 @@ impl WorkspaceModel {
         plugin_index: usize,
         name: &str,
     ) -> bool {
+        self.save_audio_plugin_preset_scoped(store, plugin_index, name, None)
+    }
+
+    /// Saves an audio-plugin preset, optionally limited to `scope` parameters.
+    pub fn save_audio_plugin_preset_scoped(
+        &mut self,
+        store: &PresetStore,
+        plugin_index: usize,
+        name: &str,
+        scope: Option<&[String]>,
+    ) -> bool {
         let Some(plugin) = self
             .selected_clip_document()
             .filter(|clip| clip.clip_type == "audio")
@@ -1184,13 +1195,49 @@ impl WorkspaceModel {
             return false;
         };
         let plugin_id = plugin.id.clone();
-        let result = store.save(
-            &plugin_id,
-            name,
-            plugin.params.clone(),
-            plugin.keyframes.clone().unwrap_or_default(),
-            plugin.enabled,
-        );
+        let (params, keyframes) = match scope {
+            None => (
+                plugin.params.clone(),
+                plugin.keyframes.clone().unwrap_or_default(),
+            ),
+            Some(names) => {
+                if names.is_empty() {
+                    self.set_status(status_message!(
+                        "Select at least one parameter to save",
+                        "请至少选择一个要保存的参数",
+                        "保存する項目を 1 つ以上選択してください"
+                    ));
+                    return false;
+                }
+                let params = plugin
+                    .params
+                    .iter()
+                    .filter(|(param, _)| names.iter().any(|name| name == *param))
+                    .map(|(param, value)| (param.clone(), value.clone()))
+                    .collect::<Map<String, Value>>();
+                if params.is_empty() {
+                    self.set_status(status_message!(
+                        "The selected parameters are not in this plugin",
+                        "所选参数不属于这个插件",
+                        "選択した項目はこのプラグインにありません"
+                    ));
+                    return false;
+                }
+                let keyframes = plugin
+                    .keyframes
+                    .as_ref()
+                    .map(|tracks| {
+                        tracks
+                            .iter()
+                            .filter(|(param, _)| names.iter().any(|name| name == *param))
+                            .map(|(param, track)| (param.clone(), track.clone()))
+                            .collect::<Map<String, Value>>()
+                    })
+                    .unwrap_or_default();
+                (params, keyframes)
+            }
+        };
+        let result = store.save(&plugin_id, name, params, keyframes, plugin.enabled);
         match result {
             Ok(()) => {
                 self.set_status(status_message!(
@@ -7124,7 +7171,7 @@ mod tests {
                     "id":9,"sceneId":1,"type":"audio","start":20,"duration":100,"layer":0,
                     "effects":[{"id":"audio","name":"Audio","params":{"volume":1.0}}],
                     "audioPlugins":[
-                        {"id":"gain","enabled":true,"params":{"0":0.25}},
+                        {"id":"gain","enabled":true,"params":{"0":0.25,"1":0.4}},
                         {"id":"delay","enabled":true,"params":{"0":0.5}}
                     ]
                 }]
@@ -9302,6 +9349,33 @@ mod tests {
         let unknown = ["missing".to_owned()];
         assert!(!workspace.save_effect_preset_scoped(&store, 0, "Unknown", Some(&unknown)));
         assert!(store.names("blur").iter().all(|name| name == "Sized"));
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_scoped_audio_preset_saves_only_the_chosen_parameters() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-scoped-audio-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_audio_plugins();
+        workspace.click_clip(9, false);
+        assert!(workspace.set_audio_plugin_parameter_at_frame(0, "0", 0, json!(0.8)));
+        assert!(workspace.set_audio_plugin_parameter_at_frame(0, "1", 0, json!(0.3)));
+
+        let scope = ["0".to_owned()];
+        assert!(workspace.save_audio_plugin_preset_scoped(&store, 0, "Gain", Some(&scope)));
+        let preset = store.load_preset("gain", "Gain").expect("preset loads");
+        assert_eq!(preset.params.keys().collect::<Vec<_>>(), ["0"]);
+        assert!(
+            !workspace.save_audio_plugin_preset_scoped(&store, 0, "Empty", Some(&[])),
+            "an empty scope is refused"
+        );
+        let unknown = ["9".to_owned()];
+        assert!(!workspace.save_audio_plugin_preset_scoped(&store, 0, "Unknown", Some(&unknown)));
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }

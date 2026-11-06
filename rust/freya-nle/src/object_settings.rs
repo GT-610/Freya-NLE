@@ -498,18 +498,23 @@ impl ObjectSettingsUi {
         else {
             return Vec::new();
         };
-        if settings.audio_plugin_mode {
-            return Vec::new();
-        }
-        let Some(effect) = settings
-            .effects
-            .iter()
-            .find(|effect| effect.index == effect_index)
-        else {
+        let controls = if settings.audio_plugin_mode {
+            settings
+                .audio_plugins
+                .iter()
+                .find(|plugin| plugin.index == effect_index)
+                .map(|plugin| &plugin.controls)
+        } else {
+            settings
+                .effects
+                .iter()
+                .find(|effect| effect.index == effect_index)
+                .map(|effect| &effect.controls)
+        };
+        let Some(controls) = controls else {
             return Vec::new();
         };
-        effect
-            .controls
+        controls
             .iter()
             .filter_map(|control| {
                 let param = control.param.as_ref()?;
@@ -533,15 +538,20 @@ impl ObjectSettingsUi {
             .borrow_mut()
             .current_workspace_mut()
             .is_some_and(|workspace| {
+                let selected = scope
+                    .iter()
+                    .filter(|(_, checked)| *checked)
+                    .map(|(param, _)| param.clone())
+                    .collect::<Vec<_>>();
+                let scoped = (!scope.is_empty()).then_some(selected);
                 if workspace.object_settings_uses_audio_plugins() {
-                    workspace.save_audio_plugin_preset(&self.presets, effect_index, name)
+                    workspace.save_audio_plugin_preset_scoped(
+                        &self.presets,
+                        effect_index,
+                        name,
+                        scoped.as_deref(),
+                    )
                 } else {
-                    let selected = scope
-                        .iter()
-                        .filter(|(_, checked)| *checked)
-                        .map(|(param, _)| param.clone())
-                        .collect::<Vec<_>>();
-                    let scoped = (!scope.is_empty()).then_some(selected);
                     workspace.save_effect_preset_scoped(
                         &self.presets,
                         effect_index,
