@@ -57,6 +57,35 @@ struct ProjectManifest {
     name: String,
 }
 
+/// The directory versions are written to when the user has not chosen one.
+#[cfg(not(test))]
+pub fn default_backup_root() -> PathBuf {
+    application_data_root().join("backups")
+}
+
+/// Resolves the configured directory against one raw setting value.
+///
+/// An empty value means "the default location"; a relative path is rejected
+/// because its meaning would depend on the working directory of the process.
+pub fn backup_root_from_setting(value: &str) -> Option<PathBuf> {
+    let value = value.trim();
+    if value.is_empty() {
+        #[cfg(not(test))]
+        {
+            return Some(default_backup_root());
+        }
+        #[cfg(test)]
+        {
+            return None;
+        }
+    }
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
 /// Bytes the on-disk backup store takes, for the settings page.
 ///
 /// A UI thread reads this once per page open, so it goes through the same
@@ -81,11 +110,23 @@ pub(crate) struct BackupStore {
 impl BackupStore {
     #[cfg(not(test))]
     pub(crate) fn new() -> Self {
-        Self::with_root(application_data_root().join("backups"))
+        Self::with_root(default_backup_root())
     }
 
     pub(crate) fn with_root(root: PathBuf) -> Self {
         Self { root }
+    }
+
+    /// Points the store at a user-chosen directory.
+    ///
+    /// The directory is created on demand, so a typo only fails when a version
+    /// is actually written instead of preventing the editor from starting.
+    pub(crate) fn set_root(&mut self, root: PathBuf) {
+        self.root = root;
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 
     /// The directory name that holds one project's backups.
@@ -490,6 +531,37 @@ mod tests {
         assert_eq!(projects[0].path, None);
         assert_eq!(projects[0].entries.len(), 1);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_configured_root_replaces_where_versions_are_written() {
+        let root = test_root("custom-root");
+        let mut store = BackupStore::with_root(root.join("default"));
+        let project = root.join("project.freya");
+        store.record(&project, b"first", 5).expect("records");
+        assert_eq!(store.entries(&project).len(), 1);
+
+        let custom = root.join("external");
+        store.set_root(custom.clone());
+        assert_eq!(store.root(), custom.as_path());
+        // The new location starts empty; nothing was moved behind the user.
+        assert!(store.projects().is_empty());
+        store.record(&project, b"second", 5).expect("records again");
+        assert_eq!(store.projects().len(), 1);
+        assert!(custom.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_setting_only_accepts_an_absolute_directory() {
+        assert!(backup_root_from_setting("/tmp/backups").is_some());
+        assert_eq!(
+            backup_root_from_setting("/tmp/backups"),
+            Some(PathBuf::from("/tmp/backups"))
+        );
+        assert!(backup_root_from_setting("  /tmp/backups  ").is_some());
+        assert!(backup_root_from_setting("relative/backups").is_none());
+        assert!(backup_root_from_setting(" ").is_none());
     }
 
     #[test]

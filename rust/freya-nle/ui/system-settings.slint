@@ -72,6 +72,39 @@ export component SystemSettingLineRow inherits HorizontalLayout {
     }
 }
 
+// A directory row: typing is allowed, and the button offers the picker so a
+// path never has to be spelled from memory.
+export component SystemSettingPathRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <string> placeholder;
+    in property <bool> interactive: true;
+    callback edited(string);
+    callback browse();
+    spacing: AppTheme.spacing-md;
+    opacity: root.interactive ? 1 : 0.5;
+    Text {
+        text: root.label;
+        width: 240px;
+        color: AppTheme.muted-foreground;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    LineEdit {
+        text: root.value;
+        placeholder-text: root.placeholder;
+        enabled: root.interactive;
+        accessible-label: root.label;
+        edited(value) => { root.edited(value); }
+        horizontal-stretch: 1;
+    }
+    Button {
+        text: @tr("Browse...");
+        enabled: root.interactive;
+        clicked => { root.browse(); }
+    }
+}
+
 export component SystemSettingsNavItem inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
@@ -124,6 +157,9 @@ export component SystemSettingsWindow inherits Window {
     in-out property <bool> backup-history-enabled: true;
     in-out property <int> backup-history-limit: 20;
     in-out property <int> backup-history-total-limit: 512;
+    // Empty means the default application-data location.
+    in-out property <string> backup-history-directory: "";
+    callback choose-backup-folder();
     // What the store currently takes, so the budget has a reference point.
     in property <string> backup-size-text: "";
     in-out property <int> recent-project-max-count: 10;
@@ -319,6 +355,14 @@ export component SystemSettingsWindow inherits Window {
                             color: AppTheme.muted-foreground;
                             font-size: 0.75rem;
                             wrap: word-wrap;
+                        }
+                        SystemSettingPathRow {
+                            label: @tr("Backup folder");
+                            value: root.backup-history-directory;
+                            placeholder: @tr("Default location");
+                            interactive: root.backup-history-enabled;
+                            edited(value) => { root.backup-history-directory = value; }
+                            browse => { root.choose-backup-folder(); }
                         }
                         SystemSettingSpinRow {
                             label: @tr("Number of recent projects to keep");

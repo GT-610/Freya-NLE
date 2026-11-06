@@ -647,6 +647,27 @@ impl ApplicationModel {
             * 1024;
     }
 
+    /// Points the backup store at another directory.
+    ///
+    /// Existing versions are not moved: the new location starts empty and the
+    /// old one keeps whatever was written there, because a background copy
+    /// could silently duplicate hundreds of megabytes.
+    pub fn set_backup_directory(&mut self, root: Option<PathBuf>) {
+        let custom = root.as_ref().filter(|path| path.is_absolute()).cloned();
+        if let Some(root) = custom {
+            self.backup_store.set_root(root);
+        }
+        #[cfg(not(test))]
+        if root.is_none() {
+            self.backup_store.set_root(backup::default_backup_root());
+        }
+    }
+
+    /// The directory versions are currently written to.
+    pub fn backup_directory(&self) -> std::path::PathBuf {
+        self.backup_store.root().to_path_buf()
+    }
+
     /// The bytes every stored version takes; the settings page shows it so the
     /// budget is not a number without a reference point.
     pub fn backup_total_bytes(&self) -> u64 {

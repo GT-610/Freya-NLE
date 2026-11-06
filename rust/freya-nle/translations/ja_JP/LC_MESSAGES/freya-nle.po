@@ -1559,6 +1559,12 @@ msgstr "既定値を削除"
 msgid "Keep a version history of saved projects"
 msgstr "保存したプロジェクトの履歴を保持する"
 
+msgid "Backup folder"
+msgstr "バックアップフォルダ"
+
+msgid "Default location"
+msgstr "既定の場所"
+
 msgid "Backup storage limit (MB)"
 msgstr "バックアップの保存容量（MB）"
 

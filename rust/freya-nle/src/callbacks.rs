@@ -2607,6 +2607,27 @@ pub(super) fn install_callbacks(
             model.set_row_data(row.0, row.1);
         }
     });
+    let system_backup_folder_window = system_settings.as_weak();
+    system_settings.on_choose_backup_folder(move || {
+        let Some(window) = system_backup_folder_window.upgrade() else {
+            return;
+        };
+        let title = crate::localization::localized(
+            "Choose the backup folder",
+            "选择备份文件夹",
+            "バックアップフォルダを指定",
+        );
+        let mut dialog = rfd::FileDialog::new().set_title(title);
+        let current = std::path::PathBuf::from(window.get_backup_history_directory().trim());
+        if current.is_dir() {
+            dialog = dialog.set_directory(current);
+        }
+        if let Some(folder) = dialog.pick_folder() {
+            window.set_backup_history_directory(SharedString::from(
+                folder.to_string_lossy().into_owned(),
+            ));
+        }
+    });
     let system_shortcut_window = system_settings.as_weak();
     system_settings
         .on_matches_query(|text, query| text.to_lowercase().contains(&query.to_lowercase()));

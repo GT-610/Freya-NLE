@@ -1559,6 +1559,12 @@ msgstr "清除默认值"
 msgid "Keep a version history of saved projects"
 msgstr "保留已保存项目的版本历史"
 
+msgid "Backup folder"
+msgstr "备份文件夹"
+
+msgid "Default location"
+msgstr "默认位置"
+
 msgid "Backup storage limit (MB)"
 msgstr "备份占用上限（MB）"
 

@@ -467,6 +467,12 @@ pub(super) fn sync_system_settings(window: &SystemSettingsWindow, settings: &Set
         "backupHistoryTotalLimitMb",
         freya_nle_app::backup::DEFAULT_BACKUP_TOTAL_LIMIT_MB as i32,
     ));
+    window.set_backup_history_directory(SharedString::from(
+        settings
+            .value("backupHistoryDirectory")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+    ));
     window
         .set_recent_project_max_count(settings.i32_value("recentProjectMaxCount", 10).clamp(1, 50));
     window.set_undo_count(settings.i32_value("undoCount", 32).clamp(1, 1_000));
@@ -693,6 +699,13 @@ fn plugin_paths_text(settings: &SettingsStore, format: &str) -> String {
 }
 
 pub(super) fn apply_runtime_settings(model: &mut ApplicationModel, settings: &SettingsStore) {
+    let backup_directory = settings
+        .value("backupHistoryDirectory")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    model.set_backup_directory(freya_nle_app::backup::backup_root_from_setting(
+        backup_directory,
+    ));
     let backup_minutes = settings.i32_value("backupInterval", 5).clamp(1, 24 * 60) as u64;
     model.set_recovery_interval(Duration::from_secs(backup_minutes * 60));
     model.set_auto_backup_enabled(settings.bool_value("enableAutoBackup", true));
@@ -718,6 +731,18 @@ pub(super) fn apply_system_settings(
     model: &Rc<RefCell<ApplicationModel>>,
 ) -> Result<(), String> {
     let replacement = system_settings_replacement(window, settings.borrow().snapshot())?;
+    // A typed folder must be absolute: a relative one would resolve against
+    // whatever directory the editor happened to start in.
+    let directory = window.get_backup_history_directory();
+    let directory = directory.trim();
+    if !directory.is_empty() && !std::path::Path::new(directory).is_absolute() {
+        return Err(localized(
+            "The backup folder must be an absolute path.",
+            "备份文件夹必须是绝对路径。",
+            "バックアップフォルダは絶対パスで指定してください。",
+        )
+        .to_owned());
+    }
     settings.borrow_mut().apply(replacement)?;
     apply_runtime_settings(&mut model.borrow_mut(), &settings.borrow());
     Ok(())
@@ -755,6 +780,10 @@ fn system_settings_replacement(
         (
             "backupHistoryLimit",
             serde_json::json!(window.get_backup_history_limit().clamp(1, 100)),
+        ),
+        (
+            "backupHistoryDirectory",
+            serde_json::json!(window.get_backup_history_directory().trim()),
         ),
         (
             "backupHistoryTotalLimitMb",
