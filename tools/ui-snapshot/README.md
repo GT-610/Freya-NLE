@@ -26,7 +26,8 @@ the `system` render opens (default 2, Timeline), `UI_SNAPSHOT_SIZE=680x600`
 overrides the window size, `UI_SNAPSHOT_IMAGE=/path/to.png` supplies a stand-in
 preview frame, `UI_SNAPSHOT_OBJECTS=1` opens the object list dock, and
 `UI_SNAPSHOT_BACKUP=all` renders the backup history widened to every project
-(written as `backup-all`).
+(written as `backup-all`), and `UI_SNAPSHOT_TEXT_PRESET=1` opens the text preset
+manager on the `settings` render.
 
 The build script compiles the shipping UI from
 `rust/freya-nle/ui/app.slint`, so the render always matches the code. The sample
