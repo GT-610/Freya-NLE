@@ -1393,6 +1393,65 @@ mod tests {
         );
     }
 
+    /// A snapshot that was half-written when the process died still has valid
+    /// metadata and a file on disk, so the list shows it as recoverable. Opening
+    /// it has to fail with a reason instead of panicking, and the failure must
+    /// not consume the entry: the user can retry, copy the file out, or discard
+    /// it deliberately.
+    #[test]
+    fn a_damaged_snapshot_fails_to_open_without_panicking_or_being_consumed() {
+        let root = temporary_recovery_root("damaged-snapshot");
+        std::fs::create_dir_all(&root).expect("recovery root creates");
+
+        // A truncated document: real JSON, but not a project.
+        let id = recovery::generate_recovery_id();
+        let snapshot_name = format!("{id}-{}.aviqtl", recovery::generate_recovery_id());
+        std::fs::write(
+            root.join(&snapshot_name),
+            br#"{"version":"0.7","scene":"unterminated"#,
+        )
+        .expect("damaged snapshot writes");
+        let metadata = freya_nle_core::api::build_recovery_metadata(
+            &id,
+            "",
+            "Damaged",
+            "2026-11-06T00:00:00.000Z",
+            &snapshot_name,
+        )
+        .expect("metadata is well formed");
+        std::fs::write(
+            root.join(format!("{id}.json")),
+            serde_json::to_vec(&metadata).expect("metadata serializes"),
+        )
+        .expect("metadata writes");
+
+        let mut app = ApplicationModel::with_recovery_root(root.clone());
+        let entries = app.recovery_entries();
+        assert_eq!(entries.len(), 1);
+        let entry = entries.first().expect("the entry is listed");
+        assert!(
+            entry.is_valid(),
+            "the metadata and file are both intact, so the list cannot tell"
+        );
+
+        let error = app
+            .recover_project(&id)
+            .expect_err("a truncated document cannot open");
+        assert!(!error.is_empty(), "the refusal says why");
+        assert!(
+            app.recovery_entries().iter().any(|entry| entry.id == id),
+            "a failed open keeps the snapshot: {error}"
+        );
+        assert!(app.tabs().is_empty(), "no project was added");
+
+        // Discarding is the deliberate way out.
+        assert_eq!(app.discard_recovery(&id), Ok(()));
+        assert!(app.recovery_entries().is_empty());
+        app.flush_recovery();
+        drop(app);
+        std::fs::remove_dir_all(root).expect("recovery root removes");
+    }
+
     #[test]
     fn timed_backup_is_recovered_once_and_save_cleans_the_snapshot() {
         let root = temporary_recovery_root("recover-save");
