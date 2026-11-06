@@ -216,6 +216,15 @@ fn parse_object(input: &[u8]) -> Option<Map<String, Value>> {
         .cloned()
 }
 
+/// Settings files are hand-editable, so every typed read has to be total: a
+/// value of the wrong type, of the wrong spelling, or outside the type's range
+/// reads as 0 rather than reaching a caller that would act on it.
+///
+/// A number outside the `i32` range counts as unrepresentable rather than
+/// saturated. Saturating used to hand `i32::MIN`/`i32::MAX` to callers, and
+/// `i32::MIN` is not a value any of them can do arithmetic on (`candidate -
+/// value` overflows), so "impossible" has to read as "unset", which is what 0
+/// already means for every other unusable input.
 fn value_as_i32(value: &Value) -> i32 {
     match value {
         Value::Bool(value) => i32::from(*value),
@@ -227,7 +236,7 @@ fn value_as_i32(value: &Value) -> i32 {
                 value
                     .as_f64()
                     .filter(|value| value.is_finite())
-                    .map(|value| value as i32)
+                    .and_then(|value| i32::try_from(value as i64).ok())
             })
             .unwrap_or(0),
         Value::String(value) => value.parse().unwrap_or(0),
@@ -235,13 +244,20 @@ fn value_as_i32(value: &Value) -> i32 {
     }
 }
 
+/// Reads a float setting.
+///
+/// `f64::clamp` passes NaN through, and `str::parse` accepts `NaN`, `inf` and
+/// `infinity`, so a string value could put a non-finite number behind a
+/// `clamp(0.25, 1.0)` that a caller reasonably believes is a bound. Non-finite
+/// reads resolve to 0 like any other unusable value.
 fn value_as_f64(value: &Value) -> f64 {
-    match value {
+    let value = match value {
         Value::Bool(value) => f64::from(u8::from(*value)),
         Value::Number(value) => value.as_f64().unwrap_or(0.0),
         Value::String(value) => value.parse().unwrap_or(0.0),
         _ => 0.0,
-    }
+    };
+    if value.is_finite() { value } else { 0.0 }
 }
 
 fn value_as_bool(value: &Value) -> bool {
@@ -460,6 +476,152 @@ mod tests {
         assert!(!value_as_bool(&json!(0)));
         assert!(!value_as_bool(&json!("false")));
         assert!(value_as_bool(&json!("enabled")));
+    }
+
+    /// Every unusable spelling reads as 0 instead of leaking a value no caller
+    /// can compute with. `f64::clamp` passes NaN through and `str::parse`
+    /// accepts `NaN`/`inf`, so without this a setting behind a
+    /// `clamp(0.25, 1.0)` could still be non-finite.
+    #[test]
+    fn non_finite_spellings_never_escape_a_typed_read() {
+        for value in [
+            json!("NaN"),
+            json!("nan"),
+            json!("inf"),
+            json!("-inf"),
+            json!("Infinity"),
+            json!("1e400"),
+            json!("  NaN  "),
+        ] {
+            let read = value_as_f64(&value);
+            assert!(
+                read.is_finite(),
+                "{value} read as {read}, which survives clamp(0.25, 1.0)"
+            );
+            assert_eq!(read, 0.0, "{value} should read as unset");
+        }
+        // The Number branch cannot hold a non-finite value (serde_json refuses
+        // `1e400` outright), but the guard must not depend on that.
+        assert_eq!(value_as_f64(&json!(1e300)), 1e300);
+        assert!(value_as_i32(&json!("NaN")) == 0);
+    }
+
+    /// A number outside `i32` is unrepresentable, not saturable. Saturating
+    /// handed `i32::MIN` to `nearest_audio_bitrate`, whose `candidate - value`
+    /// then panicked on overflow during export-dialog setup.
+    #[test]
+    fn out_of_range_numbers_read_as_unset_rather_than_saturating() {
+        for value in [
+            json!(1e300),
+            json!(-1e300),
+            json!(i64::MAX),
+            json!(i64::MIN),
+            json!(u64::MAX),
+            json!(-3_000_000_000i64),
+        ] {
+            assert_eq!(
+                value_as_i32(&value),
+                0,
+                "{value} saturated instead of reading as unset"
+            );
+        }
+        // The boundaries themselves stay exact.
+        assert_eq!(value_as_i32(&json!(i32::MAX)), i32::MAX);
+        assert_eq!(value_as_i32(&json!(i32::MIN)), i32::MIN);
+        assert_eq!(value_as_i32(&json!(-3_000_000_000.5)), 0);
+        assert_eq!(value_as_i32(&json!(2_147_483_647.5)), i32::MAX);
+    }
+
+    /// The complete default schema is the list of keys the application reads,
+    /// so one hostile document can cover every read site at once: whatever a
+    /// key is supposed to be, replacing it with a wrong-typed value must leave
+    /// a finite, in-range read behind rather than panicking.
+    #[test]
+    fn hostile_values_for_every_known_key_stay_usable() {
+        let keys = default_settings(&Map::new())
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(keys.len() > 40, "the schema should be the real one");
+
+        let hostile = [
+            json!("NaN"),
+            json!("inf"),
+            json!("-inf"),
+            json!("not-a-number"),
+            json!(""),
+            json!(1e300),
+            json!(-1e300),
+            json!(i64::MIN),
+            json!(u64::MAX),
+            json!(null),
+            json!([]),
+            json!({}),
+            json!(-1),
+        ];
+
+        for key in &keys {
+            for value in &hostile {
+                let mut document = Map::new();
+                document.insert(key.clone(), value.clone());
+                let mut state = SettingsState::defaults(Map::new());
+                state
+                    .merge_json(
+                        &serde_json::to_vec(&document).expect("hostile document serializes"),
+                    )
+                    .expect("a well-formed JSON object is a valid settings document");
+
+                let number = state.i32_value(key, 7);
+                let float = state.f64_value(key, 0.25);
+                assert!(
+                    float.is_finite(),
+                    "{key} = {value} read as {float}, which is not comparable"
+                );
+                // The reader must answer, not panic, and the answer has to be
+                // one a caller can compute with: no saturated extreme and no
+                // NaN sneaks out of a document the user hand-edited.
+                assert!(
+                    number != i32::MIN && number != i32::MAX,
+                    "{key} = {value} read as the saturated extreme {number}"
+                );
+                // Reads never mutate, so the document it started from survives.
+                assert!(state.snapshot().contains_key(key));
+            }
+        }
+
+        // A key that does not exist still answers with the caller's fallback.
+        let state = SettingsState::defaults(Map::new());
+        assert_eq!(state.i32_value("no-such-key", 5), 5);
+        assert_eq!(state.f64_value("no-such-key", 0.5), 0.5);
+        assert!(state.bool_value("no-such-key", true));
+    }
+
+    /// The documented contract for a cleared shortcut is an empty string, so a
+    /// non-string value must fall back rather than disable the binding.
+    #[test]
+    fn shortcut_values_of_the_wrong_type_keep_the_default() {
+        let shortcuts = json!({"project.save": 42, "project.open": null});
+        assert_eq!(
+            shortcuts
+                .get("project.save")
+                .and_then(Value::as_str)
+                .unwrap_or("Ctrl+S"),
+            "Ctrl+S"
+        );
+        assert_eq!(
+            shortcuts
+                .get("project.open")
+                .and_then(Value::as_str)
+                .unwrap_or("Ctrl+O"),
+            "Ctrl+O"
+        );
+        assert_eq!(
+            json!({"project.cut": ""})
+                .get("project.cut")
+                .and_then(Value::as_str)
+                .unwrap_or("Ctrl+X"),
+            ""
+        );
     }
 
     fn settings_from_json(input: &[u8]) -> SettingsState {

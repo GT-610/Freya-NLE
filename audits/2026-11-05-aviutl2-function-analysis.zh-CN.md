@@ -2108,8 +2108,53 @@ AviUtl2 手册（`usage.md`「画像合成（オブジェクト）」）的语�
 - `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟
   `main_frames: 3`、`timeline_frames: 4`、`wgpu_errors: []`。
 
-## 8. 验收与风险
+### 7.53 稳健性：手改的设置文件不能造出无法使用的值
 
+§7.52 守的是项目文档，本批守设置文件。设置文件是**用户会手改**的 JSON，而读取它的
+`SettingsState::i32_value` / `f64_value` 是"尽力而为"的转换：类型不对就当 0。问题是
+两条分支把不可能的值当成了真实值。
+
+| 位置 | 改动 |
+| --- | --- |
+| core | `settings.rs` 的 `value_as_i32`：`f64` 分支改为 `i32::try_from(value as i64)`，超出 `i32` 的一律读作 0（原先 `as i32` 饱和成极值） |
+| core | `settings.rs` 的 `value_as_f64`：非有限值统一读作 0（`str::parse` 接受 `NaN`/`inf`/`infinity`） |
+| export | `nearest_audio_bitrate` 的距离改用 `i64` 计算，`candidate - value` 不再在 `i32` 上溢出 |
+| core | 4 个测试：非有限拼写、越界数字、**全部已知键** × 13 种敌意值、快捷键错类型 |
+| desktop | 端到端测试：磁盘上的一份敌意设置 → `project_defaults` / `timeline_zoom_settings` / 预览缩放全部可用 |
+
+抓到的缺陷：
+
+- **`i32::MIN` 直接 panic**。`{"exportDefaultAudioBitrateKbps": -3000000000}` 是合法
+  JSON，`as i32` 饱和成 `i32::MIN`，`nearest_audio_bitrate` 里的
+  `(candidate - value).abs()` 立刻算术溢出 panic——发生在导出对话框初始化时，也就是
+  "设置文件写坏一个数字，打开导出就崩"。
+- **NaN 穿过 `clamp`**。`f64::clamp` 对 NaN 原样返回，而设置面板的读法是
+  `.f64_value(...).clamp(0.25, 1.0)`，作者有理由相信返回值被夹紧了。
+  `{"previewRenderScale": "NaN"}` 会把这个 NaN 一路送到渲染面尺寸计算。
+  现在读值处就归零，任何"后面再夹紧"的写法都不再是唯一防线。
+
+语义与取舍：
+
+- **不可表示读作未设置，而不是饱和**。饱和看似"更接近用户意图"，但把
+  `i32::MIN`/`i32::MAX` 交给调用方等于伪造一个极端值：现有调用点要么做减法（溢出），
+  要么当索引。0 在本模块里已经是"不可用"的既有含义，保持一致比挑选一个极端值更安全。
+- **边界值仍然精确**：`i32::MAX`/`i32::MIN` 本身读出来就是原值，测试覆盖了这一点，
+  免得为了防御而把合法输入也误伤。
+- **不拒绝整个文件**：一个键写错不该让所有设置回到默认。归一化在读取处，不在解析处，
+  所以文件里其余正确的键照常生效。
+- **测试覆盖全部键而非抽样**：`hostile_values_for_every_known_key_stay_usable` 的键
+  列表取自 `default_settings()` 本身，新增设置项会自动被覆盖，不会出现"加了键忘了测"。
+
+验证：
+
+- 先证明测试有效：把两处修复临时回退，`a_hand_edited_settings_file_cannot_produce_an_unusable_project`
+  会在 `preview scale NaN is not finite` 处失败；恢复后通过。
+- `cargo test --workspace --all-features --locked` 通过（core 222、app 286、
+  desktop 68、render 51、preview 26）；
+- `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟
+  `main_frames: 3`、`timeline_frames: 3`、`main_same_device: true`、`wgpu_errors: []`。
+
+## 8. 验收与风险
 验收以可观察行为为准：标记在标尺上有清晰位置；前后跳转不越过场景时长；备注
 编辑取消后不写入；撤销一次回到打点前；重开项目后标记还在；没有标记时菜单项
 置灰而不是静默失败。

@@ -446,10 +446,15 @@ pub fn is_software_codec(codec: &str) -> bool {
     codec.starts_with("lib") || codec == "libaom-av1"
 }
 
+/// Picks the closest supported audio bitrate.
+///
+/// The distance is computed in `i64`: `candidate - value` overflows in `i32`
+/// when the requested rate is near `i32::MIN`, and the value reaches this
+/// function straight from the hand-editable settings file.
 pub fn nearest_audio_bitrate(value: i32) -> i32 {
     [96, 128, 192, 256, 320]
         .into_iter()
-        .min_by_key(|candidate| (candidate - value).abs())
+        .min_by_key(|candidate| (i64::from(*candidate) - i64::from(value)).abs())
         .unwrap_or(192)
 }
 
@@ -821,6 +826,27 @@ mod tests {
             "freya-nle-export-{label}-{}-{nonce}",
             std::process::id()
         ))
+    }
+
+    /// The requested rate comes straight from a settings file, so the whole
+    /// `i32` domain has to answer. `i32::MIN` used to overflow the subtraction
+    /// and panic while the export dialog was being set up.
+    #[test]
+    fn the_nearest_audio_bitrate_answers_across_the_whole_i32_range() {
+        for value in [0, 96, 100, 190, 192, 320, 10_000, i32::MAX, i32::MIN] {
+            let picked = nearest_audio_bitrate(value);
+            assert!(
+                [96, 128, 192, 256, 320].contains(&picked),
+                "{value} picked {picked}, which is not a supported rate"
+            );
+        }
+        // The picking still has to be a nearest choice, not just a safe one.
+        assert_eq!(nearest_audio_bitrate(0), 96);
+        assert_eq!(nearest_audio_bitrate(125), 128);
+        assert_eq!(nearest_audio_bitrate(190), 192);
+        assert_eq!(nearest_audio_bitrate(300), 320);
+        assert_eq!(nearest_audio_bitrate(i32::MIN), 96);
+        assert_eq!(nearest_audio_bitrate(i32::MAX), 320);
     }
 
     fn image_job(directory: PathBuf, end_frame: i32) -> ExportJob {

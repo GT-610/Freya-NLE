@@ -1321,6 +1321,79 @@ fn frame_counter_zero_pads_like_qt() {
 }
 
 #[test]
+fn a_hand_edited_settings_file_cannot_produce_an_unusable_project() {
+    use freya_nle_app::settings::SettingsStore;
+
+    // Every value here is a spelling the parser accepts but the application
+    // cannot act on: a float that parses as NaN, integers past `i32`, and a
+    // scale that would divide by zero. `1e400` is not in the list because
+    // serde_json rejects it as a number and the whole file then fails to load
+    // (covered by the read-side test); `"1e400"` is the string version that
+    // *does* load and parse.
+    let hostile = serde_json::json!({
+        "defaultProjectWidth": 1e300,
+        "defaultProjectHeight": -1e300,
+        "defaultProjectFps": "NaN",
+        "defaultProjectSampleRate": -3_000_000_000i64,
+        "defaultProjectFrames": "inf",
+        "defaultClipDuration": -1,
+        "previewRenderScale": "NaN",
+        "timelineZoomMin": 1e300,
+        "timelineZoomMax": -1e300,
+        "timelineZoomStep": "inf",
+        "exportDefaultAudioBitrateKbps": -3_000_000_000i64,
+        "exportDefaultBitrateMbps": "NaN",
+        "undoCount": "not-a-number"
+    });
+    let path = std::env::temp_dir().join(format!(
+        "freya-nle-hostile-settings-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&hostile).expect("hostile document serializes"),
+    )
+    .expect("fixture writes");
+    let (store, status) = SettingsStore::load_from(path.clone(), serde_json::Map::new());
+    assert!(status.contains("loaded"), "the file still loads: {status}");
+
+    // The values reach a consumer clamped into something a project can be
+    // created from, rather than NaN or a saturated extreme.
+    let defaults = crate::settings::project_defaults(&store);
+    assert!((1..=16_000).contains(&defaults.width), "{defaults:?}");
+    assert!((1..=16_000).contains(&defaults.height), "{defaults:?}");
+    assert!(
+        defaults.fps.is_finite() && (1.0..=240.0).contains(&defaults.fps),
+        "{defaults:?}"
+    );
+    assert!(
+        (8_000..=192_000).contains(&defaults.sample_rate),
+        "{defaults:?}"
+    );
+    assert!((1..=1_000_000).contains(&defaults.duration), "{defaults:?}");
+
+    // Zoom settings are a tuple the timeline presses into service; a NaN pair
+    // would make every scroll accumulate NaN.
+    let (minimum, maximum, step) = crate::shortcuts::timeline_zoom_settings(&store);
+    for value in [minimum, maximum, step] {
+        assert!(value.is_finite(), "zoom setting {value} is not finite");
+        assert!(value >= 1.0, "zoom setting {value} is below 1");
+    }
+    assert!(minimum <= maximum, "{minimum} > {maximum}");
+
+    // Preview scale is clamped by the caller, which only works on a finite
+    // input. This is the read the render surface used to receive unclamped.
+    let scale = store.f64_value("previewRenderScale", 1.0);
+    assert!(scale.is_finite(), "preview scale {scale} is not finite");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn creation_defaults_round_trip_through_settings() {
     use freya_nle_app::settings::SettingsStore;
 
