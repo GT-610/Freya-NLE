@@ -393,6 +393,91 @@ pub(super) fn install_export_callbacks(
         );
     });
 
+    let batch_scenes_window = export.as_weak();
+    let batch_scenes_model = model.clone();
+    let batch_scenes_codecs = codecs.clone();
+    let batch_scenes_queue = batch.clone();
+    let batch_scenes_settings = settings.clone();
+    export.on_batch_add_scenes(move || {
+        let Some(window) = batch_scenes_window.upgrade() else {
+            return;
+        };
+        let request = match export_request(&window, &batch_scenes_codecs.borrow()) {
+            Ok(request) => request,
+            Err(message) => {
+                batch_scenes_queue.borrow_mut().set_message(message);
+                sync_batch(&window, &batch_scenes_queue.borrow());
+                return;
+            }
+        };
+        let scenes = batch_scenes_model
+            .borrow()
+            .current_workspace()
+            .map(|workspace| {
+                workspace
+                    .document()
+                    .scenes
+                    .iter()
+                    .map(|scene| (scene.id, scene.name.clone(), scene.duration))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if scenes.is_empty() {
+            batch_scenes_queue.borrow_mut().set_message(localized(
+                "There are no scenes to add",
+                "没有可加入的场景",
+                "追加できるシーンがありません",
+            ));
+            sync_batch(&window, &batch_scenes_queue.borrow());
+            return;
+        }
+        let mut added = 0_usize;
+        {
+            let mut queue = batch_scenes_queue.borrow_mut();
+            for (id, name, duration) in scenes {
+                let mut item = request.clone();
+                let last_frame = duration.saturating_sub(1).max(0);
+                item.start_frame = if request.full_range {
+                    0
+                } else {
+                    request.start_frame.min(last_frame)
+                };
+                item.end_frame = if request.full_range {
+                    duration
+                } else {
+                    request.end_frame.min(duration)
+                };
+                if item.end_frame <= item.start_frame {
+                    continue;
+                }
+                item.output_path =
+                    batch::scene_output_path(&request.output_path, &name, request.mode);
+                let label = format!(
+                    "{} · {}",
+                    name,
+                    item.output_path
+                        .file_name()
+                        .map(|file| file.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                );
+                if queue.push(label, id, item).is_none() {
+                    break;
+                }
+                added += 1;
+            }
+            queue.set_message(format!(
+                "{} {added}",
+                localized("Added scenes:", "已加入场景数：", "追加したシーン:")
+            ));
+        }
+        sync_batch(&window, &batch_scenes_queue.borrow());
+        persist_batch(
+            &batch_scenes_settings,
+            &batch_scenes_queue,
+            window.get_batch_completion_index(),
+        );
+    });
+
     let batch_move_window = export.as_weak();
     let batch_move_queue = batch.clone();
     let batch_move_settings = settings.clone();

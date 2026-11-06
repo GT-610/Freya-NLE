@@ -356,6 +356,54 @@ fn item_from_json(value: &Value) -> Option<(String, i32, ExportRequest)> {
     Some((label, scene, request))
 }
 
+/// Derives a per-scene output path from the one on the export window.
+///
+/// A video keeps its extension (`clip.mkv` becomes `clip_scene.mkv`); an image
+/// sequence becomes a sibling folder, because the sequence writes many files.
+pub(super) fn scene_output_path(
+    base: &std::path::Path,
+    scene: &str,
+    mode: ExportMode,
+) -> std::path::PathBuf {
+    let safe = scene
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(40)
+        .collect::<String>();
+    let safe = safe.trim().trim_matches('.').to_owned();
+    let safe = if safe.is_empty() {
+        "scene".to_owned()
+    } else {
+        safe
+    };
+    let stem = base
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "export".to_owned());
+    let name = format!("{stem}_{safe}");
+    match mode {
+        ExportMode::Video => {
+            let mut path = base.with_file_name(name);
+            if let Some(extension) = base.extension() {
+                path.set_extension(extension);
+            }
+            path
+        }
+        ExportMode::ImageSequence => base.with_file_name(name),
+    }
+}
+
 fn mode_name(mode: ExportMode) -> &'static str {
     match mode {
         ExportMode::Video => "video",
@@ -479,6 +527,30 @@ mod tests {
 
         let broken = from_json(&json!([{"label": "no path"}, 7, {"outputPath": ""}]));
         assert!(broken.is_empty(), "entries without a path are dropped");
+    }
+
+    #[test]
+    fn per_scene_paths_keep_the_extension_and_sanitize_the_name() {
+        let video = scene_output_path(
+            std::path::Path::new("/tmp/out/harbor.mkv"),
+            "Scene 1/2",
+            ExportMode::Video,
+        );
+        assert_eq!(video, std::path::Path::new("/tmp/out/harbor_Scene 1_2.mkv"));
+
+        let sequence = scene_output_path(
+            std::path::Path::new("/tmp/out/frames"),
+            "タイトル",
+            ExportMode::ImageSequence,
+        );
+        assert_eq!(sequence, std::path::Path::new("/tmp/out/frames_タイトル"));
+
+        let empty = scene_output_path(
+            std::path::Path::new("/tmp/out/clip.mkv"),
+            " ... ",
+            ExportMode::Video,
+        );
+        assert_eq!(empty, std::path::Path::new("/tmp/out/clip_scene.mkv"));
     }
 
     #[test]

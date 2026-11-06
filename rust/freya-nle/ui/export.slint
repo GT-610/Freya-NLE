@@ -70,6 +70,7 @@ export component ExportWindow inherits Window {
     callback dismiss-cancel();
     callback dismiss-result();
     callback batch-add();
+    callback batch-add-scenes();
     callback batch-move(int);
     callback batch-remove();
     callback batch-clear();
@@ -87,6 +88,7 @@ export component ExportWindow inherits Window {
     }
 
     ScrollView {
+        viewport-width: self.visible-width;
         VerticalLayout {
             padding: 16px;
             spacing: 12px;
@@ -274,19 +276,21 @@ export component ExportWindow inherits Window {
                         current-item <=> root.batch-current;
                         accessible-label: @tr("Batch Output");
                     }
+                    // Three short rows instead of two: the 520px minimum width
+                    // cannot hold every action beside the completion choice.
                     HorizontalLayout {
                         spacing: 6px;
-                        Button { text: @tr("Add Current Settings"); clicked => { root.batch-add(); } }
                         Button {
-                            text: @tr("Move Up");
-                            enabled: root.batch-current > 0;
-                            clicked => { root.batch-move(-1); }
+                            text: @tr("Add Settings");
+                            accessible-label: @tr("Add Current Settings");
+                            clicked => { root.batch-add(); }
                         }
                         Button {
-                            text: @tr("Move Down");
-                            enabled: root.batch-current >= 0 && root.batch-current + 1 < root.batch-items.length;
-                            clicked => { root.batch-move(1); }
+                            text: @tr("All Scenes");
+                            accessible-label: @tr("Add All Scenes");
+                            clicked => { root.batch-add-scenes(); }
                         }
+                        Rectangle { horizontal-stretch: 1; }
                         Button {
                             text: @tr("Remove");
                             enabled: root.batch-current >= 0 && !root.batch-running;
@@ -300,10 +304,17 @@ export component ExportWindow inherits Window {
                     }
                     HorizontalLayout {
                         spacing: 6px;
-                        ComboBox {
-                            model: [@tr("Do nothing when finished"), @tr("Quit when finished")];
-                            current-index <=> root.batch-completion-index;
-                            accessible-label: @tr("When the batch finishes");
+                        Button {
+                            text: @tr("Up");
+                            accessible-label: @tr("Move Up");
+                            enabled: root.batch-current > 0;
+                            clicked => { root.batch-move(-1); }
+                        }
+                        Button {
+                            text: @tr("Down");
+                            accessible-label: @tr("Move Down");
+                            enabled: root.batch-current >= 0 && root.batch-current + 1 < root.batch-items.length;
+                            clicked => { root.batch-move(1); }
                         }
                         Rectangle { horizontal-stretch: 1; }
                         Button {
@@ -319,6 +330,11 @@ export component ExportWindow inherits Window {
                             text: @tr("Resume");
                             clicked => { root.batch-resume(); }
                         }
+                    }
+                    ComboBox {
+                        model: [@tr("Do nothing when finished"), @tr("Quit when finished")];
+                        current-index <=> root.batch-completion-index;
+                        accessible-label: @tr("When the batch finishes");
                     }
                 }
             }

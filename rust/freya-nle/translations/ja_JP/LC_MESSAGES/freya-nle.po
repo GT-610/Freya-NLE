@@ -1595,3 +1595,24 @@ msgstr "参照式"
 msgid "Reads other parameters by name, e.g. X, Blur.size, above.X, layer1.X, $, @min/@max/@abs/@clamp."
 msgstr "他のパラメータを名前で参照します (例: X, Blur.size, above.X, layer1.X, $, @min/@max/@abs/@clamp)"
 
+
+msgid "Add All Scenes"
+msgstr "全シーンを追加"
+
+msgid "There are no scenes to add"
+msgstr "追加できるシーンがありません"
+
+msgid "Added scenes:"
+msgstr "追加したシーン:"
+
+msgid "Add Settings"
+msgstr "設定を追加"
+
+msgid "All Scenes"
+msgstr "全シーン"
+
+msgid "Up"
+msgstr "上へ"
+
+msgid "Down"
+msgstr "下へ"
