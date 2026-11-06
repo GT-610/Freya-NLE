@@ -1930,6 +1930,7 @@ fn text_render_plan(
                 ruby: None,
                 emoji: None,
                 font_family: None,
+                outline_width: None,
                 bold: false,
                 italic: false,
                 strikethrough: false,
@@ -2012,6 +2013,9 @@ fn text_render_plan(
             ruby: None,
             emoji: None,
             font_family: None,
+            // The object's own outline width is the fallback a bare `<s>`
+            // restores; a run without `<s...,outline>` keeps it.
+            outline_width: None,
             bold,
             italic,
         },

@@ -14,6 +14,9 @@ use tiny_skia::{
     Transform,
 };
 
+/// The widest per-run `<s...,outline>` value that is accepted.
+const MAX_RUN_OUTLINE_WIDTH: f32 = 512.0;
+
 const MAX_RASTER_DIMENSION: f32 = 8_192.0;
 const MAX_TEXT_BYTES: usize = 1_000_000;
 const FALLBACK_FAMILIES: &[&str] = &[
@@ -248,6 +251,11 @@ fn face_match_score(
     (style_penalty, actual_weight.0.abs_diff(requested_weight.0))
 }
 
+/// The widest outline any run asks for, or the plan's own width.
+fn run_outline_width(plan: &TextRenderPlan, widths: impl Iterator<Item = Option<f32>>) -> f32 {
+    widths.flatten().fold(plan.outline_width, f32::max)
+}
+
 fn ignorable_for_font_matching(character: char) -> bool {
     character.is_whitespace()
         || character.is_control()
@@ -270,7 +278,12 @@ fn validate_plan(plan: &TextRenderPlan) -> Result<(), TextRasterError> {
     ]
     .into_iter()
     .all(f32::is_finite);
+    let runs_finite = plan.runs.iter().all(|run| {
+        run.outline_width
+            .is_none_or(|width| width.is_finite() && (0.0..=MAX_RUN_OUTLINE_WIDTH).contains(&width))
+    });
     if !finite
+        || !runs_finite
         || plan.content.len() > MAX_TEXT_BYTES
         || plan.font_size <= 0.0
         || plan.line_spacing < 0.0
@@ -510,6 +523,8 @@ struct RunSegment {
     text: String,
     color: RgbaColor,
     outline_color: RgbaColor,
+    /// `<s...,outline>` width, when the run asked for its own.
+    outline_width: Option<f32>,
     font_size: f32,
     letter_spacing: f32,
     x_scale: f32,
@@ -619,6 +634,8 @@ struct ShapedSegment {
     rotation: f32,
     color: RgbaColor,
     outline_color: RgbaColor,
+    /// `<s...,outline>` width for this segment, when it asked for one.
+    outline_width: Option<f32>,
     face_index: usize,
     font_size: f32,
     strikethrough: bool,
@@ -715,6 +732,7 @@ fn shape_ruby_block(block: &mut RubyBlockShape, segments: &[RunSegment], faces: 
             rotation: segment.rotation,
             color: segment.color,
             outline_color: segment.outline_color,
+            outline_width: segment.outline_width,
             face_index: segment.face_index,
             font_size,
             strikethrough: false,
@@ -730,6 +748,8 @@ struct RunPath {
     path: Path,
     color: RgbaColor,
     outline_color: RgbaColor,
+    /// `<s...,outline>` width; the plan's width applies when this is `None`.
+    outline_width: Option<f32>,
 }
 
 /// Lays out and rasterizes text that carries more than one styled run.
@@ -763,6 +783,7 @@ fn rasterize_runs(
             text: run.text.clone(),
             color: run.color,
             outline_color: run.outline_color,
+            outline_width: run.outline_width,
             font_size: run.font_size.max(1.0),
             letter_spacing: run.letter_spacing,
             x_scale: run.x_scale.max(0.0),
@@ -868,6 +889,7 @@ fn rasterize_runs(
                     rotation: 0.0,
                     color: segment.color,
                     outline_color: segment.outline_color,
+                    outline_width: segment.outline_width,
                     face_index: segment.face_index,
                     font_size: segment.font_size,
                     strikethrough: false,
@@ -898,6 +920,7 @@ fn rasterize_runs(
                 rotation: segment.rotation,
                 color: segment.color,
                 outline_color: segment.outline_color,
+                outline_width: segment.outline_width,
                 face_index: segment.face_index,
                 font_size: segment.font_size,
                 strikethrough: segment.strikethrough,
@@ -1050,6 +1073,7 @@ fn rasterize_runs(
                     path,
                     color: segment.color,
                     outline_color: segment.outline_color,
+                    outline_width: segment.outline_width,
                 });
             }
             if segment.strikethrough && segment.rotation == 0.0 && segment.width > 0.0 {
@@ -1118,6 +1142,7 @@ fn rasterize_runs(
                     path,
                     color: segment.color,
                     outline_color: segment.outline_color,
+                    outline_width: segment.outline_width,
                 });
             }
             segment_x += segment.width;
@@ -1152,8 +1177,9 @@ fn rasterize_runs(
     }
     let visual_width = (visual_right - visual_left).max(0.0);
     let visual_height = (visual_bottom - visual_top).max(0.0);
+    // A run with its own outline can ask for more room than the object's.
     let outline_padding = if plan.outline_enabled {
-        plan.outline_width.ceil() + 2.0
+        run_outline_width(plan, paths.iter().map(|run| run.outline_width)).ceil() + 2.0
     } else {
         2.0
     };
@@ -1222,29 +1248,34 @@ fn rasterize_runs(
     let translate_x = shadow_left + outline_padding + background_padding_x - visual_left;
     let translate_y = shadow_top + outline_padding + background_padding_y - visual_top;
     for run_path in &paths {
+        let width = if plan.outline_enabled {
+            run_path.outline_width.unwrap_or(plan.outline_width)
+        } else {
+            0.0
+        };
         if plan.shadow_enabled {
             let transform = Transform::from_translate(
                 translate_x + plan.shadow_offset_x,
                 translate_y + plan.shadow_offset_y,
             );
-            if plan.outline_enabled && plan.outline_width > 0.0 {
+            if width > 0.0 {
                 stroke_path(
                     &mut pixmap,
                     &run_path.path,
                     plan.shadow_color,
-                    plan.outline_width * 2.0,
+                    width * 2.0,
                     transform,
                 );
             }
             fill_path(&mut pixmap, &run_path.path, plan.shadow_color, transform);
         }
         let transform = Transform::from_translate(translate_x, translate_y);
-        if plan.outline_enabled && plan.outline_width > 0.0 {
+        if width > 0.0 {
             stroke_path(
                 &mut pixmap,
                 &run_path.path,
                 run_path.outline_color,
-                plan.outline_width * 2.0,
+                width * 2.0,
                 transform,
             );
         }
@@ -1637,6 +1668,7 @@ mod tests {
             ruby: None,
             emoji: None,
             font_family: None,
+            outline_width: None,
             bold: false,
             italic: false,
             strikethrough: false,
@@ -1924,6 +1956,7 @@ mod tests {
                 ruby: None,
                 emoji: None,
                 font_family: None,
+                outline_width: None,
                 bold: false,
                 italic: false,
                 strikethrough: false,
@@ -1942,6 +1975,7 @@ mod tests {
                 ruby: None,
                 emoji: None,
                 font_family: None,
+                outline_width: None,
                 bold: false,
                 italic: false,
                 strikethrough: false,
@@ -1971,6 +2005,75 @@ mod tests {
             .rasterize(&short, 0.0)
             .expect("uniform runs rasterize");
         assert!(frame.height > short_frame.height);
+    }
+
+    #[test]
+    fn a_run_can_ask_for_a_wider_outline_than_the_object() {
+        let mut plan = plan();
+        plan.content = "\u{ea01}\u{ea02}".to_owned();
+        plan.outline_enabled = true;
+        plan.outline_width = 1.0;
+        plan.shadow_enabled = false;
+        plan.background_enabled = false;
+        plan.alignment = TextAlignment::Left;
+        plan.runs_authoritative = true;
+        let mut thin = run("\u{ea01}", 64.0);
+        thin.color = RgbaColor {
+            red: 255,
+            green: 255,
+            blue: 255,
+            alpha: 255,
+        };
+        thin.outline_color = RgbaColor {
+            red: 255,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        thin.outline_width = Some(1.0);
+        let mut wide = run("\u{ea02}", 64.0);
+        wide.color = thin.color;
+        // The second run asks for a much wider outline in another colour, so
+        // the frame must grow for it and show that colour.
+        wide.outline_color = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 255,
+            alpha: 255,
+        };
+        wide.outline_width = Some(10.0);
+        plan.runs = vec![thin.clone(), wide];
+        let frame = test_rasterizer()
+            .rasterize(&plan, 0.0)
+            .expect("the run outline rasterizes");
+
+        // Same runs with the object's thin outline produce a smaller frame.
+        plan.runs = vec![thin.clone(), thin];
+        let narrow = test_rasterizer()
+            .rasterize(&plan, 0.0)
+            .expect("the object outline rasterizes");
+        assert!(
+            frame.width > narrow.width,
+            "the wider run outline grows the frame ({} vs {})",
+            frame.width,
+            narrow.width
+        );
+        assert!(
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[2] > 128 && pixel[3] > 0),
+            "the wide run's blue outline is drawn"
+        );
+        // An absurd width is rejected instead of allocating an unbounded raster.
+        let mut huge = plan.clone();
+        huge.runs[0].outline_width = Some(f32::INFINITY);
+        assert_eq!(
+            test_rasterizer().rasterize(&huge, 0.0),
+            Err(TextRasterError::InvalidParameters)
+        );
     }
 
     #[test]

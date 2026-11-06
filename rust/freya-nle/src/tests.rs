@@ -1392,6 +1392,7 @@ fn text_presets_round_trip_and_feed_the_parser() {
             font_size: 48.0,
             letter_spacing: 0.0,
             font_family: None,
+            outline_width: None,
             bold: false,
             italic: false,
             line_spacing: None,

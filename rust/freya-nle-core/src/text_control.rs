@@ -54,6 +54,8 @@ pub struct TextRun {
     pub letter_spacing: f32,
     /// Family requested by `<@...>`; `None` keeps the object's family.
     pub font_family: Option<String>,
+    /// Outline size from `<s...,outline>`; `None` keeps the object's width.
+    pub outline_width: Option<f32>,
     pub bold: bool,
     pub italic: bool,
     pub strikethrough: bool,
@@ -106,6 +108,8 @@ pub struct TextBaseStyle {
     pub letter_spacing: f32,
     /// The object's own family, restored by `<@>`.
     pub font_family: Option<String>,
+    /// The object's own outline width, restored by a bare `<s>`.
+    pub outline_width: Option<f32>,
     pub bold: bool,
     pub italic: bool,
     /// Line spacing requested by `<gh...>`; `None` keeps the object's value.
@@ -195,6 +199,7 @@ fn text_preset(name: &str) -> Option<TextPreset> {
 const MIN_FONT_SIZE: f32 = 1.0;
 const MAX_FONT_SIZE: f32 = 4_096.0;
 const MAX_LETTER_SPACING: f32 = 1_000.0;
+const MAX_OUTLINE_WIDTH: f32 = 512.0;
 const MAX_LINE_SPACING: f32 = 4_096.0;
 const MAX_POSITION: f32 = 32_768.0;
 const MAX_GLYPH_SCALE: f32 = 100.0;
@@ -412,13 +417,21 @@ impl Parser {
                 None => return false,
             },
         };
-        // AviUtl's fourth field is the outline size, which this build keeps
-        // per effect rather than per run; it is accepted and ignored.
-        let _outline_size = parts.next();
+        // AviUtl's fourth field is the outline size for this run.
+        let outline_width = match parts.next().map(str::trim) {
+            None | Some("") => None,
+            Some(outline) => match outline.parse::<f32>() {
+                Ok(width) if width.is_finite() && width >= 0.0 => {
+                    Some(width.clamp(0.0, MAX_OUTLINE_WIDTH))
+                }
+                _ => return false,
+            },
+        };
         if parts.next().is_some() {
             return false;
         }
         self.style.font_size = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        self.style.outline_width = outline_width;
         if let Some(family) = family {
             self.font.family = Some(family);
         }
@@ -440,6 +453,7 @@ impl Parser {
             self.style.outline_color = self.base.outline_color;
             self.style.letter_spacing = self.base.letter_spacing;
             self.style.line_spacing = self.base.line_spacing;
+            self.style.outline_width = self.base.outline_width;
             self.font = FontStyle::from_base(&self.base);
             return true;
         }
@@ -854,6 +868,7 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             rotation: run.style.rotation,
             ruby: run.style.ruby,
             emoji: run.style.emoji.clone(),
+            outline_width: run.style.outline_width,
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -1052,6 +1067,7 @@ mod tests {
             ruby: None,
             emoji: None,
             font_family: None,
+            outline_width: None,
             bold: false,
             italic: false,
         }
@@ -1255,6 +1271,27 @@ mod tests {
     fn malformed_font_directives_stay_literal() {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
+        }
+    }
+
+    #[test]
+    fn the_extended_size_directive_can_set_a_run_outline() {
+        let runs = parse_text_runs("a<s48,Meiryo,6BI,3>b", base());
+        let run = runs.last().expect("second run");
+        assert_eq!(run.text, "b");
+        assert_eq!(run.outline_width, Some(3.0));
+        assert!(run.bold && run.italic);
+        // A bare `<s>` restores the object's own width, which is `None` here.
+        let runs = parse_text_runs("<s64,Meiryo,0,8>x<s>y", base());
+        assert_eq!(runs[0].outline_width, Some(8.0));
+        let restored = runs.last().expect("restored run");
+        assert_eq!(restored.text, "y");
+        assert_eq!(restored.outline_width, None);
+        // A malformed or negative width keeps the whole directive literal.
+        for directive in ["<s48,Meiryo,0,abc>", "<s48,Meiryo,0,-2>"] {
+            let runs = parse_text_runs(directive, base());
+            let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+            assert_eq!(text, directive);
         }
     }
 
