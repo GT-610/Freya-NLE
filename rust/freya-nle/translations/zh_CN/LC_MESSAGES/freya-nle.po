@@ -1552,3 +1552,30 @@ msgstr "要保存的参数"
 
 msgid "Unchecked parameters keep their current value"
 msgstr "未勾选的参数保持当前值"
+
+msgid "Add Current Settings"
+msgstr "添加当前设置"
+
+msgid "Move Up"
+msgstr "上移"
+
+msgid "Move Down"
+msgstr "下移"
+
+msgid "Start Batch"
+msgstr "开始批次"
+
+msgid "Stop Batch"
+msgstr "停止批次"
+
+msgid "Resume"
+msgstr "继续"
+
+msgid "Do nothing when finished"
+msgstr "完成后不操作"
+
+msgid "Quit when finished"
+msgstr "完成后退出"
+
+msgid "When the batch finishes"
+msgstr "批次完成时"

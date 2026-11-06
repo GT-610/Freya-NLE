@@ -12,7 +12,7 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
 };
 use slint::platform::{PlatformError, WindowAdapter};
-use slint::{Color, ModelRc, PhysicalSize, VecModel};
+use slint::{Color, ModelRc, PhysicalSize, StandardListViewItem, VecModel};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -111,6 +111,18 @@ fn main() {
                 "AAC".into(),
                 "Opus".into(),
             ])));
+            // `UI_SNAPSHOT_BATCH=1` fills the batch list so its rows, buttons
+            // and completion choice can be reviewed.
+            if std::env::var("UI_SNAPSHOT_BATCH").is_ok() {
+                ui.set_batch_items(ModelRc::new(VecModel::from(vec![
+                    StandardListViewItem::from("1. harbor_sunrise_scene1 → /tmp/out/scene1.mkv · done"),
+                    StandardListViewItem::from("2. harbor_sunrise_scene2 → /tmp/out/scene2.mkv · running"),
+                    StandardListViewItem::from("3. harbor_sunrise_still → /tmp/out/stills"),
+                ])));
+                ui.set_batch_current(1);
+                ui.set_batch_running(true);
+                ui.set_batch_status("Exporting item 2/3".into());
+            }
             ui.show().expect("show the export window");
             save(&window, width, height, &output_name("export", preference));
         }

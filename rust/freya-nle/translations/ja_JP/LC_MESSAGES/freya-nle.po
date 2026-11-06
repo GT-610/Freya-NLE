@@ -1552,3 +1552,30 @@ msgstr "保存する設定項目"
 
 msgid "Unchecked parameters keep their current value"
 msgstr "チェックを外した項目は現在の値を維持します"
+
+msgid "Add Current Settings"
+msgstr "現在の設定を追加"
+
+msgid "Move Up"
+msgstr "上へ"
+
+msgid "Move Down"
+msgstr "下へ"
+
+msgid "Start Batch"
+msgstr "バッチ出力を開始"
+
+msgid "Stop Batch"
+msgstr "バッチ出力を停止"
+
+msgid "Resume"
+msgstr "再開"
+
+msgid "Do nothing when finished"
+msgstr "完了時は何もしない"
+
+msgid "Quit when finished"
+msgstr "完了時に終了する"
+
+msgid "When the batch finishes"
+msgstr "バッチ完了時の動作"

@@ -9,6 +9,7 @@ import {
     ScrollView,
     Slider,
     SpinBox,
+    StandardListView,
 } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 
@@ -49,6 +50,14 @@ export component ExportWindow inherits Window {
     in-out property <bool> result-visible: false;
     in property <bool> result-success: true;
     in property <string> result-message: "";
+    // Batch output: each row is one queued export, captured with the settings
+    // that were on screen when it was added.
+    in property <[StandardListViewItem]> batch-items;
+    in-out property <int> batch-current: -1;
+    in property <bool> batch-running: false;
+    in property <bool> batch-paused: false;
+    in property <string> batch-status: "";
+    in-out property <int> batch-completion-index: 0;
 
     pure callback validate-output-path(string) -> bool;
     callback browse-output(bool);
@@ -60,6 +69,17 @@ export component ExportWindow inherits Window {
     callback confirm-cancel();
     callback dismiss-cancel();
     callback dismiss-result();
+    callback batch-add();
+    callback batch-move(int);
+    callback batch-remove();
+    callback batch-clear();
+    callback batch-start();
+    callback batch-stop();
+    callback batch-pause();
+    callback batch-resume();
+    callback batch-completion-changed();
+
+    changed batch-completion-index => { root.batch-completion-changed(); }
 
     changed timeline-duration => {
         root.start-frame = min(max(root.start-frame, 0), max(root.timeline-duration - 1, 0));
@@ -233,6 +253,72 @@ export component ExportWindow inherits Window {
                             + @tr(" sec)");
                         opacity: 0.65;
                         vertical-alignment: center;
+                    }
+                }
+            }
+
+            GroupBox {
+                title: @tr("Batch Output");
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+                    Text {
+                        text: root.batch-status;
+                        visible: root.batch-status != "";
+                        color: AppTheme.muted-foreground;
+                        wrap: word-wrap;
+                    }
+                    StandardListView {
+                        height: 108px;
+                        model: root.batch-items;
+                        current-item <=> root.batch-current;
+                        accessible-label: @tr("Batch Output");
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Button { text: @tr("Add Current Settings"); clicked => { root.batch-add(); } }
+                        Button {
+                            text: @tr("Move Up");
+                            enabled: root.batch-current > 0;
+                            clicked => { root.batch-move(-1); }
+                        }
+                        Button {
+                            text: @tr("Move Down");
+                            enabled: root.batch-current >= 0 && root.batch-current + 1 < root.batch-items.length;
+                            clicked => { root.batch-move(1); }
+                        }
+                        Button {
+                            text: @tr("Remove");
+                            enabled: root.batch-current >= 0 && !root.batch-running;
+                            clicked => { root.batch-remove(); }
+                        }
+                        Button {
+                            text: @tr("Clear");
+                            enabled: root.batch-items.length > 0 && !root.batch-running;
+                            clicked => { root.batch-clear(); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        ComboBox {
+                            model: [@tr("Do nothing when finished"), @tr("Quit when finished")];
+                            current-index <=> root.batch-completion-index;
+                            accessible-label: @tr("When the batch finishes");
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: root.batch-running ? @tr("Stop Batch") : @tr("Start Batch");
+                            enabled: root.batch-running || root.batch-items.length > 0;
+                            clicked => { if root.batch-running { root.batch-stop(); } else { root.batch-start(); } }
+                        }
+                        if root.batch-running && !root.batch-paused : Button {
+                            text: @tr("Pause");
+                            clicked => { root.batch-pause(); }
+                        }
+                        if root.batch-paused : Button {
+                            text: @tr("Resume");
+                            clicked => { root.batch-resume(); }
+                        }
                     }
                 }
             }

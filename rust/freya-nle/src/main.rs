@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod batch;
 mod callbacks;
 mod dialogs;
 mod easing;
@@ -68,6 +69,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// The persisted batch queue, or JSON null when no queue was ever saved.
+fn export_batch_setting(settings: &SettingsStore) -> serde_json::Value {
+    settings.value("exportBatch").cloned().unwrap_or_default()
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -269,6 +275,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     )));
     let export_codecs = Rc::new(RefCell::new(ExportCodecState::default()));
     let export_planner = Rc::new(RefCell::new(ExportPlannerRuntime::default()));
+    let export_batch = {
+        let queued = export_batch_setting(&settings.borrow());
+        Rc::new(RefCell::new(batch::from_json(&queued)))
+    };
     launcher.set_recent_projects(ModelRc::new(VecModel::<RecentProjectData>::default()));
     sync_launcher(&launcher, &settings.borrow());
     system_settings
@@ -471,6 +481,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         export_manager.clone(),
         export_codecs.clone(),
         export_planner.clone(),
+        export_batch.clone(),
     );
 
     {
@@ -547,6 +558,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let animation_package_operation = package_operation;
     let animation_export_manager = export_manager;
     let animation_export_planner = export_planner;
+    let animation_export_batch = export_batch;
     let animation_stats = stats.clone();
     let animation_model = model.clone();
     let animation_audio_playback = audio_playback;
@@ -805,6 +817,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             &animation_export_manager,
             &animation_export_planner,
             &animation_effect_catalog,
+            &animation_mod_settings,
+            &animation_export_batch,
         );
         if validation_frames.is_some_and(|frames| ticks >= frames) {
             // Finish the run once, on purpose. Ending it by hiding the last window

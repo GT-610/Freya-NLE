@@ -1,4 +1,5 @@
 //! Export window commands and production export runtime coordination.
+use crate::batch::{self, BatchOutcome, BatchQueue};
 use crate::dialogs::show_and_redraw;
 use crate::localization::{UiLanguage, current_ui_language, localized};
 use crate::playback::PreviewSourceKey;
@@ -133,12 +134,14 @@ pub(super) fn install_export_callbacks(
     manager: Rc<RefCell<ExportManager>>,
     codecs: Rc<RefCell<ExportCodecState>>,
     planner: Rc<RefCell<ExportPlannerRuntime>>,
+    batch: Rc<RefCell<BatchQueue>>,
 ) {
     let open_window = export.as_weak();
     let open_model = model.clone();
     let open_settings = settings.clone();
     let open_manager = manager.clone();
     let open_codecs = codecs.clone();
+    let open_batch = batch.clone();
     main.on_export_media(move || {
         let Some(window) = open_window.upgrade() else {
             return;
@@ -155,6 +158,13 @@ pub(super) fn install_export_callbacks(
                 &mut open_codecs.borrow_mut(),
             );
         }
+        window.set_batch_completion_index(
+            open_settings
+                .borrow()
+                .i32_value("exportBatchCompletion", 0)
+                .clamp(0, 1),
+        );
+        sync_batch(&window, &open_batch.borrow());
         let _ = show_and_redraw(&window);
     });
 
@@ -286,10 +296,20 @@ pub(super) fn install_export_callbacks(
 
     let confirm_window = export.as_weak();
     let confirm_manager = manager.clone();
+    let confirm_batch = batch.clone();
     export.on_confirm_cancel(move || {
         confirm_manager.borrow_mut().cancel();
+        // Cancelling the item must also stop the queue; otherwise the finish
+        // event would record a failure and start the next item.
+        confirm_batch.borrow_mut().stop();
+        confirm_batch.borrow_mut().set_message(localized(
+            "Batch stopped",
+            "批次已停止",
+            "バッチを停止しました",
+        ));
         if let Some(window) = confirm_window.upgrade() {
             window.set_cancel_confirmation_visible(false);
+            sync_batch(&window, &confirm_batch.borrow());
         }
     });
 
@@ -306,6 +326,326 @@ pub(super) fn install_export_callbacks(
             window.set_result_visible(false);
         }
     });
+
+    let batch_add_window = export.as_weak();
+    let batch_add_codecs = codecs.clone();
+    let batch_add_queue = batch.clone();
+    let batch_add_settings = settings.clone();
+    export.on_batch_add(move || {
+        let Some(window) = batch_add_window.upgrade() else {
+            return;
+        };
+        let request = match export_request(&window, &batch_add_codecs.borrow()) {
+            Ok(request) => request,
+            Err(message) => {
+                batch_add_queue.borrow_mut().set_message(message);
+                sync_batch(&window, &batch_add_queue.borrow());
+                return;
+            }
+        };
+        let label = request
+            .output_path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut queue = batch_add_queue.borrow_mut();
+        if queue.push(label.clone(), request).is_none() {
+            queue.set_message(localized(
+                "The batch is full",
+                "批次已满",
+                "バッチがいっぱいです",
+            ));
+        } else {
+            queue.set_message(format!(
+                "{} {label}",
+                localized("Added", "已加入", "追加しました")
+            ));
+            let last = queue.items().len() as i32 - 1;
+            window.set_batch_current(last);
+        }
+        sync_batch(&window, &queue);
+        drop(queue);
+        persist_batch(
+            &batch_add_settings,
+            &batch_add_queue,
+            window.get_batch_completion_index(),
+        );
+    });
+
+    let batch_move_window = export.as_weak();
+    let batch_move_queue = batch.clone();
+    let batch_move_settings = settings.clone();
+    export.on_batch_move(move |delta| {
+        let Some(window) = batch_move_window.upgrade() else {
+            return;
+        };
+        let current = window.get_batch_current().max(0) as usize;
+        let moved = batch_move_queue.borrow_mut().move_by(current, delta);
+        if let Some(index) = moved {
+            window.set_batch_current(index as i32);
+        }
+        sync_batch(&window, &batch_move_queue.borrow());
+        persist_batch(
+            &batch_move_settings,
+            &batch_move_queue,
+            window.get_batch_completion_index(),
+        );
+    });
+
+    let batch_remove_window = export.as_weak();
+    let batch_remove_queue = batch.clone();
+    let batch_remove_settings = settings.clone();
+    export.on_batch_remove(move || {
+        let Some(window) = batch_remove_window.upgrade() else {
+            return;
+        };
+        let current = window.get_batch_current().max(0) as usize;
+        if batch_remove_queue.borrow_mut().remove(current) {
+            window.set_batch_current(current.saturating_sub(1) as i32);
+        }
+        sync_batch(&window, &batch_remove_queue.borrow());
+        persist_batch(
+            &batch_remove_settings,
+            &batch_remove_queue,
+            window.get_batch_completion_index(),
+        );
+    });
+
+    let batch_clear_window = export.as_weak();
+    let batch_clear_queue = batch.clone();
+    let batch_clear_settings = settings.clone();
+    export.on_batch_clear(move || {
+        let Some(window) = batch_clear_window.upgrade() else {
+            return;
+        };
+        batch_clear_queue.borrow_mut().clear();
+        window.set_batch_current(-1);
+        sync_batch(&window, &batch_clear_queue.borrow());
+        persist_batch(
+            &batch_clear_settings,
+            &batch_clear_queue,
+            window.get_batch_completion_index(),
+        );
+    });
+
+    let batch_start_window = export.as_weak();
+    let batch_start_model = model.clone();
+    let batch_start_manager = manager.clone();
+    let batch_start_settings = settings.clone();
+    let batch_start_planner = planner.clone();
+    let batch_start_queue = batch.clone();
+    export.on_batch_start(move || {
+        let Some(window) = batch_start_window.upgrade() else {
+            return;
+        };
+        let empty = batch_start_queue.borrow().is_empty();
+        if empty {
+            batch_start_queue.borrow_mut().set_message(localized(
+                "The batch is empty",
+                "批次为空",
+                "バッチが空です",
+            ));
+            sync_batch(&window, &batch_start_queue.borrow());
+            return;
+        }
+        if batch_start_manager.borrow().is_exporting() {
+            batch_start_queue.borrow_mut().set_message(localized(
+                "Another export is already running",
+                "已有一个导出正在运行",
+                "書き出しが実行中です",
+            ));
+            sync_batch(&window, &batch_start_queue.borrow());
+            return;
+        }
+        begin_batch_item(
+            &window,
+            &batch_start_model,
+            &batch_start_manager,
+            &batch_start_settings,
+            &batch_start_planner,
+            &batch_start_queue,
+            0,
+        );
+    });
+
+    let batch_stop_window = export.as_weak();
+    let batch_stop_manager = manager.clone();
+    let batch_stop_queue = batch.clone();
+    export.on_batch_stop(move || {
+        let Some(window) = batch_stop_window.upgrade() else {
+            return;
+        };
+        batch_stop_queue.borrow_mut().stop();
+        {
+            let mut queue = batch_stop_queue.borrow_mut();
+            queue.set_message(localized(
+                "Batch stopped",
+                "批次已停止",
+                "バッチを停止しました",
+            ));
+        }
+        if batch_stop_manager.borrow().is_exporting() {
+            batch_stop_manager.borrow_mut().cancel();
+        }
+        window.set_exporting(false);
+        window.set_cancel_confirmation_visible(false);
+        sync_batch(&window, &batch_stop_queue.borrow());
+    });
+
+    let batch_pause_window = export.as_weak();
+    let batch_pause_queue = batch.clone();
+    export.on_batch_pause(move || {
+        let Some(window) = batch_pause_window.upgrade() else {
+            return;
+        };
+        let mut queue = batch_pause_queue.borrow_mut();
+        queue.request_pause();
+        queue.set_message(localized(
+            "Pausing after this item",
+            "当前项完成后暂停",
+            "この項目の後に一時停止します",
+        ));
+        sync_batch(&window, &queue);
+    });
+
+    let batch_resume_window = export.as_weak();
+    let batch_resume_model = model.clone();
+    let batch_resume_manager = manager.clone();
+    let batch_resume_settings = settings.clone();
+    let batch_resume_planner = planner.clone();
+    let batch_resume_queue = batch.clone();
+    export.on_batch_resume(move || {
+        let Some(window) = batch_resume_window.upgrade() else {
+            return;
+        };
+        let next = batch_resume_queue.borrow_mut().resume();
+        match next {
+            Some(index) => begin_batch_item(
+                &window,
+                &batch_resume_model,
+                &batch_resume_manager,
+                &batch_resume_settings,
+                &batch_resume_planner,
+                &batch_resume_queue,
+                index,
+            ),
+            None => sync_batch(&window, &batch_resume_queue.borrow()),
+        }
+    });
+
+    let batch_completion_window = export.as_weak();
+    let batch_completion_settings = settings.clone();
+    let batch_completion_queue = batch.clone();
+    export.on_batch_completion_changed(move || {
+        let Some(window) = batch_completion_window.upgrade() else {
+            return;
+        };
+        persist_batch(
+            &batch_completion_settings,
+            &batch_completion_queue,
+            window.get_batch_completion_index(),
+        );
+    });
+}
+
+/// Mirrors the queue into the export window.
+fn sync_batch(window: &ExportWindow, queue: &BatchQueue) {
+    window.set_batch_items(ModelRc::new(VecModel::from(queue.rows())));
+    window.set_batch_running(queue.is_running());
+    window.set_batch_paused(queue.is_paused());
+    window.set_batch_status(queue.message().into());
+    let current = window.get_batch_current();
+    if current >= queue.items().len() as i32 {
+        window.set_batch_current(queue.items().len() as i32 - 1);
+    }
+}
+
+/// Writes the queue and the completion choice into the settings file.
+fn persist_batch(
+    settings: &Rc<RefCell<SettingsStore>>,
+    queue: &Rc<RefCell<BatchQueue>>,
+    completion_index: i32,
+) {
+    let mut snapshot = settings.borrow().snapshot();
+    for (key, value) in batch::settings_entry(&queue.borrow(), completion_index) {
+        snapshot.insert(key, value);
+    }
+    let _ = settings.borrow_mut().apply(snapshot);
+}
+
+/// Starts one queued item, recording a failure instead of aborting the batch.
+fn begin_batch_item(
+    window: &ExportWindow,
+    model: &Rc<RefCell<ApplicationModel>>,
+    manager: &Rc<RefCell<ExportManager>>,
+    settings: &Rc<RefCell<SettingsStore>>,
+    planner: &Rc<RefCell<ExportPlannerRuntime>>,
+    batch: &Rc<RefCell<BatchQueue>>,
+    index: usize,
+) {
+    let Some((project_instance_id, project)) = current_export_project(&model.borrow()) else {
+        let mut queue = batch.borrow_mut();
+        queue.begin(index);
+        queue.finish_running(BatchOutcome::Failed(
+            localized(
+                "There is no project to export.",
+                "没有可导出的项目。",
+                "書き出すプロジェクトがありません",
+            )
+            .to_owned(),
+        ));
+        queue.set_message(localized(
+            "The batch stopped because no project is open",
+            "没有打开的项目，批次已停止",
+            "プロジェクトが開かれていないため停止しました",
+        ));
+        sync_batch(window, &queue);
+        return;
+    };
+    let started = batch.borrow_mut().begin(index);
+    if !started {
+        return;
+    }
+    let request = batch.borrow().items()[index].request.clone();
+    let runtime = export_runtime_settings(&settings.borrow());
+    match manager
+        .borrow_mut()
+        .start(project_instance_id, project, request, runtime)
+    {
+        Ok(total_frames) => {
+            planner.borrow_mut().reset();
+            if let Some(workspace) = model.borrow_mut().current_workspace_mut() {
+                workspace.pause_playback();
+            }
+            let (number, count) = {
+                let queue = batch.borrow();
+                (index + 1, queue.items().len())
+            };
+            window.set_exporting(true);
+            window.set_export_progress(0.0);
+            window.set_cancel_confirmation_visible(false);
+            window.set_result_visible(false);
+            window.set_progress_label(batch_progress_label(number, count, 0, total_frames).into());
+            batch.borrow_mut().set_message(format!(
+                "{} {number}/{count}",
+                localized("Exporting item", "正在导出项", "書き出し中")
+            ));
+        }
+        Err(error) => {
+            let mut queue = batch.borrow_mut();
+            queue.finish_running(BatchOutcome::Failed(error.to_string()));
+            queue.set_message(error.to_string());
+        }
+    }
+    sync_batch(window, &batch.borrow());
+}
+
+fn batch_progress_label(number: usize, count: usize, done: i32, total: i32) -> String {
+    format!(
+        "{} {number}/{count} · {done} / {total} {}",
+        localized("Item", "项", "項目"),
+        localized("frames", "帧", "フレーム")
+    )
 }
 
 fn sync_export_window(
@@ -454,6 +794,7 @@ fn export_runtime_settings(settings: &SettingsStore) -> ExportRuntimeSettings {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update_export(
     export: &slint::Weak<ExportWindow>,
     main: &slint::Weak<MainWindow>,
@@ -462,21 +803,76 @@ pub(super) fn update_export(
     manager: &Rc<RefCell<ExportManager>>,
     planner: &Rc<RefCell<ExportPlannerRuntime>>,
     effect_catalog: &Rc<RefCell<EffectCatalog>>,
+    settings: &Rc<RefCell<SettingsStore>>,
+    batch: &Rc<RefCell<BatchQueue>>,
 ) {
     let Some(window) = export.upgrade() else {
         return;
     };
-    for event in manager.borrow_mut().poll() {
+    // Collect first: the batch runner below borrows the manager again to start
+    // the next item, which would panic while the poll borrow is still alive.
+    let events = manager.borrow_mut().poll();
+    for event in events {
         match event {
             ExportEvent::Progress(progress) => {
                 window.set_export_progress(progress.progress as f32);
-                window.set_progress_label(export_progress_label(progress).into());
+                let label = match batch.borrow().running_index() {
+                    Some(index) => batch_progress_label(
+                        index + 1,
+                        batch.borrow().items().len(),
+                        progress.current_frame,
+                        progress.total_frames,
+                    ),
+                    None => export_progress_label(progress),
+                };
+                window.set_progress_label(label.into());
             }
             ExportEvent::Finished(result) => {
                 planner.borrow_mut().reset();
                 window.set_exporting(false);
                 window.set_cancel_confirmation_visible(false);
-                show_export_result(&window, result.success, &result.message);
+                let batch_running = batch.borrow().running_index();
+                if batch_running.is_none() {
+                    show_export_result(&window, result.success, &result.message);
+                    continue;
+                }
+                let outcome = if result.success {
+                    BatchOutcome::Succeeded
+                } else {
+                    BatchOutcome::Failed(result.message.clone())
+                };
+                let Some(index) = batch.borrow_mut().finish_running(outcome) else {
+                    continue;
+                };
+                let (next, total, pause) = {
+                    let queue = batch.borrow();
+                    (index + 1, queue.items().len(), queue.pause_requested())
+                };
+                if next >= total {
+                    let (succeeded, failed) = batch.borrow().summary();
+                    batch.borrow_mut().set_message(format!(
+                        "{}: {succeeded} {} · {failed} {}",
+                        localized("Batch finished", "批次完成", "バッチ完了"),
+                        localized("succeeded", "成功", "成功"),
+                        localized("failed", "失败", "失敗")
+                    ));
+                    sync_batch(&window, &batch.borrow());
+                    if window.get_batch_completion_index() == 1 {
+                        let _ = slint::quit_event_loop();
+                    }
+                } else if pause {
+                    batch.borrow_mut().pause_after(next);
+                    batch.borrow_mut().set_message(format!(
+                        "{} {} · {}/{}",
+                        localized("Paused", "已暂停", "一時停止しました"),
+                        index + 1,
+                        next + 1,
+                        total
+                    ));
+                    sync_batch(&window, &batch.borrow());
+                } else {
+                    begin_batch_item(&window, model, manager, settings, planner, batch, next);
+                }
             }
         }
     }
