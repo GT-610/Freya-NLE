@@ -17,7 +17,9 @@
 //!   previous character; `<p>` returns to the normal flow. A number with a
 //!   sign is relative to the previous position;
 //! - `<twN>` / `<thN>`: horizontal and vertical glyph scale, with `<tw>` /
-//!   `<th>` restoring 1.0. (`<tr>` rotation is not implemented yet.)
+//!   `<th>` restoring 1.0;
+//! - `<trN>`: rotation in degrees, with a signed value relative to the current
+//!   angle and `<tr>` restoring 0.
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -57,6 +59,8 @@ pub struct TextRun {
     /// Horizontal and vertical glyph scale from `<tw...>` / `<th...>`.
     pub x_scale: f32,
     pub y_scale: f32,
+    /// Rotation in degrees from `<tr...>`.
+    pub rotation: f32,
 }
 
 /// The text's position after a `<p...>` directive.
@@ -88,6 +92,7 @@ pub struct TextBaseStyle {
     pub anchor: TextAnchor,
     pub x_scale: f32,
     pub y_scale: f32,
+    pub rotation: f32,
 }
 
 /// The font half of a run: family and the three style switches.
@@ -116,6 +121,7 @@ const MAX_LETTER_SPACING: f32 = 1_000.0;
 const MAX_LINE_SPACING: f32 = 4_096.0;
 const MAX_POSITION: f32 = 32_768.0;
 const MAX_GLYPH_SCALE: f32 = 100.0;
+const MAX_ROTATION: f32 = 3_600.0;
 const MAX_SPEED: f32 = 1_000.0;
 const MAX_WAIT_SECONDS: f32 = 3_600.0;
 
@@ -330,6 +336,30 @@ impl Parser {
                 _ => return false,
             }
         };
+        if axis == "r" {
+            let rotation = if value.is_empty() {
+                0.0
+            } else {
+                let (text, relative) = match value.strip_prefix('+') {
+                    Some(value) => (value.trim(), true),
+                    None => (value, false),
+                };
+                let Ok(value) = text.parse::<f32>() else {
+                    return false;
+                };
+                if !value.is_finite() {
+                    return false;
+                }
+                let value = if relative {
+                    self.style.rotation + value
+                } else {
+                    value
+                };
+                value.clamp(-MAX_ROTATION, MAX_ROTATION)
+            };
+            self.style.rotation = rotation;
+            return true;
+        }
         match axis {
             "w" => self.style.x_scale = scale,
             "h" => self.style.y_scale = scale,
@@ -596,6 +626,7 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             anchor: run.style.anchor,
             x_scale: run.style.x_scale,
             y_scale: run.style.y_scale,
+            rotation: run.style.rotation,
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -771,6 +802,7 @@ mod tests {
             anchor: TextAnchor::Flow,
             x_scale: 1.0,
             y_scale: 1.0,
+            rotation: 0.0,
             font_family: None,
             bold: false,
             italic: false,
@@ -976,6 +1008,15 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn rotation_directives_turn_the_text() {
+        let runs = parse_text_runs("<tr90>a<tr+45>b<tr>c", base());
+        assert_eq!(runs[0].rotation, 90.0);
+        assert_eq!(runs[1].rotation, 135.0);
+        assert_eq!(runs[2].rotation, 0.0);
+        assert_eq!(text(&parse_text_runs("<trx>a", base())), "<trx>a");
     }
 
     #[test]

@@ -362,6 +362,10 @@ fn rasterize_with_face(
                 scale,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                pivot_x: 0.0,
+                pivot_y: 0.0,
+                cos: 1.0,
+                sin: 0.0,
             };
             if face
                 .outline_glyph(GlyphId(glyph.glyph_id), &mut outline)
@@ -508,6 +512,7 @@ struct RunSegment {
     letter_spacing: f32,
     x_scale: f32,
     y_scale: f32,
+    rotation: f32,
     /// Line spacing this run requests for the gap after its line.
     line_spacing: Option<f32>,
     /// `<p...>` directive carried by the run.
@@ -532,6 +537,7 @@ struct ShapedSegment {
     scale: f32,
     x_scale: f32,
     y_scale: f32,
+    rotation: f32,
     color: RgbaColor,
     outline_color: RgbaColor,
     face_index: usize,
@@ -602,6 +608,7 @@ fn rasterize_runs(
             letter_spacing: run.letter_spacing,
             x_scale: run.x_scale.max(0.0),
             y_scale: run.y_scale.max(0.0),
+            rotation: run.rotation,
             line_spacing: run.line_spacing,
             anchor: run.anchor,
             face_index: index,
@@ -694,6 +701,7 @@ fn rasterize_runs(
                 scale,
                 x_scale: segment.x_scale,
                 y_scale: segment.y_scale,
+                rotation: segment.rotation,
                 color: segment.color,
                 outline_color: segment.outline_color,
                 face_index: segment.face_index,
@@ -778,6 +786,7 @@ fn rasterize_runs(
             let face = &faces[segment.face_index];
             let mut builder = PathBuilder::new();
             for glyph in &segment.glyphs {
+                let radians = segment.rotation.to_radians();
                 let mut outline = GlyphOutline {
                     path: &mut builder,
                     origin_x: segment_x + glyph.x,
@@ -785,6 +794,10 @@ fn rasterize_runs(
                     scale: segment.scale,
                     x_scale: segment.x_scale,
                     y_scale: segment.y_scale,
+                    pivot_x: segment_x,
+                    pivot_y: baseline,
+                    cos: radians.cos(),
+                    sin: radians.sin(),
                 };
                 if face
                     .outline_glyph(GlyphId(glyph.glyph_id), &mut outline)
@@ -800,7 +813,7 @@ fn rasterize_runs(
                     outline_color: segment.outline_color,
                 });
             }
-            if segment.strikethrough && segment.width > 0.0 {
+            if segment.strikethrough && segment.rotation == 0.0 && segment.width > 0.0 {
                 strikes.push(StrikeLine {
                     x: segment_x,
                     y: baseline - segment.font_size * 0.32,
@@ -1071,13 +1084,25 @@ struct GlyphOutline<'a> {
     scale: f32,
     x_scale: f32,
     y_scale: f32,
+    /// Rotation happens on screen coordinates around the run's start point.
+    pivot_x: f32,
+    pivot_y: f32,
+    cos: f32,
+    sin: f32,
 }
 
 impl GlyphOutline<'_> {
     fn point(&self, x: f32, y: f32) -> (f32, f32) {
+        let px = self.origin_x + x * self.x_scale * self.scale;
+        let py = self.baseline_y - y * self.y_scale * self.scale;
+        if self.sin == 0.0 && self.cos == 1.0 {
+            return (px, py);
+        }
+        let dx = px - self.pivot_x;
+        let dy = py - self.pivot_y;
         (
-            self.origin_x + x * self.x_scale * self.scale,
-            self.baseline_y - y * self.y_scale * self.scale,
+            self.pivot_x + dx * self.cos - dy * self.sin,
+            self.pivot_y + dx * self.sin + dy * self.cos,
         )
     }
 }
@@ -1281,6 +1306,7 @@ mod tests {
             anchor: TextAnchor::Flow,
             x_scale: 1.0,
             y_scale: 1.0,
+            rotation: 0.0,
             font_family: None,
             bold: false,
             italic: false,
@@ -1310,6 +1336,25 @@ mod tests {
             .iter()
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn a_rotated_run_turns_the_text_on_its_side() {
+        let rasterizer = test_rasterizer();
+        let plain = plain_plan(vec![run("\u{ea01}\u{ea02}", 48.0)]);
+        let mut rotated_run = run("\u{ea01}\u{ea02}", 48.0);
+        rotated_run.rotation = 90.0;
+        let rotated = plain_plan(vec![rotated_run]);
+        let plain_frame = rasterizer.rasterize(&plain, 0.0).expect("plain frame");
+        let rotated_frame = rasterizer.rasterize(&rotated, 0.0).expect("rotated frame");
+        assert!(
+            plain_frame.width > plain_frame.height,
+            "the unrotated run is wider than it is tall"
+        );
+        assert!(
+            rotated_frame.height > rotated_frame.width,
+            "rotating by 90 degrees turns that proportion around"
+        );
     }
 
     #[test]
@@ -1463,6 +1508,7 @@ mod tests {
                 anchor: TextAnchor::Flow,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                rotation: 0.0,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1478,6 +1524,7 @@ mod tests {
                 anchor: TextAnchor::Flow,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                rotation: 0.0,
                 font_family: None,
                 bold: false,
                 italic: false,
