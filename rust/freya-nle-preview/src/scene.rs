@@ -124,10 +124,6 @@ impl PreviewPlanner {
                 layer_blend_mode(&layer)
             };
             let crop = layer_crop(&layer);
-            let aspect = effect_number(&layer, "transform", "aspect");
-            let pivot_x = effect_number(&layer, "transform", "cx");
-            let pivot_y = effect_number(&layer, "transform", "cy");
-            let pivot_z = effect_number(&layer, "transform", "cz");
             let backface_visible = effect_bool_or(&layer, "transform", "backfaceVisible", true);
             if !self.known_objects.is_empty()
                 && !self.known_objects.contains(&layer.clip_type)
@@ -301,13 +297,13 @@ impl PreviewPlanner {
                     y: layer.transform.y,
                     z: layer.transform.z,
                     scale_percent: layer.transform.scale_percent,
-                    aspect,
+                    aspect: layer.transform.aspect,
                     rotation_x_degrees: layer.transform.rotation_x,
                     rotation_y_degrees: layer.transform.rotation_y,
                     rotation_z_degrees: layer.transform.rotation_z,
-                    pivot_x,
-                    pivot_y,
-                    pivot_z,
+                    pivot_x: layer.transform.pivot_x,
+                    pivot_y: layer.transform.pivot_y,
+                    pivot_z: layer.transform.pivot_z,
                     opacity: content_opacity * layer.transform.opacity,
                     backface_visible,
                 },
@@ -1450,6 +1446,34 @@ mod tests {
         assert!(planned.scene.layers.is_empty());
         assert!(planned.audio.is_empty());
         assert!(planned.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_text_script_can_stretch_and_pivot_the_layer() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 1920, "height": 1080, "fps": 10.0, "sampleRate": 48000},
+            "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+            "clips": [{
+                "id": 1,
+                "sceneId": 1,
+                "type": "text",
+                "start": 0,
+                "duration": 120,
+                "layer": 0,
+                "effects": [
+                    {"id": "text", "params": {"text": "<?obj.aspect=150?><?obj.cx=40?>"}},
+                    {"id": "transform", "params": {"x": 10, "aspect": 100, "cx": 0}}
+                ]
+            }]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        let planned = planner.build(&document, 1, 0).expect("scene plans");
+        let transform = planned.scene.layers[0].transform;
+        // The script writes reach the layer transform the compositor consumes.
+        assert_eq!(transform.aspect, 150.0);
+        assert_eq!(transform.pivot_x, 40.0);
+        assert_eq!(transform.x, 10.0, "the object's own x is untouched");
     }
 
     #[test]

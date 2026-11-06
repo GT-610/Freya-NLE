@@ -1681,8 +1681,9 @@ AviUtl 不同。本批让格子按图片自身的宽高比推进。
   对象保持原不透明度；任一可写字段非有限时整份丢弃。
 - **叠加顺序**：脚本只碰对象自身变换；组控制与图层偏移在脚本之后叠加，所以脚本写
   `ox` 不会绕过组与层的语义。
-- **未做的部分**：`aspect`（没有对应的对象参数）、`cx/cy/cz`、`sx/sy/sz` 仍未提供；
-  `obj.effect()`/`obj.draw()`/`obj.setfont()` 这类"脚本驱动渲染"不在本批范围。
+- **未做的部分**：`aspect` 与 `cx/cy/cz` 在 §7.49 补上；`sx/sy/sz` 仍未提供（渲染器
+  没有独立的三轴缩放）；`obj.effect()`/`obj.draw()`/`obj.setfont()` 这类"脚本驱动
+  渲染"不在本批范围。
 
 验证：
 
@@ -1979,6 +1980,37 @@ AviUtl2 手册（`usage.md`「画像合成（オブジェクト）」）的语�
 - 临时复现缺陷 → 15.09%，退出码 1；恢复 → 0.26%，退出码 0；
 - `cargo test --workspace --all-features --locked` 全绿；`clippy --no-deps` 与
   `fmt --check` 干净。
+
+### 7.49 B3.7（第十三批）：脚本补上 `aspect` 与中心坐标
+
+§7.39 让脚本能写 `ox/oy/oz`、`rx/ry/rz`、`zoom`、`alpha`，但 `aspect`（縦横比）与
+`cx/cy/cz`（中心座標）仍缺。官方变量表把它们标为可写，且这两个值本来就存在于标准
+绘制里——只是渲染计划没把它们带到预览层。
+
+| 层 | 位置 | 改动 |
+| --- | --- | --- |
+| core | `bake_plan.rs` | `EvaluatedTransform` 增加 `aspect`、`pivot_x/y/z`；`RenderBakeInput` 增加同名输入，从标准绘制的 `aspect`/`cx`/`cy`/`cz` 读取 |
+| core | `expression.rs` | `TextScriptTransform` 增加这四个字段；`obj.aspect`/`obj.cx`/`obj.cy`/`obj.cz` 可读写；有限性校验覆盖它们 |
+| preview | `scene.rs` | `LayerTransform` 的 `aspect`/`pivot_*` 改为取渲染计划的值，不再从效果参数里二次读取 |
+
+语义与取舍：
+
+- **一处取值**：`aspect` 与中心坐标过去由预览层从效果参数直接读，现在统一由渲染计划
+  携带；这样脚本写进去的值才可能生效，也避免两处对"当前值"给出不同答案。
+- **`aspect` 沿用标准绘制的百分比语义**（100 = 不变形），与面板上的取值一致，不做
+  1.0 倍率的二次换算。
+- **未做的部分**：`sx/sy/sz` 仍未提供——渲染器只有"整体缩放 + 縦横比"，没有独立的
+  三轴缩放，硬映射会得到与 AviUtl2 不同的结果，因此如实记为缺口而不是近似实现。
+
+验证：
+
+- `cargo test --workspace --all-features --locked` 通过（core 216、app 285、
+  desktop 67、render 51、preview 26）；
+- core 测试：`obj.aspect=150`、`obj.cx=32` 生效且未触碰的 `cy` 保持原值；
+- preview 测试 `a_text_script_can_stretch_and_pivot_the_layer`：脚本写的 `aspect=150`、
+  `cx=40` 出现在合成层使用的 `LayerTransform` 上，对象自身的 `x=10` 不受影响；
+- `clippy --no-deps` 与 `fmt --check` 干净；`--frames 40` 启动冒烟
+  `main_frames: 3`、`timeline_frames: 3`、`wgpu_errors: []`。
 
 ## 8. 验收与风险
 

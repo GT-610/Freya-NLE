@@ -93,6 +93,12 @@ pub struct EvaluatedTransform {
     pub rotation_z: f32,
     pub scale_percent: f32,
     pub opacity: f32,
+    /// Horizontal stretch from the standard drawing (`aspect`, 100 = square).
+    pub aspect: f32,
+    /// Pivot the object rotates and scales around (`cx`/`cy`/`cz`).
+    pub pivot_x: f32,
+    pub pivot_y: f32,
+    pub pivot_z: f32,
 }
 
 impl Default for EvaluatedTransform {
@@ -106,6 +112,10 @@ impl Default for EvaluatedTransform {
             rotation_z: 0.0,
             scale_percent: 100.0,
             opacity: 1.0,
+            aspect: 100.0,
+            pivot_x: 0.0,
+            pivot_y: 0.0,
+            pivot_z: 0.0,
         }
     }
 }
@@ -1646,6 +1656,10 @@ impl BakePlan {
                 rotation_z: 0.0,
                 scale: 100.0,
                 opacity: 1.0,
+                aspect: 100.0,
+                pivot_x: 0.0,
+                pivot_y: 0.0,
+                pivot_z: 0.0,
             };
             let mut evaluated_effects = Vec::new();
 
@@ -1667,6 +1681,10 @@ impl BakePlan {
                     render_input.rotation_z = effect.float_or("rotationZ", 0.0, relative_frame);
                     render_input.scale = effect.float_or("scale", 100.0, relative_frame);
                     render_input.opacity = effect.float_or("opacity", 1.0, relative_frame);
+                    render_input.aspect = effect.float_or("aspect", 100.0, relative_frame);
+                    render_input.pivot_x = effect.float_or("cx", 0.0, relative_frame);
+                    render_input.pivot_y = effect.float_or("cy", 0.0, relative_frame);
+                    render_input.pivot_z = effect.float_or("cz", 0.0, relative_frame);
                 }
                 let mut evaluated_params = BTreeMap::new();
                 for name in &effect.all_keys {
@@ -1689,6 +1707,10 @@ impl BakePlan {
                     rotation_z: render.rotation_z,
                     scale_percent: render.scale_x * 100.0,
                     opacity: render.opacity,
+                    aspect: render_input.aspect,
+                    pivot_x: render_input.pivot_x,
+                    pivot_y: render_input.pivot_y,
+                    pivot_z: render_input.pivot_z,
                 };
                 let media = media_playback_plan(
                     &clip.clip_type,
@@ -2005,6 +2027,10 @@ fn text_render_plan(
                 rotation_z: transform.rotation_z,
                 scale_percent: transform.scale_percent,
                 opacity: transform.opacity,
+                aspect: transform.aspect,
+                pivot_x: transform.pivot_x,
+                pivot_y: transform.pivot_y,
+                pivot_z: transform.pivot_z,
             },
         },
     );
@@ -2019,6 +2045,10 @@ fn text_render_plan(
         transform.rotation_z = scripted.rotation_z;
         transform.scale_percent = scripted.scale_percent;
         transform.opacity = scripted.opacity;
+        transform.aspect = scripted.aspect;
+        transform.pivot_x = scripted.pivot_x;
+        transform.pivot_y = scripted.pivot_y;
+        transform.pivot_z = scripted.pivot_z;
     }
     let font_family = value_as_string(value("fontFamily"), "sans-serif");
     let font_size = value_as_f64(value("fontSize"), 48.0).clamp(1.0, 4_096.0) as f32;

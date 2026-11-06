@@ -49,6 +49,12 @@ pub(crate) struct TextScriptTransform {
     pub rotation_z: f32,
     pub scale_percent: f32,
     pub opacity: f32,
+    /// Horizontal stretch (`aspect`, 100 = square).
+    pub aspect: f32,
+    /// Pivot the object rotates around.
+    pub pivot_x: f32,
+    pub pivot_y: f32,
+    pub pivot_z: f32,
 }
 
 /// The clock and object facts a text script sees for the frame being rendered.
@@ -227,6 +233,10 @@ impl TextScriptVm {
             .with("rz", transform.rotation_z)
             .with("zoom", transform.scale_percent / 100.0)
             .with("alpha", transform.opacity)
+            .with("aspect", transform.aspect)
+            .with("cx", transform.pivot_x)
+            .with("cy", transform.pivot_y)
+            .with("cz", transform.pivot_z)
             .build();
         let _ = self.vm.set_global("obj", Value::Table(object));
         // `mes` must collect per object, not per frame, so the collector is
@@ -296,6 +306,10 @@ impl TextScriptVm {
             rotation_z: read("rz").unwrap_or(clock.transform.rotation_z),
             scale_percent: read("zoom").map_or(clock.transform.scale_percent, |zoom| zoom * 100.0),
             opacity: read("alpha").unwrap_or(clock.transform.opacity),
+            aspect: read("aspect").unwrap_or(clock.transform.aspect),
+            pivot_x: read("cx").unwrap_or(clock.transform.pivot_x),
+            pivot_y: read("cy").unwrap_or(clock.transform.pivot_y),
+            pivot_z: read("cz").unwrap_or(clock.transform.pivot_z),
         };
         // A script that wrote nonsense leaves the object where it was rather
         // than making it invisible or infinitely large.
@@ -308,6 +322,10 @@ impl TextScriptVm {
             transform.rotation_z,
             transform.scale_percent,
             transform.opacity,
+            transform.aspect,
+            transform.pivot_x,
+            transform.pivot_y,
+            transform.pivot_z,
         ]
         .into_iter()
         .all(f32::is_finite);
@@ -495,6 +513,10 @@ mod tests {
                 rotation_z: 0.0,
                 scale_percent: 100.0,
                 opacity: 1.0,
+                aspect: 100.0,
+                pivot_x: 0.0,
+                pivot_y: 0.0,
+                pivot_z: 0.0,
             },
         }
     }
@@ -560,6 +582,10 @@ mod tests {
             rotation_z: 10.0,
             scale_percent: 100.0,
             opacity: 1.0,
+            aspect: 100.0,
+            pivot_x: 0.0,
+            pivot_y: 0.0,
+            pivot_z: 0.0,
         };
         // AviUtl's documented example rotates the object by the elapsed time.
         let (printed, transform) = expand_text_scripts("<?obj.rz=obj.time*360?>", &clock);
@@ -592,6 +618,14 @@ mod tests {
         // `zoom` is a multiplier of the object's scale.
         let (_, transform) = expand_text_scripts("<?obj.zoom=2?>", &clock);
         assert_eq!(transform.expect("changed").scale_percent, 200.0);
+        // AviUtl marks `aspect` and the pivot (`cx`/`cy`/`cz`) writable too.
+        let (printed, transform) =
+            expand_text_scripts("<?obj.aspect=150?><?obj.cx=32?><?=obj.aspect?>", &clock);
+        assert_eq!(printed, "150");
+        let transform = transform.expect("aspect and pivot changed");
+        assert_eq!(transform.aspect, 150.0);
+        assert_eq!(transform.pivot_x, 32.0);
+        assert_eq!(transform.pivot_y, 0.0, "an untouched pivot keeps its value");
     }
 
     #[test]

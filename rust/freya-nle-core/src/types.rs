@@ -37,6 +37,10 @@ pub struct RenderBakeInput {
     pub rotation_z: f32,
     pub scale: f32,
     pub opacity: f32,
+    pub aspect: f32,
+    pub pivot_x: f32,
+    pub pivot_y: f32,
+    pub pivot_z: f32,
 }
 
 #[derive(Clone, Copy, Default)]
