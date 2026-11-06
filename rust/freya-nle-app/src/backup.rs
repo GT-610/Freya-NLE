@@ -568,12 +568,23 @@ mod tests {
 
     #[test]
     fn the_setting_only_accepts_an_absolute_directory() {
-        assert!(backup_root_from_setting("/tmp/backups").is_some());
+        // `/tmp/backups` is absolute on Unix and merely a relative path on
+        // Windows, so the fixture has to be built by the host: an absolute
+        // path is what the setting promises to accept, and the check is one.
+        let absolute = std::env::temp_dir().join("backups");
+        let absolute = absolute.to_str().expect("the temp directory is UTF-8");
+        assert!(backup_root_from_setting(absolute).is_some());
         assert_eq!(
-            backup_root_from_setting("/tmp/backups"),
-            Some(PathBuf::from("/tmp/backups"))
+            backup_root_from_setting(absolute),
+            Some(PathBuf::from(absolute))
         );
-        assert!(backup_root_from_setting("  /tmp/backups  ").is_some());
+        let padded = format!("  {absolute}  ");
+        assert_eq!(
+            backup_root_from_setting(&padded),
+            Some(PathBuf::from(absolute)),
+            "surrounding whitespace is trimmed before the check"
+        );
+
         assert!(backup_root_from_setting("relative/backups").is_none());
         assert!(backup_root_from_setting(" ").is_none());
     }
