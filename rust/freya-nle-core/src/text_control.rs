@@ -21,7 +21,8 @@
 //! - `<trN>`: rotation in degrees, with a signed value relative to the current
 //!   angle and `<tr>` restoring 0;
 //! - `</>base<![scale][+]>ruby</>`: furigana over the base text, where `+`
-//!   expands the line so the ruby does not collide with the line above.
+//!   expands the line so the ruby does not collide with the line above;
+//! - `<&name>`: an inline emoji image from the registered emoji folder.
 //! - `<@Family[,3BI]>`: font family with an optional decoration digit and
 //!   `B`/`I`/`S` style letters; `<@>` restores the object's font, while
 //!   `<@+B>` / `<@-B>` add or remove one style on the current font;
@@ -65,6 +66,8 @@ pub struct TextRun {
     pub rotation: f32,
     /// Ruby (furigana) block this run belongs to, when it is inside `</>...`.
     pub ruby: Option<RubyRun>,
+    /// Name of the inline emoji this run draws instead of a glyph.
+    pub emoji: Option<String>,
 }
 
 /// One run's part in a `</>base<![...]>ruby</>` block.
@@ -111,6 +114,7 @@ pub struct TextBaseStyle {
     pub y_scale: f32,
     pub rotation: f32,
     pub ruby: Option<RubyRun>,
+    pub emoji: Option<String>,
 }
 
 /// The font half of a run: family and the three style switches.
@@ -143,6 +147,9 @@ const MAX_ROTATION: f32 = 3_600.0;
 const RUBY_DEFAULT_SCALE: f32 = 0.5;
 const RUBY_MIN_SCALE: f32 = 0.05;
 const RUBY_MAX_SCALE: f32 = 4.0;
+/// Stands in for an `<&name>` emoji until the renderer draws the image.
+pub const EMOJI_PLACEHOLDER: char = '\u{FFFC}';
+const MAX_EMOJI_NAME_CHARS: usize = 64;
 const MAX_SPEED: f32 = 1_000.0;
 const MAX_WAIT_SECONDS: f32 = 3_600.0;
 
@@ -245,6 +252,10 @@ impl Parser {
     }
 
     fn push_char(&mut self, character: char) {
+        self.push_character(character)
+    }
+
+    fn push_character(&mut self, character: char) {
         let needs_run = self
             .runs
             .last()
@@ -279,6 +290,7 @@ impl Parser {
             's' => self.apply_size(&directive[1..]),
             '@' => self.apply_font(&directive[1..]),
             'p' => self.apply_position(&directive[1..]),
+            '&' => self.apply_emoji(&directive[1..]),
             't' => self.apply_transform(&directive[1..]),
             'g' => self.apply_spacing(&directive[1..]),
             'r' => self.apply_speed(&directive[1..]),
@@ -359,6 +371,20 @@ impl Parser {
             self.font.italic = italic;
             self.font.strikethrough = strikethrough;
         }
+        true
+    }
+
+    /// `<&name>`: an inline emoji image.
+    ///
+    /// The run holds one placeholder character so timing and spacing treat the
+    /// emoji like any other character; the renderer draws the image there.
+    fn apply_emoji(&mut self, value: &str) -> bool {
+        let Some(name) = normalize_emoji_name(value) else {
+            return false;
+        };
+        self.style.emoji = Some(name);
+        self.push_character(EMOJI_PLACEHOLDER);
+        self.style.emoji = None;
         true
     }
 
@@ -728,6 +754,7 @@ fn visible_runs(blocks: &[TextBlock], time: f32) -> Vec<TextRun> {
             y_scale: run.style.y_scale,
             rotation: run.style.rotation,
             ruby: run.style.ruby,
+            emoji: run.style.emoji.clone(),
             font_family: run.font.family.clone(),
             bold: run.font.bold,
             italic: run.font.italic,
@@ -799,6 +826,25 @@ fn position_coordinate(field: &str, current: f32) -> Option<Option<f32>> {
     let value = text.parse::<f32>().ok().filter(|value| value.is_finite())?;
     let value = if relative { current + value } else { value };
     Some(Some(value.clamp(-MAX_POSITION, MAX_POSITION)))
+}
+
+/// Validates an `<&name>` argument.
+fn normalize_emoji_name(value: &str) -> Option<String> {
+    let name = value.trim();
+    if name.is_empty()
+        || name.chars().count() > MAX_EMOJI_NAME_CHARS
+        || name.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | '/' | '\\' | ':' | '*' | '?' | '"' | '|'
+                )
+        })
+        || name.contains("..")
+    {
+        return None;
+    }
+    Some(name.to_owned())
 }
 
 fn parse_scaled_seconds(value: &str, displayed: usize) -> Option<f32> {
@@ -905,6 +951,7 @@ mod tests {
             y_scale: 1.0,
             rotation: 0.0,
             ruby: None,
+            emoji: None,
             font_family: None,
             bold: false,
             italic: false,
@@ -1110,6 +1157,25 @@ mod tests {
         for input in ["<@Meiryo,X>", "<@+Q>", "<@-Bx>", "<@Meiryo,1,2>"] {
             assert_eq!(text(&parse_text_runs(input, base())), input);
         }
+    }
+
+    #[test]
+    fn emoji_directives_become_placeholder_runs() {
+        let runs = parse_text_runs("a<&star>b", base());
+        assert_eq!(text(&runs), format!("a{EMOJI_PLACEHOLDER}b"));
+        let emoji = runs
+            .iter()
+            .find(|run| run.emoji.is_some())
+            .expect("an emoji run");
+        assert_eq!(emoji.emoji.as_deref(), Some("star"));
+        assert_eq!(emoji.text, EMOJI_PLACEHOLDER.to_string());
+        // The runs around it keep their own style.
+        assert_eq!(runs[0].text, "a");
+        assert_eq!(runs.last().expect("trailing run").text, "b");
+
+        // Names with path separators or angle brackets are not emoji.
+        assert_eq!(text(&parse_text_runs("<&bad/name>", base())), "<&bad/name>");
+        assert_eq!(text(&parse_text_runs("<&>", base())), "<&>");
     }
 
     #[test]

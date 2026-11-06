@@ -7,9 +7,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use tiny_skia::{
-    Color, FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform,
+    Color, FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke,
+    Transform,
 };
 
 const MAX_RASTER_DIMENSION: f32 = 8_192.0;
@@ -519,12 +521,83 @@ struct RunSegment {
     anchor: TextAnchor,
     /// Ruby block membership, if the run is inside `</>...`.
     ruby: Option<RubyRun>,
+    /// Emoji image this run draws instead of a glyph.
+    emoji: Option<String>,
     /// Index into the per-run faces passed to the layout.
     face_index: usize,
     strikethrough: bool,
 }
 
 /// One horizontal rule drawn through a run that asked for `<@...S>`.
+/// One emoji image to draw, recorded during layout.
+struct EmojiDraw {
+    name: String,
+    x: f32,
+    baseline: f32,
+    size: f32,
+}
+
+/// Folders searched for `<&name>` images, in order.
+static EMOJI_DIRS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+/// Decoded images keyed by path; a failed load is cached as `None`.
+static EMOJI_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<Pixmap>>>>> = OnceLock::new();
+
+/// Registers the folders `<&name>` looks in.
+///
+/// The interface calls this once at startup with the application data folder;
+/// tests pass a temporary directory.
+pub fn set_emoji_directories(directories: Vec<PathBuf>) {
+    let slot = EMOJI_DIRS.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(mut dirs) = slot.lock() {
+        *dirs = directories;
+    }
+}
+
+fn emoji_pixmap(name: &str) -> Option<Arc<Pixmap>> {
+    let directories = EMOJI_DIRS
+        .get()
+        .and_then(|slot| slot.lock().ok().map(|dirs| dirs.clone()))
+        .unwrap_or_default();
+    for directory in directories {
+        for extension in ["png", "PNG"] {
+            let path = directory.join(format!("{name}.{extension}"));
+            if !path.is_file() {
+                continue;
+            }
+            let cache = EMOJI_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(mut cache) = cache.lock() {
+                if let Some(hit) = cache.get(&path) {
+                    return hit.clone();
+                }
+                let pixmap = load_emoji(&path);
+                cache.insert(path, pixmap.clone());
+                return pixmap;
+            }
+        }
+    }
+    None
+}
+
+fn load_emoji(path: &std::path::Path) -> Option<Arc<Pixmap>> {
+    let image = image::open(path).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    let mut data = Vec::with_capacity((width as usize) * (height as usize) * 4);
+    for pixel in image.pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let alpha = u16::from(alpha);
+        // tiny-skia wants premultiplied colours.
+        let premultiply = |channel: u8| ((u16::from(channel) * alpha + 127) / 255) as u8;
+        data.extend_from_slice(&[
+            premultiply(red),
+            premultiply(green),
+            premultiply(blue),
+            alpha as u8,
+        ]);
+    }
+    let size = tiny_skia::IntSize::from_wh(width, height)?;
+    Pixmap::from_vec(data, size).map(Arc::new)
+}
+
 struct StrikeLine {
     x: f32,
     y: f32,
@@ -550,6 +623,8 @@ struct ShapedSegment {
     font_size: f32,
     strikethrough: bool,
     line_spacing: Option<f32>,
+    /// Emoji image this segment draws instead of glyphs.
+    emoji: Option<String>,
 }
 
 struct ShapedRunLine {
@@ -630,6 +705,7 @@ fn shape_ruby_block(block: &mut RubyBlockShape, segments: &[RunSegment], faces: 
         descent = descent.max(segment_descent);
         block.segments.push(ShapedSegment {
             run_index: index,
+            emoji: None,
             glyphs: layout.glyphs,
             width: layout.width,
             ascent: segment_ascent,
@@ -695,6 +771,7 @@ fn rasterize_runs(
             line_spacing: run.line_spacing,
             anchor: run.anchor,
             ruby: run.ruby,
+            emoji: run.emoji.clone(),
             face_index: index,
             strikethrough: run.strikethrough,
         })
@@ -778,6 +855,28 @@ fn rasterize_runs(
         let mut width = 0.0_f32;
         for (index, text) in draft.segments {
             let segment = &segments[index];
+            if let Some(emoji) = &segment.emoji {
+                // One square cell per emoji, drawn as an image by the caller.
+                shaped_segments.push(ShapedSegment {
+                    run_index: index,
+                    glyphs: Vec::new(),
+                    width: segment.font_size,
+                    ascent: segment.font_size * 0.8,
+                    scale: 1.0,
+                    x_scale: 1.0,
+                    y_scale: 1.0,
+                    rotation: 0.0,
+                    color: segment.color,
+                    outline_color: segment.outline_color,
+                    face_index: segment.face_index,
+                    font_size: segment.font_size,
+                    strikethrough: false,
+                    line_spacing: segment.line_spacing,
+                    emoji: Some(emoji.clone()),
+                });
+                width += segment.font_size;
+                continue;
+            }
             let face = &faces[segment.face_index];
             let units_per_em = face.units_per_em().max(1) as f32;
             let scale = segment.font_size / units_per_em;
@@ -803,6 +902,7 @@ fn rasterize_runs(
                 font_size: segment.font_size,
                 strikethrough: segment.strikethrough,
                 line_spacing: segment.line_spacing,
+                emoji: None,
             });
         }
         lines.push(ShapedRunLine {
@@ -906,11 +1006,22 @@ fn rasterize_runs(
 
     let mut paths = Vec::new();
     let mut strikes = Vec::new();
+    let mut emojis: Vec<EmojiDraw> = Vec::new();
     let mut outlined_glyphs = 0_usize;
     for (line_index, line) in lines.iter().enumerate() {
         let (line_x, baseline) = positions[line_index];
         let mut segment_x = line_x;
         for segment in &line.segments {
+            if let Some(emoji) = &segment.emoji {
+                emojis.push(EmojiDraw {
+                    name: emoji.clone(),
+                    x: segment_x,
+                    baseline,
+                    size: segment.font_size,
+                });
+                segment_x += segment.width;
+                continue;
+            }
             let face = &faces[segment.face_index];
             let mut builder = PathBuilder::new();
             for glyph in &segment.glyphs {
@@ -1018,7 +1129,7 @@ fn rasterize_runs(
             .chars()
             .any(|character| !ignorable_for_font_matching(character))
     });
-    if has_visible_text && outlined_glyphs == 0 {
+    if has_visible_text && outlined_glyphs == 0 && emojis.is_empty() {
         return Err(TextRasterError::InvalidPath);
     }
 
@@ -1032,6 +1143,12 @@ fn rasterize_runs(
         visual_top = visual_top.min(bounds.top());
         visual_right = visual_right.max(bounds.right());
         visual_bottom = visual_bottom.max(bounds.bottom());
+    }
+    for emoji in &emojis {
+        visual_left = visual_left.min(emoji.x);
+        visual_top = visual_top.min(emoji.baseline - emoji.size);
+        visual_right = visual_right.max(emoji.x + emoji.size);
+        visual_bottom = visual_bottom.max(emoji.baseline);
     }
     let visual_width = (visual_right - visual_left).max(0.0);
     let visual_height = (visual_bottom - visual_top).max(0.0);
@@ -1132,6 +1249,29 @@ fn rasterize_runs(
             );
         }
         fill_path(&mut pixmap, &run_path.path, run_path.color, transform);
+    }
+    for emoji in &emojis {
+        let Some(source) = emoji_pixmap(&emoji.name) else {
+            continue;
+        };
+        let (width, height) = (source.width() as f32, source.height() as f32);
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        // Fit the image inside its square cell without distorting it.
+        let scale = emoji.size / width.max(height);
+        let draw_x = emoji.x + (emoji.size - width * scale) / 2.0;
+        let draw_y = emoji.baseline - emoji.size + (emoji.size - height * scale) / 2.0;
+        let transform = Transform::from_translate(draw_x + translate_x, draw_y + translate_y)
+            .pre_scale(scale, scale);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            source.as_ref().as_ref(),
+            &PixmapPaint::default(),
+            transform,
+            None,
+        );
     }
     for strike in &strikes {
         if let Some(rect) = tiny_skia::Rect::from_xywh(
@@ -1495,6 +1635,7 @@ mod tests {
             y_scale: 1.0,
             rotation: 0.0,
             ruby: None,
+            emoji: None,
             font_family: None,
             bold: false,
             italic: false,
@@ -1524,6 +1665,39 @@ mod tests {
             .iter()
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn an_emoji_run_draws_the_registered_image() {
+        let directory = std::env::temp_dir().join(format!(
+            "freya-nle-emoji-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("emoji directory");
+        let path = directory.join("__test_star.png");
+        let mut pixels = vec![0_u8; 8 * 8 * 4];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[255, 0, 0, 255]);
+        }
+        image::save_buffer(&path, &pixels, 8, 8, image::ColorType::Rgba8).expect("write png");
+        set_emoji_directories(vec![directory]);
+
+        let mut emoji = run("\u{FFFC}", 48.0);
+        emoji.emoji = Some("__test_star".to_owned());
+        let plan = plain_plan(vec![emoji]);
+        let frame = test_rasterizer()
+            .rasterize(&plan, 0.0)
+            .expect("an emoji-only text rasterizes");
+        assert!(
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60 && pixel[3] > 0),
+            "the registered image is drawn into the cell"
+        );
     }
 
     #[test]
@@ -1748,6 +1922,7 @@ mod tests {
                 y_scale: 1.0,
                 rotation: 0.0,
                 ruby: None,
+                emoji: None,
                 font_family: None,
                 bold: false,
                 italic: false,
@@ -1765,6 +1940,7 @@ mod tests {
                 y_scale: 1.0,
                 rotation: 0.0,
                 ruby: None,
+                emoji: None,
                 font_family: None,
                 bold: false,
                 italic: false,

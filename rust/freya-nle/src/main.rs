@@ -273,6 +273,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         gpu.queue.clone(),
         Arc::new(|| {}),
     )));
+    // `<&name>` looks for PNG files in the application's emoji folder; create
+    // it so a user has somewhere obvious to drop images.
+    let emoji_directory = freya_nle_app::settings::application_data_root().join("emoji");
+    let _ = std::fs::create_dir_all(&emoji_directory);
+    freya_nle_render::set_emoji_directories(vec![emoji_directory]);
     let export_codecs = Rc::new(RefCell::new(ExportCodecState::default()));
     let export_planner = Rc::new(RefCell::new(ExportPlannerRuntime::default()));
     let export_batch = {

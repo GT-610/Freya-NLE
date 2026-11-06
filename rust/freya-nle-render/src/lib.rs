@@ -8,7 +8,7 @@ mod text;
 pub use effects::{NativeEffectMode, NativeRenderDefinition, VisualEffect};
 pub use procedural::{ProceduralRasterError, rasterize_procedural_object};
 pub use shape::{ShapeRasterError, rasterize_shape};
-pub use text::{TextRasterError, TextRasterizer};
+pub use text::{TextRasterError, TextRasterizer, set_emoji_directories};
 
 use effects::{encode_effect_chain, encode_effect_pass};
 use freya_nle_core::api::CameraRenderPlan;
