@@ -443,6 +443,7 @@ pub(super) fn install_export_callbacks(
             return;
         }
         let mut added = 0_usize;
+        let mut skipped = 0_usize;
         {
             let mut queue = batch_scenes_queue.borrow_mut();
             for (id, name, duration) in scenes {
@@ -463,6 +464,17 @@ pub(super) fn install_export_callbacks(
                 }
                 item.output_path =
                     batch::scene_output_path(&request.output_path, &name, request.mode);
+                // Two scene names can sanitize to the same suffix (`Scene 1`
+                // and `Scene/1`), and the second item would then write over
+                // the first. A duplicate destination is refused instead.
+                if queue
+                    .items()
+                    .iter()
+                    .any(|existing| existing.request.output_path == item.output_path)
+                {
+                    skipped += 1;
+                    continue;
+                }
                 let label = format!(
                     "{} · {}",
                     name,
@@ -476,10 +488,24 @@ pub(super) fn install_export_callbacks(
                 }
                 added += 1;
             }
-            queue.set_message(format!(
-                "{} {added}",
-                localized("Added scenes:", "已加入场景数：", "追加したシーン:")
-            ));
+            if skipped == 0 {
+                queue.set_message(format!(
+                    "{} {added}",
+                    localized("Added scenes:", "已加入场景数：", "追加したシーン:")
+                ));
+            } else {
+                // Say why the count is lower than the scene count, rather than
+                // leaving the user to notice the shortfall.
+                queue.set_message(format!(
+                    "{} {added} ({} {skipped})",
+                    localized("Added scenes:", "已加入场景数：", "追加したシーン:"),
+                    localized(
+                        "skipped: the output name is already queued",
+                        "已跳过：输出名与队列中已有条目重复",
+                        "スキップ：出力名が既にキューにあります"
+                    )
+                ));
+            }
         }
         sync_batch(&window, &batch_scenes_queue.borrow());
         persist_batch(
