@@ -559,11 +559,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// A key is 16 hex characters, so it cannot spell a path outside the root
-    /// — but it can name a symlink that points outside. Scanning or pruning
-    /// through such a link would enumerate and delete files the user never put
-    /// in the backup folder.
-    #[cfg(unix)]
     /// Two spellings of one project must share a version history.
     #[test]
     fn a_project_key_ignores_the_spelling_of_its_path() {
@@ -590,6 +585,11 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// A key is 16 hex characters, so it cannot spell a path outside the root
+    /// — but it can name a symlink that points outside. Scanning or pruning
+    /// through such a link would enumerate and delete files the user never put
+    /// in the backup folder.
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_backup_directory_is_refused_rather_than_followed() {
         use std::os::unix::fs::symlink;
