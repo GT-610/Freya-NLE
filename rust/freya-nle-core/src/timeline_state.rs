@@ -564,12 +564,37 @@ impl TimelineState {
                         // `=` written directly into the parameter. Clearing the
                         // separate expression has to clear that too, or the
                         // parameter keeps animating through the fallback.
-                        if let Some(Value::String(literal)) = effect.params.get_mut(&param_name)
+                        //
+                        // It becomes the number the expression produced at the
+                        // clip's start, not the expression text: `numeric_value`
+                        // rejects strings, so leaving the remainder as a string
+                        // would render the parameter as zero.
+                        if let Some(Value::String(literal)) = effect.params.get(&param_name)
                             && crate::expression::is_expression(literal)
                         {
-                            let literal = literal.trim_start_matches('=').trim().to_owned();
-                            *effect.params.get_mut(&param_name).expect("checked above") =
-                                Value::String(literal);
+                            let source = literal.trim_start_matches('=').trim().to_owned();
+                            let current = effect
+                                .params
+                                .get(&param_name)
+                                .and_then(Value::as_f64)
+                                .unwrap_or(0.0);
+                            let resolved = crate::expression::evaluate(&source, 0.0, 0, current)
+                                .filter(|value| value.is_finite());
+                            match resolved {
+                                Some(number) => {
+                                    effect.params.insert(
+                                        param_name.clone(),
+                                        serde_json::Number::from_f64(number)
+                                            .map(Value::Number)
+                                            .unwrap_or_else(|| Value::from(0.0)),
+                                    );
+                                }
+                                // An expression that cannot be evaluated has no
+                                // number to keep, so the default applies.
+                                None => {
+                                    effect.params.remove(&param_name);
+                                }
+                            }
                         }
                     }
                 }

@@ -116,13 +116,23 @@ fn media_effect_target(clip: &ClipDocument) -> Option<(usize, &'static str)> {
 /// the project directory. The media bin shares this so a bin entry and the clip referencing the
 /// same file always agree on where it lives.
 pub fn resolve_path(project_path: Option<&Path>, source: &str) -> PathBuf {
+    resolve_in_directory(project_path.and_then(Path::parent), source)
+}
+
+/// Resolves a stored media path against a directory that is already known.
+///
+/// Separate from [`resolve_path`] because a session restored from a backup is
+/// unsaved and has no project file, while its media directory is recorded
+/// directly — passing that through `resolve_path` would take its parent.
+pub fn resolve_in_directory(directory: Option<&Path>, source: &str) -> PathBuf {
     let path = PathBuf::from(source);
     if path.is_absolute() {
         path
     } else {
-        project_path
-            .and_then(Path::parent)
-            .map_or(path.clone(), |directory| directory.join(path))
+        match directory {
+            Some(directory) => directory.join(path),
+            None => path,
+        }
     }
 }
 

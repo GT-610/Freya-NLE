@@ -449,7 +449,10 @@ impl WorkspaceModel {
     }
 
     pub fn missing_media(&self) -> Vec<MissingMediaEntry> {
-        find_missing_media(&self.project.document, self.project.path.as_deref())
+        // The media directory, not the project file's path: a session restored
+        // from a backup is unsaved and has no `path`, but its stills still sit
+        // beside the project the backup came from.
+        find_missing_media(&self.project.document, self.project.media_directory())
     }
 
     /// Returns the project media bin. An absent key reads as an empty bin rather than an error.
@@ -4451,7 +4454,8 @@ impl WorkspaceModel {
         overwrite: bool,
     ) -> Option<(i32, i32)> {
         let entry = self.media_bin().entry(entry_id)?.clone();
-        let path = crate::media_bin::resolve_path(self.project.path.as_deref(), &entry.path);
+        let path =
+            crate::media_bin::resolve_in_directory(self.project.media_directory(), &entry.path);
         // Only seekable media can honour an in/out range. An image's "duration" is the project's
         // default clip length, not a source offset, so trimming from it would invent data.
         let range =
@@ -5173,7 +5177,9 @@ impl WorkspaceModel {
             .params
             .get(path_parameter)
             .and_then(Value::as_str)
-            .map(|path| crate::media_bin::resolve_path(self.project.path.as_deref(), path))?;
+            .map(|path| {
+                crate::media_bin::resolve_in_directory(self.project.media_directory(), path)
+            })?;
         let source_duration = self.source_duration_frames(&path, &clip);
         let new_start = plan_clip_slip(
             &self.project.document,
@@ -5204,7 +5210,8 @@ impl WorkspaceModel {
 
     fn source_duration_frames(&self, path: &Path, clip: &ClipDocument) -> Option<i32> {
         let known = self.media_bin().entries().iter().find_map(|entry| {
-            let stored = crate::media_bin::resolve_path(self.project.path.as_deref(), &entry.path);
+            let stored =
+                crate::media_bin::resolve_in_directory(self.project.media_directory(), &entry.path);
             (stored == path).then_some(entry.duration_frames)
         });
         if known.is_some() {
@@ -5285,7 +5292,9 @@ impl WorkspaceModel {
             .params
             .get(path_parameter)
             .and_then(Value::as_str)
-            .map(|path| crate::media_bin::resolve_path(self.project.path.as_deref(), path));
+            .map(|path| {
+                crate::media_bin::resolve_in_directory(self.project.media_directory(), path)
+            });
         let source_duration = path
             .as_deref()
             .and_then(|path| self.source_duration_frames(path, &clip));

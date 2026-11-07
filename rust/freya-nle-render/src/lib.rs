@@ -3784,8 +3784,9 @@ mod tests {
     /// a value from the old percentage convention must not blow up the quad.
     /// The compositor multiplies, so its contract is the multiplier, not
     /// "finite". A caller that forwards a percentage still gets a finite quad
-    /// here — 101x wide — which is why `core` clamps at the plan boundary and
-    /// [`the_default_aspect_does_not_stretch_the_quad`] tests that path.
+    /// here — 101x wide — which is why `core` clamps at the plan boundary;
+    /// `bake_plan::tests::a_persisted_percentage_aspect_is_clamped_before_the_compositor`
+    /// covers that path.
     #[test]
     fn aspect_extremes_stay_finite() {
         let unchanged = quad_extent(&aspect_uniform(0.0));

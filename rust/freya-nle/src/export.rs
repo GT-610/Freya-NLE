@@ -467,11 +467,16 @@ pub(super) fn install_export_callbacks(
                 // Two scene names can sanitize to the same suffix (`Scene 1`
                 // and `Scene/1`), and the second item would then write over
                 // the first. A duplicate destination is refused instead.
-                if queue
-                    .items()
-                    .iter()
-                    .any(|existing| existing.request.output_path == item.output_path)
-                {
+                // Compared without regard to case: the file systems this runs
+                // on are usually case-insensitive, so `Scene 1` and `scene 1`
+                // would otherwise queue two items writing to one file.
+                if queue.items().iter().any(|existing| {
+                    existing
+                        .request
+                        .output_path
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&item.output_path.to_string_lossy())
+                }) {
                     skipped += 1;
                     continue;
                 }
@@ -736,7 +741,11 @@ fn begin_batch_item(
     // A queued item names a scene, and that scene may have been deleted since
     // the item was added. Exporting the currently selected scene instead would
     // write the wrong content under the item's name.
-    if let Some(scene) = batch.borrow().scene_of(index) {
+    // Bound first: holding the `Ref` from `batch.borrow()` across the block
+    // would make the `borrow_mut()` inside `fail_batch_item` panic with
+    // "already borrowed" on exactly the path this check exists to handle.
+    let queued_scene = batch.borrow().scene_of(index);
+    if let Some(scene) = queued_scene {
         let missing = {
             let mut model = model.borrow_mut();
             match model.current_workspace_mut() {
@@ -861,6 +870,10 @@ fn fail_batch_item(
             localized("failed", "失败", "失敗")
         ));
         sync_batch(window, &batch.borrow());
+        // The success path returns to the user's scene when the last item
+        // finishes; a failure has to do the same or the batch leaves them on
+        // whichever scene it was exporting.
+        restore_batch_scene(model, batch);
         return;
     }
     if pause {

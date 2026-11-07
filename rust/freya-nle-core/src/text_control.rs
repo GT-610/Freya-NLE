@@ -970,7 +970,14 @@ fn position_coordinate(field: &str, current: f32) -> Option<Option<f32>> {
         Some(value) => (value.trim(), true),
         None => match field.strip_prefix('-') {
             Some(value) => {
-                let value = value.trim().parse::<f32>().ok()?;
+                // `f32::from_str` accepts `nan` and `inf`, so the finite filter
+                // the other parsers use has to be here too: NaN would survive
+                // the clamp and reach the run's anchor.
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|value| value.is_finite())?;
                 let value = current - value.abs();
                 return Some(Some(value.clamp(-MAX_POSITION, MAX_POSITION)));
             }

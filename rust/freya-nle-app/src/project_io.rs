@@ -511,6 +511,19 @@ mod tests {
             "no source means no media directory to guess"
         );
         assert!(unsaved.dirty);
+
+        // The point of keeping the directory: a relative still in the restored
+        // document resolves beside the project it came from, not against the
+        // process working directory.
+        let restored = crate::missing_media::resolve_in_directory(
+            recovered.media_directory(),
+            "media/still.png",
+        );
+        assert_eq!(
+            restored,
+            PathBuf::from("/projects/demo/media/still.png"),
+            "the restored session resolves media against its source directory"
+        );
         fs::remove_file(snapshot_path).expect("recovery snapshot removes");
     }
 

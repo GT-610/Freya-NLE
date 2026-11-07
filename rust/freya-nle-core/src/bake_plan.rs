@@ -1208,8 +1208,13 @@ impl ExpressionScene<'_> {
             .get(target_clip)?
             .effects
             .iter()
+            // Same rule as `effect_by_name`: a reference resolves to an effect
+            // the render loop actually runs, so a bypassed counterpart on the
+            // other layer is not a candidate.
             .position(|effect| {
-                (!source.name.is_empty() && effect.name == source.name) || effect.id == source.id
+                effect.enabled
+                    && ((!source.name.is_empty() && effect.name == source.name)
+                        || effect.id == source.id)
             })
     }
 

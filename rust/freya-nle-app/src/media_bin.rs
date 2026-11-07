@@ -424,6 +424,12 @@ pub fn resolve_path(project_path: Option<&Path>, source: &str) -> PathBuf {
     crate::missing_media::resolve_path(project_path, source)
 }
 
+/// Resolves a bin entry against a known media directory; see
+/// [`crate::missing_media::resolve_in_directory`].
+pub(crate) fn resolve_in_directory(directory: Option<&Path>, source: &str) -> PathBuf {
+    crate::missing_media::resolve_in_directory(directory, source)
+}
+
 /// Plans one bin mutation as a reversible document replacement.
 ///
 /// Every bin edit is a project-level change rather than a clip edit, so it goes through
