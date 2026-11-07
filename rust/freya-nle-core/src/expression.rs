@@ -272,8 +272,13 @@ impl TextScriptVm {
         if script.len() > MAX_EXPRESSION_LENGTH {
             return None;
         }
+        // The collector is cleared at the top of the chunk, not only after a
+        // successful return: a block that prints and then fails would otherwise
+        // leave its text for the next block in the same object to print ahead
+        // of its own output.
         let source = format!(
-            "{TEXT_SCRIPT_PRELUDE};(function() {script} end)()\n\
+            "{TEXT_SCRIPT_PRELUDE};__collector.items = {{}}\n\
+             (function() {script} end)()\n\
              local out = table.concat(__collector.items)\n\
              __collector.items = {{}}\n\
              return out"
@@ -665,6 +670,22 @@ mod tests {
         // into range, so an untouched object is not silently normalised.
         let (_, transform) = expand_text_scripts("<?obj.cx=5?>", &clock);
         assert_eq!(transform.expect("pivot changed").aspect, 0.0);
+    }
+
+    /// A block that prints and then fails must not leave its text behind for
+    /// the next block in the same object to print ahead of its own output.
+    #[test]
+    fn a_failing_block_does_not_leak_its_output_into_the_next_one() {
+        let clock = clock(1.0, 1.0);
+        let expanded = text(
+            "<? mes(\"leaked\") error('boom') ?>|<? mes(\"kept\") ?>",
+            &clock,
+        );
+        assert!(
+            !expanded.contains("leakedkept") && !expanded.starts_with("leaked"),
+            "the failed block's output must not run into the next block: {expanded}"
+        );
+        assert!(expanded.contains("kept"), "{expanded}");
     }
 
     #[test]

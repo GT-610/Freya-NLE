@@ -57,6 +57,14 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         // The object-list dock reads this model, so it has to be cleared with
         // `objects` or the closed project's rows stay on screen.
         update_vec_model(&timeline.get_object_rows(), Vec::new());
+        // The scene-label flag menu appears whenever its list is non-empty, and
+        // the object-list kind combo reads these too; none of them is gated on
+        // a project being open, so all of them have to go with it.
+        update_vec_model(&timeline.get_scene_label_names(), Vec::new());
+        timeline.set_scene_label_filter(SharedString::default());
+        update_vec_model(&timeline.get_object_kind_filters(), Vec::new());
+        timeline.set_object_kind_label(SharedString::default());
+        timeline.set_object_kind_filter_value(SharedString::default());
         // No project means no marks: both menus would otherwise keep the last
         // project's list and offer commands that cannot run.
         sync_marks(main, timeline, model);

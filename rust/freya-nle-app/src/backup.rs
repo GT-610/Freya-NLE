@@ -155,6 +155,21 @@ impl BackupStore {
         self.root.join(key)
     }
 
+    /// Resolves a project path to its backup directory, refusing a symlink.
+    ///
+    /// [`Self::project_dir`] only hashes the path, so every caller that reads
+    /// or writes through the result has to check it: a key directory replaced
+    /// by a link would otherwise let listing, pruning and deleting reach files
+    /// outside the backup root.
+    fn checked_project_dir(&self, project_path: &Path) -> Result<PathBuf, String> {
+        let directory = self.project_dir(project_path);
+        let key = directory
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.key_directory(&key)
+    }
+
     /// Resolves a directory key to a real directory under the backup root.
     ///
     /// A key is 16 hex characters, so it cannot name a path outside the root by
@@ -250,10 +265,11 @@ impl BackupStore {
         // would produce a version that looks saved and cannot be opened.
         if bytes.len() as u64 > MAX_PROJECT_DOCUMENT_BYTES {
             return Err(format!(
-                "the project is larger than the {MAX_PROJECT_DOCUMENT_BYTES} byte backup limit                  and would not be restorable"
+                "the project is larger than the {} byte backup limit and would not be restorable",
+                MAX_PROJECT_DOCUMENT_BYTES
             ));
         }
-        let directory = self.project_dir(project_path);
+        let directory = self.checked_project_dir(project_path)?;
         fs::create_dir_all(&directory)
             .map_err(|error| format!("{}: {error}", directory.display()))?;
         // Best effort: the backup itself must still be written if the manifest
@@ -288,7 +304,10 @@ impl BackupStore {
 
     /// Newest first.
     pub(crate) fn entries(&self, project_path: &Path) -> Vec<BackupEntry> {
-        list_entries(&self.project_dir(project_path))
+        match self.checked_project_dir(project_path) {
+            Ok(directory) => list_entries(&directory),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Every project that has at least one backup, newest project first.
@@ -374,7 +393,8 @@ impl BackupStore {
         if !valid_backup_file(file_name) {
             return Err(format!("{file_name:?} is not a backup file name"));
         }
-        Ok(self.project_dir(project_path).join(file_name))
+        let directory = self.checked_project_dir(project_path)?;
+        Ok(directory.join(file_name))
     }
 
     #[cfg(test)]
@@ -608,10 +628,17 @@ mod tests {
         assert!(store.key_directory(&key).is_err(), "the key is refused");
         assert!(store.clear_key(&key).is_err(), "clearing is refused");
         assert!(store.project_label(&key).is_none(), "no label is read");
+        // A name that `valid_backup_file` accepts, so the refusal below can
+        // only come from the symlink check.
+        assert!(store.path_for_key(&key, "1234567890123.freya").is_err());
+        // The path-based entry points build the directory by hashing, so they
+        // have to refuse the link too rather than write through it.
+        let project = Path::new("/tmp/project.freya");
+        assert!(store.record(project, b"body", 5).is_err(), "record refuses");
+        assert!(store.entries(project).is_empty(), "entries does not list");
         assert!(
-            store
-                .path_for_key(&key, "2026-01-01T00-00-00.000Z.freya")
-                .is_err()
+            store.path_for(project, "1234567890123.freya").is_err(),
+            "path_for refuses"
         );
         // A budget sweep must not walk into the target either.
         store.enforce_total_budget(0).expect("sweep completes");

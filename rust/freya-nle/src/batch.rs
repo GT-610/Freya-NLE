@@ -329,6 +329,21 @@ fn item_from_json(value: &Value) -> Option<(String, i32, ExportRequest)> {
         .and_then(Value::as_i64)
         .and_then(|scene| i32::try_from(scene).ok())
         .unwrap_or(1);
+    let full_range = object
+        .get("fullRange")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    // A frame field that cannot be represented must not be replaced by 0: with
+    // `fullRange: false` the export uses the stored range, so a wrapped value
+    // would silently export frames the entry never named.
+    if !full_range {
+        for key in ["startFrame", "endFrame"] {
+            let Some(stored) = object.get(key).and_then(Value::as_i64) else {
+                continue;
+            };
+            i32::try_from(stored).ok()?;
+        }
+    }
     let request = ExportRequest {
         mode: match object.get("mode").and_then(Value::as_str) {
             Some("image-sequence") => ExportMode::ImageSequence,
@@ -349,10 +364,7 @@ fn item_from_json(value: &Value) -> Option<(String, i32, ExportRequest)> {
         profile: string("profile", ""),
         audio_codec: string("audioCodec", "aac"),
         audio_bitrate_kbps: number("audioBitrateKbps", 192),
-        full_range: object
-            .get("fullRange")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+        full_range,
         start_frame: number("startFrame", 0),
         end_frame: number("endFrame", 0),
     };
@@ -533,6 +545,48 @@ mod tests {
 
         let broken = from_json(&json!([{"label": "no path"}, 7, {"outputPath": ""}]));
         assert!(broken.is_empty(), "entries without a path are dropped");
+    }
+
+    /// A stored frame that does not fit `i32` must not become 0: with a fixed
+    /// range the export uses it, so the entry would export frames it never
+    /// named. The whole item is dropped instead.
+    #[test]
+    fn out_of_range_frames_drop_a_fixed_range_item() {
+        let entries = serde_json::json!([
+            {
+                "label": "wrapped",
+                "scene": 1,
+                "outputPath": "/tmp/out/wrapped.mkv",
+                "mode": "video",
+                "fullRange": false,
+                "startFrame": 4_294_967_306_i64,
+                "endFrame": 20
+            },
+            {
+                "label": "valid",
+                "scene": 1,
+                "outputPath": "/tmp/out/valid.mkv",
+                "mode": "video",
+                "fullRange": false,
+                "startFrame": 10,
+                "endFrame": 20
+            }
+        ]);
+        let queue = from_json(&entries);
+        assert_eq!(queue.items().len(), 1, "the wrapped entry is dropped");
+        assert_eq!(queue.items()[0].request.start_frame, 10);
+
+        // A full-range entry ignores the frame fields, so it keeps its place.
+        let entries = serde_json::json!([{
+            "label": "full",
+            "scene": 1,
+            "outputPath": "/tmp/out/full.mkv",
+            "mode": "video",
+            "fullRange": true,
+            "startFrame": 4_294_967_306_i64,
+            "endFrame": 20
+        }]);
+        assert_eq!(from_json(&entries).items().len(), 1);
     }
 
     #[test]

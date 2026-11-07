@@ -205,7 +205,12 @@ impl ProjectSession {
             .snapshot_json()
             .map_err(|error| error.to_string())?;
         if let Some(directory) = path.parent() {
-            relativize_media_paths(&mut json, directory);
+            // A stored relative path belongs to the directory the session is
+            // reading it from. Save As changes that directory, so the path has
+            // to be resolved against the old one before it is re-relativized
+            // against the new one, or the saved project points at files that
+            // are not there.
+            relativize_media_paths(&mut json, directory, self.media_directory());
         }
         let bytes = serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_PROJECT_DOCUMENT_BYTES {
@@ -240,7 +245,11 @@ fn document_too_large(path: &Path, limit: u64) -> String {
 /// Rewrites the media parameters of every clip that point inside `project_directory` to
 /// project-relative paths. Files outside the directory keep their absolute path, which keeps a
 /// project that references shared footage stable when it is saved elsewhere.
-fn relativize_media_paths(document: &mut Value, project_directory: &Path) {
+fn relativize_media_paths(
+    document: &mut Value,
+    project_directory: &Path,
+    source_directory: Option<&Path>,
+) {
     let Ok(directory) = std::path::absolute(project_directory) else {
         return;
     };
@@ -253,7 +262,7 @@ fn relativize_media_paths(document: &mut Value, project_directory: &Path) {
                 let Some(media) = params.get_mut(object).and_then(Value::as_object_mut) else {
                     continue;
                 };
-                relativize_parameter(media, key, &directory);
+                relativize_parameter(media, key, &directory, source_directory);
             }
         }
         let Some(effects) = clip.get_mut("effects").and_then(Value::as_array_mut) else {
@@ -266,27 +275,48 @@ fn relativize_media_paths(document: &mut Value, project_directory: &Path) {
                 _ => continue,
             };
             if let Some(params) = effect.get_mut("params").and_then(Value::as_object_mut) {
-                relativize_parameter(params, key, &directory);
+                relativize_parameter(params, key, &directory, source_directory);
             }
         }
     }
 }
 
-fn relativize_parameter(params: &mut Map<String, Value>, key: &str, directory: &Path) {
+fn relativize_parameter(
+    params: &mut Map<String, Value>,
+    key: &str,
+    directory: &Path,
+    source_directory: Option<&Path>,
+) {
     let Some(Value::String(path)) = params.get(key) else {
         return;
     };
     if path.is_empty() {
         return;
     }
-    let absolute = Path::new(path);
-    if !absolute.is_absolute() {
-        return;
-    }
+    let stored = Path::new(path);
+    let absolute = if stored.is_absolute() {
+        stored.to_path_buf()
+    } else {
+        // Relative to the directory the session reads from; with no such
+        // directory there is nothing to resolve it against.
+        let Some(source) = source_directory else {
+            return;
+        };
+        source.join(stored)
+    };
     let Ok(absolute) = std::path::absolute(absolute) else {
         return;
     };
     let Ok(relative) = absolute.strip_prefix(directory) else {
+        // Outside the target directory, so it cannot be stored relative. A
+        // path that arrived relative described the *old* directory, so it is
+        // rewritten to the absolute location it actually resolves to.
+        if !stored.is_absolute() {
+            params.insert(
+                key.to_owned(),
+                Value::String(absolute.to_string_lossy().replace('\\', "/")),
+            );
+        }
         return;
     };
     let relative = relative.to_string_lossy().replace('\\', "/");
@@ -586,6 +616,76 @@ mod tests {
         assert_eq!(
             saved["clips"][1]["effects"][0]["params"]["path"],
             Value::String(outside.to_string_lossy().into_owned())
+        );
+    }
+
+    /// Save As moves the project, not the media. A path that was stored
+    /// relative to the old directory has to be resolved against it and stored
+    /// absolutely, or the project at its new home reports every still missing.
+    #[test]
+    fn saving_as_rebases_relative_media_against_the_new_directory() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let media = first.path().join("media");
+        fs::create_dir(&media).unwrap();
+        let video = media.join("clip.mp4");
+        fs::write(&video, b"video").unwrap();
+
+        let project = ProjectSession::blank();
+        let mut document = project.state.snapshot_json().expect("snapshot serializes");
+        document["clips"]
+            .as_array_mut()
+            .expect("a project snapshot has a clip list")
+            .push(serde_json::json!({
+                "id": 1,
+                "sceneId": 1,
+                "type": "video",
+                "start": 0,
+                "duration": 100,
+                "layer": 0,
+                "effects": [
+                    {"enabled": true, "id": "video", "params": {"path": video.to_string_lossy()}}
+                ]
+            }));
+        let mut project =
+            ProjectSession::from_json(&serde_json::to_vec(&document).expect("document serializes"))
+                .expect("the media project opens");
+
+        let first_target = first.path().join("project.freya");
+        project.save_as(&first_target).expect("project saves");
+        let saved: Value =
+            serde_json::from_slice(&fs::read(&first_target).expect("saved project reads"))
+                .expect("saved project parses");
+        assert_eq!(
+            saved["clips"][0]["effects"][0]["params"]["path"],
+            Value::String("media/clip.mp4".to_owned()),
+            "beside the project, so it is stored relative"
+        );
+
+        // Reopen so the in-memory document really holds the relative path —
+        // `save_as` rewrites the bytes it writes, not the live state.
+        let mut project = ProjectSession::load(&first_target).expect("the saved project reopens");
+        assert_eq!(
+            project.state.snapshot_json().expect("snapshot")["clips"][0]["effects"][0]["params"]["path"],
+            Value::String("media/clip.mp4".to_owned()),
+            "the reopened document carries the relative path"
+        );
+
+        // Save As somewhere the media does not live.
+        let second_target = second.path().join("copy.freya");
+        project.save_as(&second_target).expect("project saves as");
+        let saved: Value =
+            serde_json::from_slice(&fs::read(&second_target).expect("saved copy reads"))
+                .expect("saved copy parses");
+        assert_eq!(
+            saved["clips"][0]["effects"][0]["params"]["path"],
+            Value::String(video.to_string_lossy().into_owned()),
+            "the media stayed behind, so the path is stored absolutely"
+        );
+        assert_eq!(
+            project.media_directory(),
+            Some(second.path()),
+            "the live session follows the new location"
         );
     }
 
