@@ -1362,6 +1362,11 @@ impl WorkspaceModel {
     /// Content and file parameters are left out for the same reason effect
     /// defaults leave them out: a new text object must not repeat the previous
     /// text and a new media object must not point at the previous file.
+    ///
+    /// A scene object's `targetSceneId` is project-specific rather than
+    /// stylistic: the target a fresh scene object gets is decided when it is
+    /// inserted, so a saved default would point the new object at whatever
+    /// scene the source project used.
     pub fn object_default_parameters(&self) -> Option<(String, Map<String, Value>)> {
         let clip = self.selected_clip_document()?;
         let mut effects = Map::new();
@@ -1372,7 +1377,12 @@ impl WorkspaceModel {
             let params = effect
                 .params
                 .iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "text" | "path" | "source" | "file"))
+                .filter(|(name, _)| {
+                    !matches!(
+                        name.as_str(),
+                        "text" | "path" | "source" | "file" | "targetSceneId"
+                    )
+                })
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect::<Map<String, Value>>();
             if !params.is_empty() {
@@ -4104,6 +4114,20 @@ impl WorkspaceModel {
             text_default,
         );
         apply_clip_defaults(&mut clip, defaults);
+        // Defaults are stored per object type, not per project, so a target
+        // saved with a scene object must not replace the one this insertion
+        // just assigned. Applying it afterwards keeps every other saved
+        // parameter while pinning the target to the new object.
+        if let Some(target_scene_id) = target_scene_id
+            && let Some(scene_effect) = clip
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == object.id)
+        {
+            scene_effect
+                .params
+                .insert("targetSceneId".to_owned(), Value::from(target_scene_id));
+        }
         if !self.execute(TimelineCommand::InsertClip { index: None, clip }) {
             return false;
         }
@@ -6557,6 +6581,68 @@ mod tests {
             .find(|effect| effect.id == "transform")
             .expect("standard drawing exists");
         assert_eq!(transform.params["x"], json!(320));
+    }
+
+    #[test]
+    fn scene_object_defaults_do_not_capture_the_target_scene() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        assert!(workspace.insert_catalog_object_at(
+            "scene",
+            10,
+            4,
+            30,
+            &catalog,
+            None,
+            &Map::new()
+        ));
+        // The inserted object carries a target chosen for this project.
+        let scene = workspace
+            .selected_clip_document()
+            .expect("new scene object becomes the selection");
+        assert_eq!(scene.effects[1].params["targetSceneId"], 2);
+
+        let (object_id, defaults) = workspace
+            .object_default_parameters()
+            .expect("the selected scene object has defaults");
+        assert_eq!(object_id, "scene");
+        let scene_defaults = defaults["scene"]
+            .as_object()
+            .expect("the scene effect contributes defaults");
+        assert!(
+            !scene_defaults.contains_key("targetSceneId"),
+            "a project-specific target must not become a creation default: {scene_defaults:?}"
+        );
+        // Everything stylistic still carries over.
+        assert!(scene_defaults.contains_key("speed"));
+        assert!(scene_defaults.contains_key("opacity"));
+    }
+
+    #[test]
+    fn a_new_scene_object_keeps_its_target_when_stored_defaults_are_stale() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        // A defaults file saved before this fix, or from another project, can
+        // still name a target that does not belong to this insertion.
+        let mut stale = serde_json::Map::new();
+        stale.insert("targetSceneId".to_owned(), json!(99));
+        stale.insert("speed".to_owned(), json!(2.5));
+        let mut defaults = serde_json::Map::new();
+        defaults.insert("scene".to_owned(), serde_json::Value::Object(stale));
+
+        assert!(workspace.insert_catalog_object_at("scene", 10, 4, 30, &catalog, None, &defaults));
+        let scene = workspace
+            .selected_clip_document()
+            .expect("new scene object becomes the selection");
+        let params = &scene.effects[1].params;
+        assert_eq!(
+            params["targetSceneId"], 2,
+            "the target assigned at creation wins over the stored default"
+        );
+        assert_eq!(
+            params["speed"], 2.5,
+            "other saved scene-object defaults still apply"
+        );
     }
 
     #[test]
