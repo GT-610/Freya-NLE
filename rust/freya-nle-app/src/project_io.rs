@@ -677,9 +677,13 @@ mod tests {
         let saved: Value =
             serde_json::from_slice(&fs::read(&second_target).expect("saved copy reads"))
                 .expect("saved copy parses");
+        // The document stores forward slashes on every platform, so the
+        // expected value is normalised the same way rather than written with
+        // the host's separator.
+        let expected = video.to_string_lossy().replace('\\', "/");
         assert_eq!(
             saved["clips"][0]["effects"][0]["params"]["path"],
-            Value::String(video.to_string_lossy().into_owned()),
+            Value::String(expected),
             "the media stayed behind, so the path is stored absolutely"
         );
         assert_eq!(
