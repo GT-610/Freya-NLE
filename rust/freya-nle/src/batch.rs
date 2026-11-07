@@ -338,9 +338,13 @@ fn item_from_json(value: &Value) -> Option<(String, i32, ExportRequest)> {
     // would silently export frames the entry never named.
     if !full_range {
         for key in ["startFrame", "endFrame"] {
-            let Some(stored) = object.get(key).and_then(Value::as_i64) else {
+            let Some(value) = object.get(key) else {
                 continue;
             };
+            // A present value has to be an integer that fits: `10.5`, `"10"`
+            // and `1e10` all fail `as_i64`, and falling back to the default
+            // would export from frame 0 — exactly what this guard prevents.
+            let stored = value.as_i64()?;
             i32::try_from(stored).ok()?;
         }
     }
@@ -575,6 +579,24 @@ mod tests {
         let queue = from_json(&entries);
         assert_eq!(queue.items().len(), 1, "the wrapped entry is dropped");
         assert_eq!(queue.items()[0].request.start_frame, 10);
+
+        // A present but non-integer frame is just as unusable: the default
+        // would make it export from frame 0.
+        for bad in [serde_json::json!(10.5), serde_json::json!("10")] {
+            let entries = serde_json::json!([{
+                "label": "fractional",
+                "scene": 1,
+                "outputPath": "/tmp/out/fractional.mkv",
+                "mode": "video",
+                "fullRange": false,
+                "startFrame": bad,
+                "endFrame": 20
+            }]);
+            assert!(
+                from_json(&entries).items().is_empty(),
+                "a non-integer startFrame drops the item"
+            );
+        }
 
         // A full-range entry ignores the frame fields, so it keeps its place.
         let entries = serde_json::json!([{

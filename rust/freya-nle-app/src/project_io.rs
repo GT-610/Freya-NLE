@@ -184,7 +184,14 @@ impl ProjectSession {
         let bytes = self.snapshot_bytes_for(path)?;
         write_atomic(path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
         self.path = Some(path.to_path_buf());
-        self.media_directory = path.parent().map(Path::to_path_buf);
+        // `media_directory` deliberately stays where it was. Save As moves the
+        // project file, not the media: the stored paths are still the ones
+        // authored against the old directory, so that remains the truthful
+        // base for resolving them. `snapshot_bytes_for` re-relativizes against
+        // the new directory, which is why the written document is correct
+        // either way. Pointing the base at the new directory without rewriting
+        // the live document would make the session, and any later save, read
+        // every still from a place it was never in.
         self.dirty = false;
         Ok(())
     }
@@ -686,10 +693,29 @@ mod tests {
             Value::String(expected),
             "the media stayed behind, so the path is stored absolutely"
         );
+        // The media is still where it was, so the live session keeps resolving
+        // against the old directory until the stored paths are rewritten. A
+        // base pointed at the new directory would make the session, and any
+        // later save, read every still from a place it was never in.
         assert_eq!(
             project.media_directory(),
-            Some(second.path()),
-            "the live session follows the new location"
+            Some(first.path()),
+            "the base follows the media, not the project file"
+        );
+        let live =
+            crate::missing_media::resolve_in_directory(project.media_directory(), "media/clip.mp4");
+        assert_eq!(live, video, "the live session still finds its media");
+
+        // A later plain save writes the same correct paths, because the base it
+        // resolves against is still the directory the media lives in.
+        project.save().expect("the copy saves again");
+        let saved: Value =
+            serde_json::from_slice(&fs::read(&second_target).expect("saved copy reads"))
+                .expect("saved copy parses");
+        assert_eq!(
+            saved["clips"][0]["effects"][0]["params"]["path"],
+            Value::String(video.to_string_lossy().replace('\\', "/")),
+            "a later save does not fall back to a missing file"
         );
     }
 
