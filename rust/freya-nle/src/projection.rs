@@ -54,6 +54,9 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         update_vec_model(&timeline.get_media_entries(), Vec::new());
         update_vec_model(&timeline.get_media_groups(), Vec::new());
         update_vec_model(&timeline.get_objects(), Vec::new());
+        // The object-list dock reads this model, so it has to be cleared with
+        // `objects` or the closed project's rows stay on screen.
+        update_vec_model(&timeline.get_object_rows(), Vec::new());
         // No project means no marks: both menus would otherwise keep the last
         // project's list and offer commands that cannot run.
         sync_marks(main, timeline, model);

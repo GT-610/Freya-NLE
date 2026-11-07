@@ -180,9 +180,12 @@ export component ObjectListPanel inherits Rectangle {
                                 }
                             } else if event.kind == PointerEventKind.move
                                 && root.drag-source-layer == object.layer {
-                                root.drag-delta-rows = round(
-                                    (self.mouse-y - self.pressed-y) / 28px
-                                );
+                                // Truncated, not rounded: a pointer that has
+                                // moved 15px is still inside the 28px source
+                                // row, and rounding would land on the next row
+                                // and move the whole layer there.
+                                root.drag-delta-rows =
+                                    (self.mouse-y - self.pressed-y) / 28px;
                             }
                         }
                     }

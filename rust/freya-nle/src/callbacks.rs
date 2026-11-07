@@ -514,6 +514,10 @@ pub(super) fn install_callbacks(
             .open_backup_entry(key.as_str(), file_name.as_str());
         match restored {
             Ok(_) => {
+                // The restored document may name audio plugins this process has
+                // not loaded yet; without hydrating, playback and export skip
+                // the saved processing until discovery finishes on its own.
+                backup_open_ui.hydrate_audio_plugins();
                 backup_open_ui.sync();
                 if let Some(window) = backup_open_ui.backup_history.upgrade() {
                     let _ = window.hide();

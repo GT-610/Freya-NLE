@@ -138,9 +138,14 @@ impl BackupStore {
     }
 
     /// The directory that holds one project's backups.
+    ///
+    /// The key is a hash of the project path, so the spelling has to be
+    /// normalized first: `/tmp/a/../b.freya` and `/tmp/b.freya` are the same
+    /// project and must share one history.
     fn project_dir(&self, project_path: &Path) -> PathBuf {
+        let normalized = normalize_project_path(project_path);
         let mut hasher = Sha256::new();
-        hasher.update(project_path.to_string_lossy().as_bytes());
+        hasher.update(normalized.to_string_lossy().as_bytes());
         let digest = hasher.finalize();
         let key = digest
             .iter()
@@ -449,6 +454,28 @@ fn read_manifest(directory: &Path) -> Option<ProjectManifest> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Lexically normalizes a project path so two spellings hash alike.
+///
+/// `canonicalize` would resolve symlinks and fail on a path that does not exist
+/// yet, neither of which a backup key wants; the components are folded instead.
+fn normalize_project_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                _ => normalized.push(component),
+            },
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
 fn valid_project_key(key: &str) -> bool {
     key.len() == 16 && key.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -537,6 +564,32 @@ mod tests {
     /// through such a link would enumerate and delete files the user never put
     /// in the backup folder.
     #[cfg(unix)]
+    /// Two spellings of one project must share a version history.
+    #[test]
+    fn a_project_key_ignores_the_spelling_of_its_path() {
+        let root = test_root("normalize");
+        let store = BackupStore::with_root(root.clone());
+        let plain = store.key_for(Path::new("/tmp/work/demo.freya"));
+        for spelling in [
+            "/tmp/work/./demo.freya",
+            "/tmp/work/elsewhere/../demo.freya",
+            "/tmp//work/demo.freya",
+        ] {
+            assert_eq!(
+                store.key_for(Path::new(spelling)),
+                plain,
+                "{spelling} should hash to the same key"
+            );
+        }
+        // A genuinely different path keeps its own key.
+        assert_ne!(
+            store.key_for(Path::new("/tmp/work/other.freya")),
+            plain,
+            "different projects stay separate"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn a_symlinked_backup_directory_is_refused_rather_than_followed() {
         use std::os::unix::fs::symlink;

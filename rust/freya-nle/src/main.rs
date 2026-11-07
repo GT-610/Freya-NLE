@@ -307,6 +307,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     timeline.set_clips(ModelRc::new(VecModel::<TimelineClipData>::default()));
     timeline.set_marks(ModelRc::new(VecModel::<TimelineMarkData>::default()));
     timeline.set_objects(ModelRc::new(VecModel::<TimelineObjectData>::default()));
+    // The object-list dock binds to these two; without a real `VecModel` the
+    // first `update_vec_model` logs a diagnostic and never applies.
+    timeline.set_object_rows(ModelRc::new(VecModel::<TimelineObjectData>::default()));
+    timeline.set_object_kind_filters(ModelRc::new(VecModel::<SharedString>::default()));
     timeline.set_layers(ModelRc::new(VecModel::<LayerData>::default()));
     timeline.set_media_entries(ModelRc::new(VecModel::<MediaBinEntryData>::default()));
     timeline.set_media_groups(ModelRc::new(VecModel::<MediaBinGroupData>::default()));

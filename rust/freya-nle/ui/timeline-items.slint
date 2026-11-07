@@ -59,6 +59,13 @@ export component SceneTab inherits Rectangle {
                 if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                     root.activate(root.scene.id);
                 }
+                // Forwarded like `LayerHeaderItem` does: the touch area consumes
+                // the press, so without this the `ContextMenuArea` never sees a
+                // right-click and the scene menu is unreachable from the tab.
+                if event.kind == PointerEventKind.down
+                    && event.button == PointerEventButton.right {
+                    scene-menu.show({ x: self.mouse-x, y: self.mouse-y });
+                }
             }
         }
     }
