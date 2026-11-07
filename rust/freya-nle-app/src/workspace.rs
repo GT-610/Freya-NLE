@@ -4493,6 +4493,7 @@ impl WorkspaceModel {
     /// range being written, not about discarding a neighbour's work. Both variants use the same
     /// importer, so the source range, linked video/audio pair, and probing rules cannot drift
     /// between them.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_media_from_bin(
         &mut self,
         entry_id: i32,
@@ -4501,6 +4502,8 @@ impl WorkspaceModel {
         maximum_layers: i32,
         catalog: &EffectCatalog,
         overwrite: bool,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Option<(i32, i32)> {
         let entry = self.media_bin().entry(entry_id)?.clone();
         let path =
@@ -4686,7 +4689,15 @@ impl WorkspaceModel {
             failed = Some(self.status.clone());
         }
         let inserted = if failed.is_none() {
-            self.import_media_file_at(&path, start, layer, placement, catalog)
+            self.import_media_file_at(
+                &path,
+                start,
+                layer,
+                placement,
+                catalog,
+                effect_defaults,
+                object_defaults,
+            )
         } else {
             Err(failed.unwrap_or_default())
         };
@@ -4726,6 +4737,7 @@ impl WorkspaceModel {
             None => Ok(()),
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn import_media_files(
         &mut self,
         paths: &[PathBuf],
@@ -4734,6 +4746,8 @@ impl WorkspaceModel {
         default_duration_frames: i32,
         maximum_layers: i32,
         catalog: &EffectCatalog,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Option<(i32, i32)> {
         let mut imported = 0usize;
         let mut errors = Vec::new();
@@ -4743,7 +4757,15 @@ impl WorkspaceModel {
             source_range: None,
         };
         for path in paths {
-            match self.import_media_file(path, frame, layer, placement, catalog) {
+            match self.import_media_file(
+                path,
+                frame,
+                layer,
+                placement,
+                catalog,
+                effect_defaults,
+                object_defaults,
+            ) {
                 Ok((next_frame, target_layer)) => {
                     frame = next_frame;
                     layer = target_layer;
@@ -4774,6 +4796,7 @@ impl WorkspaceModel {
         (imported > 0).then_some((frame, layer))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn import_media_file(
         &mut self,
         path: &Path,
@@ -4781,6 +4804,8 @@ impl WorkspaceModel {
         target_layer: i32,
         placement: MediaPlacement,
         catalog: &EffectCatalog,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Result<(i32, i32), String> {
         let scene_fps = self
             .selected_scene_document()
@@ -4814,11 +4839,20 @@ impl WorkspaceModel {
             )
             .map_err(|error| error.to_string())?,
         };
-        self.import_media_file_at(Path::new(&path), start, layer, placement, catalog)
+        self.import_media_file_at(
+            Path::new(&path),
+            start,
+            layer,
+            placement,
+            catalog,
+            effect_defaults,
+            object_defaults,
+        )
     }
 
     /// The one importer for a known start frame. Gap search and overwrite both end up here, so
     /// they cannot disagree about clip construction, linked audio, or source in-points.
+    #[allow(clippy::too_many_arguments)]
     fn import_media_file_at(
         &mut self,
         path: &Path,
@@ -4826,6 +4860,8 @@ impl WorkspaceModel {
         layer: i32,
         placement: MediaPlacement,
         catalog: &EffectCatalog,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Result<(i32, i32), String> {
         let scene_fps = self
             .selected_scene_document()
@@ -4857,40 +4893,62 @@ impl WorkspaceModel {
                     .state
                     .reserve_clip_ids(2)
                     .map_err(|error| error.to_string())?;
+                let mut video_clip = media_clip_from_metadata(
+                    ids[0],
+                    scene_id,
+                    start,
+                    layer,
+                    duration,
+                    video,
+                    Some(transform),
+                    "path",
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                apply_media_defaults(&mut video_clip, "video", effect_defaults, object_defaults);
+                pin_media_identity(
+                    &mut video_clip,
+                    "video",
+                    "path",
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                let mut audio_clip = media_clip_from_metadata(
+                    ids[1],
+                    scene_id,
+                    start,
+                    layer.saturating_add(1),
+                    duration,
+                    audio,
+                    None,
+                    "source",
+                    &path,
+                    true,
+                    placement.source_range,
+                    scene_fps,
+                );
+                apply_media_defaults(&mut audio_clip, "audio", effect_defaults, object_defaults);
+                pin_media_identity(
+                    &mut audio_clip,
+                    "audio",
+                    "source",
+                    &path,
+                    true,
+                    placement.source_range,
+                    scene_fps,
+                );
                 vec![
                     TimelineCommand::InsertClip {
                         index: None,
-                        clip: media_clip_from_metadata(
-                            ids[0],
-                            scene_id,
-                            start,
-                            layer,
-                            duration,
-                            video,
-                            Some(transform),
-                            "path",
-                            &path,
-                            false,
-                            placement.source_range,
-                            scene_fps,
-                        ),
+                        clip: video_clip,
                     },
                     TimelineCommand::InsertClip {
                         index: None,
-                        clip: media_clip_from_metadata(
-                            ids[1],
-                            scene_id,
-                            start,
-                            layer.saturating_add(1),
-                            duration,
-                            audio,
-                            None,
-                            "source",
-                            &path,
-                            true,
-                            placement.source_range,
-                            scene_fps,
-                        ),
+                        clip: audio_clip,
                     },
                 ]
             }
@@ -4921,23 +4979,31 @@ impl WorkspaceModel {
                     .state
                     .reserve_clip_ids(1)
                     .map_err(|error| error.to_string())?;
-                vec![TimelineCommand::InsertClip {
-                    index: None,
-                    clip: media_clip_from_metadata(
-                        ids[0],
-                        scene_id,
-                        start,
-                        layer,
-                        duration,
-                        object,
-                        transform,
-                        path_parameter,
-                        &path,
-                        false,
-                        placement.source_range,
-                        scene_fps,
-                    ),
-                }]
+                let mut clip = media_clip_from_metadata(
+                    ids[0],
+                    scene_id,
+                    start,
+                    layer,
+                    duration,
+                    object,
+                    transform,
+                    path_parameter,
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                apply_media_defaults(&mut clip, object_id, effect_defaults, object_defaults);
+                pin_media_identity(
+                    &mut clip,
+                    object_id,
+                    path_parameter,
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                vec![TimelineCommand::InsertClip { index: None, clip }]
             }
         };
         if !self.execute_batch(commands) {
@@ -5851,34 +5917,84 @@ fn media_clip_from_metadata(
     let mut clip = object_clip_from_metadata(
         clip_id, scene_id, start, layer, duration, object, transform, None, None,
     );
-    if let Some(object_effect) = clip
+    pin_media_identity(
+        &mut clip,
+        object.id.as_str(),
+        path_parameter,
+        path,
+        linked_video,
+        source_range,
+        scene_fps,
+    );
+    clip
+}
+
+/// Re-establishes which media a clip refers to.
+///
+/// Creation defaults are saved per object type and can still name a path,
+/// source range, or link from whatever object they came from. A newly imported
+/// clip must keep the file it was imported from, so the identity fields are
+/// written after the defaults rather than before them.
+fn pin_media_identity(
+    clip: &mut ClipDocument,
+    object_id: &str,
+    path_parameter: &str,
+    path: &str,
+    linked_video: bool,
+    source_range: Option<(i32, i32)>,
+    scene_fps: f64,
+) {
+    let Some(object_effect) = clip
         .effects
         .iter_mut()
-        .find(|effect| effect.id == object.id)
-    {
+        .find(|effect| effect.id == object_id)
+    else {
+        return;
+    };
+    object_effect
+        .params
+        .insert(path_parameter.to_owned(), Value::from(path));
+    object_effect.params.remove("linkedVideo");
+    if linked_video {
         object_effect
             .params
-            .insert(path_parameter.to_owned(), Value::from(path));
-        if linked_video {
-            object_effect
-                .params
-                .insert("linkedVideo".to_owned(), Value::Bool(true));
-        }
-        if let Some((start, _)) = source_range {
-            let (name, value) = match object.id.as_str() {
-                "video" => ("startFrame", Value::from(start)),
-                "audio" => (
-                    "startTime",
-                    Value::from(f64::from(start) / scene_fps.max(f64::EPSILON)),
-                ),
-                _ => ("", Value::Null),
-            };
-            if !name.is_empty() {
-                object_effect.params.insert(name.to_owned(), value);
-            }
+            .insert("linkedVideo".to_owned(), Value::Bool(true));
+    }
+    object_effect.params.remove("startFrame");
+    object_effect.params.remove("startTime");
+    // Without a trimmed range the source starts at its first frame, so a stale
+    // saved in-point is replaced rather than merely dropped.
+    let source_start = source_range.map_or(0, |(start, _)| start);
+    let (name, value) = match object_id {
+        "video" => ("startFrame", Value::from(source_start)),
+        "audio" => (
+            "startTime",
+            Value::from(f64::from(source_start) / scene_fps.max(f64::EPSILON)),
+        ),
+        _ => ("", Value::Null),
+    };
+    if !name.is_empty() {
+        object_effect.params.insert(name.to_owned(), value);
+    }
+}
+
+/// Applies the effect defaults, overlaid with the defaults saved for this
+/// object type, to a newly imported media clip.
+fn apply_media_defaults(
+    clip: &mut ClipDocument,
+    object_id: &str,
+    effect_defaults: &Map<String, Value>,
+    object_defaults: &Map<String, Value>,
+) {
+    let mut merged = effect_defaults.clone();
+    if let Some(params) = object_defaults.get(object_id).and_then(Value::as_object) {
+        // The object type's own entry wins over an effect default for the same
+        // effect, matching catalog object creation.
+        for (effect_id, params) in params {
+            merged.insert(effect_id.clone(), params.clone());
         }
     }
-    clip
+    apply_clip_defaults(clip, &merged);
 }
 
 fn find_vacant_linked_media_frame(
@@ -6898,9 +7014,7 @@ mod tests {
         let distinct = clip(imported[2]);
         let ungrouped = clip(imported[3]);
 
-        let shared_group = shared
-            .group
-            .expect("a source group becomes a native group");
+        let shared_group = shared.group.expect("a source group becomes a native group");
         assert_eq!(
             partner.group,
             Some(shared_group),
@@ -8028,7 +8142,7 @@ mod tests {
 
         let before = workspace.document().clips.len();
         let inserted = workspace
-            .insert_media_from_bin(id, 0, 2, 8, &catalog, false)
+            .insert_media_from_bin(id, 0, 2, 8, &catalog, false, &Map::new(), &Map::new())
             .expect("the image is inserted");
         assert_eq!(inserted.0, 10, "ten source frames are placed");
         assert_eq!(workspace.document().clips.len(), before + 1);
@@ -8064,7 +8178,7 @@ mod tests {
         let undo_depth = workspace.undo.len();
         assert!(
             workspace
-                .insert_media_from_bin(id, 10, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 10, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_some()
         );
         assert_eq!(
@@ -8126,7 +8240,7 @@ mod tests {
         let revision = workspace.document_revision();
         assert!(
             workspace
-                .insert_media_from_bin(id, 0, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 0, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_none()
         );
         assert!(workspace.status().contains("Layer 2 is locked"));
@@ -8152,7 +8266,7 @@ mod tests {
         // the head of clip 3; both neighbours keep the frames the replacement does not cover.
         assert!(
             workspace
-                .insert_media_from_bin(id, 25, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 25, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_some()
         );
         let spans = workspace
@@ -8190,7 +8304,7 @@ mod tests {
         let revision = workspace.document_revision();
         assert!(
             workspace
-                .insert_media_from_bin(id, 10, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 10, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_none()
         );
         assert_eq!(
@@ -8213,7 +8327,7 @@ mod tests {
         let before = workspace.document().clips.clone();
         assert!(
             workspace
-                .insert_media_from_bin(id, 10, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 10, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_none()
         );
         assert_eq!(workspace.document_revision(), revision);
@@ -8910,7 +9024,16 @@ mod tests {
         let mut workspace = workspace();
 
         assert_eq!(
-            workspace.import_media_files(&paths, 60, 4, 15, 128, &catalog),
+            workspace.import_media_files(
+                &paths,
+                60,
+                4,
+                15,
+                128,
+                &catalog,
+                &Map::new(),
+                &Map::new()
+            ),
             Some((105, 4))
         );
         assert_eq!(workspace.status(), "Imported 3 media file(s)");
@@ -8974,6 +9097,248 @@ mod tests {
         for path in paths {
             std::fs::remove_file(path).expect("temporary media placeholder is removable");
         }
+    }
+
+    #[test]
+    fn media_import_applies_creation_defaults_without_losing_the_source() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let path = temporary_media_file("png");
+        let expected_path = Value::from(path.to_string_lossy().into_owned());
+
+        // The object type's default wins over the effect default for the same
+        // effect, and the stale path inside both must not replace the import.
+        let effect_defaults = serde_json::json!({
+            "transform": {"x": 50.0},
+            "image": {"path": "/saved/picture.png"}
+        })
+        .as_object()
+        .cloned()
+        .expect("effect defaults are an object");
+        let object_defaults = serde_json::json!({
+            "image": {
+                "transform": {"x": 320.0},
+                "image": {"path": "/saved/picture.png", "opacity": 0.4}
+            }
+        })
+        .as_object()
+        .cloned()
+        .expect("object defaults are an object");
+
+        assert_eq!(
+            workspace.import_media_files(
+                std::slice::from_ref(&path),
+                0,
+                2,
+                15,
+                8,
+                &catalog,
+                &effect_defaults,
+                &object_defaults,
+            ),
+            Some((15, 2))
+        );
+        let image = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "image")
+            .expect("the image clip exists");
+        assert_eq!(image.duration, 15);
+        let transform = image
+            .effects
+            .iter()
+            .find(|effect| effect.id == "transform")
+            .expect("the image carries a transform");
+        assert_eq!(
+            transform.params["x"],
+            serde_json::json!(320.0),
+            "the object type's default wins over the effect default"
+        );
+        let image_effect = image
+            .effects
+            .iter()
+            .find(|effect| effect.id == "image")
+            .expect("the image effect exists");
+        assert_eq!(image_effect.params["path"], expected_path);
+        assert_eq!(image_effect.params["opacity"], serde_json::json!(0.4));
+
+        std::fs::remove_file(path).expect("temporary media placeholder is removable");
+    }
+
+    #[test]
+    fn media_import_keeps_a_linked_video_pair_over_stale_defaults() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let path = temporary_media_file("mp4");
+        let expected_path = Value::from(path.to_string_lossy().into_owned());
+
+        // Saved defaults can name a file, in-point, and link state copied from
+        // another project; none of them may win over what was just imported.
+        let effect_defaults = serde_json::json!({
+            "video": {"path": "/saved/video.mp4", "startFrame": 42},
+            "audio": {"source": "/saved/audio.wav", "startTime": 2.0, "linkedVideo": false}
+        })
+        .as_object()
+        .cloned()
+        .expect("effect defaults are an object");
+        let object_defaults = serde_json::json!({
+            "video": {"video": {"path": "/saved/video.mp4", "startFrame": 99, "opacity": 0.5}},
+            "audio": {"audio": {
+                "source": "/saved/audio.wav",
+                "startTime": 3.5,
+                "linkedVideo": false,
+                "volume": 0.25
+            }}
+        })
+        .as_object()
+        .cloned()
+        .expect("object defaults are an object");
+
+        workspace.import_media_files(
+            std::slice::from_ref(&path),
+            0,
+            0,
+            15,
+            8,
+            &catalog,
+            &effect_defaults,
+            &object_defaults,
+        );
+        let video = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "video")
+            .expect("the video clip exists");
+        let video_effect = video
+            .effects
+            .iter()
+            .find(|effect| effect.id == "video")
+            .expect("the video object exists");
+        assert_eq!(video_effect.params["path"], expected_path);
+        assert_eq!(
+            video_effect.params["startFrame"],
+            serde_json::json!(0),
+            "an untrimmed import starts at the source's first frame"
+        );
+        assert_eq!(
+            video_effect.params["opacity"],
+            serde_json::json!(0.5),
+            "other saved video defaults still apply"
+        );
+
+        let linked_audio = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| {
+                clip.clip_type == "audio"
+                    && clip.effects[0].params["linkedVideo"] == Value::Bool(true)
+            })
+            .expect("the linked audio half exists");
+        let audio_effect = &linked_audio.effects[0].params;
+        assert_eq!(audio_effect["source"], expected_path);
+        assert_eq!(audio_effect["startTime"], serde_json::json!(0.0));
+        assert_eq!(audio_effect["volume"], serde_json::json!(0.25));
+
+        // The bin path honours the entry's in-point even when a saved default
+        // names another one, and the linked audio follows it.
+        let mut from_bin = self::workspace();
+        from_bin.add_media_to_bin(std::slice::from_ref(&path), 60.0, 40);
+        let entry_id = from_bin.media_bin().entries()[0].id;
+        assert!(from_bin.set_media_bin_range(entry_id, Some(5), Some(15)));
+        assert!(
+            from_bin
+                .insert_media_from_bin(
+                    entry_id,
+                    0,
+                    0,
+                    8,
+                    &catalog,
+                    false,
+                    &effect_defaults,
+                    &object_defaults,
+                )
+                .is_some()
+        );
+        let ranged_video = from_bin
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "video")
+            .expect("the ranged video exists");
+        assert_eq!(ranged_video.duration, 10);
+        assert_eq!(
+            ranged_video.effects[1].params["startFrame"],
+            serde_json::json!(5),
+            "the entry's in-point wins over the saved default"
+        );
+        let ranged_audio = from_bin
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "audio")
+            .expect("the linked audio follows the ranged video");
+        assert_eq!(
+            ranged_audio.effects[0].params["linkedVideo"],
+            Value::Bool(true)
+        );
+
+        std::fs::remove_file(path).expect("temporary media placeholder is removable");
+    }
+
+    #[test]
+    fn media_bin_overwrite_applies_creation_defaults_and_keeps_the_range() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace_with_row();
+        let path = temporary_media_file("wav");
+        workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
+        let id = workspace.media_bin().entries()[0].id;
+        assert!(workspace.set_media_bin_range(id, Some(0), Some(5)));
+        let object_defaults = serde_json::json!({
+            "audio": {"audio": {
+                "source": "/saved/audio.wav",
+                "startTime": 4.5,
+                "volume": 0.25,
+                "pan": -0.4
+            }}
+        })
+        .as_object()
+        .cloned()
+        .expect("object defaults are an object");
+
+        // Overwrite the rect covering frames 0..10 with a five-frame audio clip.
+        assert_eq!(
+            workspace.insert_media_from_bin(
+                id,
+                0,
+                0,
+                8,
+                &catalog,
+                true,
+                &Map::new(),
+                &object_defaults,
+            ),
+            Some((5, 0))
+        );
+        let audio = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "audio")
+            .expect("the overwriting audio clip exists");
+        assert_eq!(audio.duration, 5, "the bin range sets the length");
+        let params = &audio.effects[0].params;
+        assert_eq!(
+            params["source"],
+            Value::from(path.to_string_lossy().into_owned())
+        );
+        assert_eq!(params["startTime"], serde_json::json!(0.0));
+        assert_eq!(params["volume"], serde_json::json!(0.25));
+        assert_eq!(params["pan"], serde_json::json!(-0.4));
+
+        std::fs::remove_file(path).expect("temporary media placeholder is removable");
     }
 
     #[test]
