@@ -3276,6 +3276,29 @@ impl WorkspaceModel {
         }
     }
 
+    /// Turns ExEdit's file-local `group` numbers into native group ids.
+    ///
+    /// The numbers in an object file count from one within that file, so reusing
+    /// them would merge an imported group with any project group that happens to
+    /// hold the same id. Clips that shared a source group share one fresh id,
+    /// each distinct source group gets its own, and `exoGroup` stays on the clip
+    /// so nothing the file said is lost.
+    fn map_exo_groups(&self, clips: &mut [ClipDocument]) {
+        let mut next = self.next_group_id();
+        let mut map = std::collections::BTreeMap::new();
+        for clip in clips {
+            let Some(source) = clip.extra.get("exoGroup").and_then(Value::as_i64) else {
+                continue;
+            };
+            let mapped = *map.entry(source).or_insert_with(|| {
+                let id = next;
+                next = next.saturating_add(1);
+                id
+            });
+            clip.group = Some(mapped);
+        }
+    }
+
     /// One past the largest group id in the project, so a new group never
     /// inherits another group's members.
     fn next_group_id(&self) -> i32 {
@@ -4215,7 +4238,9 @@ impl WorkspaceModel {
             return None;
         }
         let summary = outcome.report.summary();
-        let next = self.insert_imported_clips(&scene, outcome.clips, summary)?;
+        let mut clips = outcome.clips;
+        self.map_exo_groups(&mut clips);
+        let next = self.insert_imported_clips(&scene, clips, summary)?;
         self.last_import_report = Some(outcome.report);
         Some(next)
     }
@@ -6774,6 +6799,31 @@ mod tests {
         freya_nle_core::exo::ExoFile::parse(&bytes).expect("fixture parses")
     }
 
+    /// A minimal object file with four text objects: a group shared by the
+    /// first two, a distinct group on the third, and an ungrouped fourth.
+    fn grouped_object_file_fixture() -> freya_nle_core::exo::ExoFile {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(
+            b"[exedit]\r\nwidth=1920\r\nheight=1080\r\nrate=60\r\nscale=100\r\nlength=300\r\n\
+              audio_rate=48000\r\naudio_ch=2\r\n",
+        );
+        for (index, (layer, group)) in [(2, Some(1)), (3, Some(1)), (4, Some(2)), (5, None)]
+            .into_iter()
+            .enumerate()
+        {
+            bytes.extend_from_slice(
+                format!("[{index}]\r\nstart=1\r\nend=16\r\nlayer={layer}\r\n").as_bytes(),
+            );
+            if let Some(group) = group {
+                bytes.extend_from_slice(format!("group={group}\r\n").as_bytes());
+            }
+            bytes.extend_from_slice(format!("[{index}.0]\r\n_name=").as_bytes());
+            bytes.extend_from_slice(&[0xce, 0xc4, 0xb1, 0xbe]); // 文本
+            bytes.extend_from_slice(b"\r\ntext=4100\r\n");
+        }
+        freya_nle_core::exo::ExoFile::parse(&bytes).expect("grouped fixture parses")
+    }
+
     #[test]
     fn exo_import_adds_clips_as_one_undoable_edit() {
         let (catalog, _) = EffectCatalog::load();
@@ -6805,6 +6855,157 @@ mod tests {
         assert_eq!(workspace.document().clips.len(), before);
         assert!(workspace.redo());
         assert_eq!(workspace.document().clips.len(), before + 1);
+    }
+
+    #[test]
+    fn exo_import_maps_source_groups_to_fresh_native_groups() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        // Give the project a group with id 1, the number the file also uses.
+        workspace.click_clip(1, false);
+        workspace.click_clip(2, true);
+        assert!(workspace.group_selected_clips());
+        let existing_group = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.id == 1)
+            .and_then(|clip| clip.group)
+            .expect("the fixture group exists");
+
+        assert!(
+            workspace
+                .import_exo_object_file(
+                    &grouped_object_file_fixture(),
+                    crate::exo_import::ImportPlacement::default(),
+                    &catalog,
+                )
+                .is_some()
+        );
+        let imported = selected_ids(&workspace);
+        assert_eq!(imported.len(), 4);
+        let clip = |id: i32| {
+            workspace
+                .document()
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .cloned()
+                .expect("the imported clip exists")
+        };
+        let shared = clip(imported[0]);
+        let partner = clip(imported[1]);
+        let distinct = clip(imported[2]);
+        let ungrouped = clip(imported[3]);
+
+        let shared_group = shared
+            .group
+            .expect("a source group becomes a native group");
+        assert_eq!(
+            partner.group,
+            Some(shared_group),
+            "objects that shared a source group share one native group"
+        );
+        assert_ne!(
+            shared_group, existing_group,
+            "a file-local group number must not merge with a project group using it"
+        );
+        assert!(shared_group > existing_group);
+        let distinct_group = distinct
+            .group
+            .expect("a second source group becomes a second native group");
+        assert_ne!(distinct_group, shared_group);
+        assert_eq!(ungrouped.group, None, "an ungrouped object stays ungrouped");
+
+        // The source number stays on the clip for a future object-file export.
+        assert_eq!(shared.extra["exoGroup"], serde_json::json!(1));
+        assert_eq!(partner.extra["exoGroup"], serde_json::json!(1));
+        assert_eq!(distinct.extra["exoGroup"], serde_json::json!(2));
+
+        // Selection and dragging treat the imported group as one unit.
+        workspace.click_clip(imported[0], false);
+        assert_eq!(selected_ids(&workspace), [imported[0], imported[1]]);
+        let request = TimelineDragRequest {
+            anchor_clip_id: imported[0],
+            kind: TimelineDragKind::Move,
+            delta_pixels: (10.0, 0.0),
+            pixels_per_frame: 1.0,
+            layer_height: 30.0,
+            minimum_duration_frames: 1,
+            maximum_layers: 128,
+            ignore_snap: true,
+        };
+        assert!(workspace.drag_selected_clips(request));
+        let start = |id: i32| {
+            workspace
+                .document()
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .map(|clip| clip.start)
+                .expect("the imported clip still exists")
+        };
+        assert_eq!(start(imported[0]), 10);
+        assert_eq!(start(imported[1]), 10);
+        assert_eq!(start(imported[2]), 0);
+
+        // Undo removes the import, and redo brings the same grouping back.
+        assert!(workspace.undo());
+        assert!(workspace.undo());
+        assert!(
+            workspace
+                .document()
+                .clips
+                .iter()
+                .all(|clip| !imported.contains(&clip.id))
+        );
+        assert!(workspace.redo());
+        assert_eq!(
+            workspace
+                .document()
+                .clips
+                .iter()
+                .find(|clip| clip.id == imported[0])
+                .and_then(|clip| clip.group),
+            Some(shared_group)
+        );
+    }
+
+    #[test]
+    fn repeated_exo_imports_keep_their_groups_apart() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let file = grouped_object_file_fixture();
+        let mut import = || {
+            assert!(
+                workspace
+                    .import_exo_object_file(
+                        &file,
+                        crate::exo_import::ImportPlacement::default(),
+                        &catalog,
+                    )
+                    .is_some()
+            );
+            selected_ids(&workspace)
+                .into_iter()
+                .filter_map(|id| {
+                    workspace
+                        .document()
+                        .clips
+                        .iter()
+                        .find(|clip| clip.id == id)
+                        .and_then(|clip| clip.group)
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = import();
+        let second = import();
+        assert_eq!(first.len(), 3, "two grouped objects and one distinct group");
+        assert_eq!(second.len(), 3);
+        assert!(
+            first.iter().all(|group| !second.contains(group)),
+            "a repeated import must not join the previous import's groups"
+        );
     }
 
     #[test]
