@@ -79,8 +79,19 @@ export component SystemSettingPathRow inherits HorizontalLayout {
     in property <string> value;
     in property <string> placeholder;
     in property <bool> interactive: true;
+    // Typing breaks a `text: root.value` binding, which used to leave the old
+    // text on screen when Browse or Reload replaced the value underneath it.
+    // Keep the field's text local, follow external value changes explicitly,
+    // and report every change so Apply and OK save exactly what is shown.
+    in-out property <string> text: root.value;
     callback edited(string);
     callback browse();
+    changed value => {
+        if (root.text != root.value) {
+            root.text = root.value;
+        }
+    }
+    changed text => { root.edited(root.text); }
     spacing: AppTheme.spacing-md;
     opacity: root.interactive ? 1 : 0.5;
     Text {
@@ -91,11 +102,10 @@ export component SystemSettingPathRow inherits HorizontalLayout {
         overflow: elide;
     }
     LineEdit {
-        text: root.value;
+        text <=> root.text;
         placeholder-text: root.placeholder;
         enabled: root.interactive;
         accessible-label: root.label;
-        edited(value) => { root.edited(value); }
         horizontal-stretch: 1;
     }
     Button {
