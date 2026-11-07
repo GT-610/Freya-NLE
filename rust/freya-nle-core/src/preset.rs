@@ -4,7 +4,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-const PRESET_VERSION: i32 = 1;
+/// Version written by this build. Version 2 added the `expressions` map;
+/// version 1 presets remain readable because it is an additive field.
+pub const PRESET_VERSION: i32 = 2;
+
+/// The last version written before parameter expressions were stored.
+const LEGACY_PRESET_VERSION: i32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EffectPreset {
@@ -18,8 +23,23 @@ pub struct EffectPreset {
     pub params: Map<String, Value>,
     #[serde(default)]
     pub keyframes: Map<String, Value>,
+    /// Parameter expressions, keyed like `params`. Empty for presets written
+    /// before expressions were part of the format.
+    #[serde(default)]
+    pub expressions: Map<String, Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl EffectPreset {
+    /// Whether this preset knows about parameter expressions.
+    ///
+    /// Old presets cannot say whether a parameter was expression-driven, so
+    /// applying one leaves the target's expressions alone instead of clearing
+    /// them on the strength of a field that was never written.
+    pub fn records_expressions(&self) -> bool {
+        self.version >= PRESET_VERSION
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +76,7 @@ fn build_document(
     enabled: bool,
     params: Map<String, Value>,
     keyframes: Map<String, Value>,
+    expressions: Map<String, Value>,
 ) -> Option<EffectPreset> {
     if !preset_name_is_safe(effect_id) || !preset_name_is_safe(name) {
         return None;
@@ -67,6 +88,7 @@ fn build_document(
         enabled,
         params,
         keyframes,
+        expressions,
         extra: BTreeMap::new(),
     })
 }
@@ -76,7 +98,7 @@ fn normalize_document(input: &[u8], effect_id: &str, name: &str) -> Option<Effec
         return None;
     }
     let document: EffectPreset = serde_json::from_slice(input).ok()?;
-    if document.version != PRESET_VERSION
+    if !(LEGACY_PRESET_VERSION..=PRESET_VERSION).contains(&document.version)
         || document.effect_id != effect_id
         || document.name != name
         || !preset_name_is_safe(&document.effect_id)
@@ -93,8 +115,9 @@ pub fn build_effect_preset(
     enabled: bool,
     params: Map<String, Value>,
     keyframes: Map<String, Value>,
+    expressions: Map<String, Value>,
 ) -> Result<Vec<u8>, PresetError> {
-    let document = build_document(effect_id, name, enabled, params, keyframes)
+    let document = build_document(effect_id, name, enabled, params, keyframes, expressions)
         .ok_or(PresetError::InvalidName)?;
     serde_json::to_vec(&document).map_err(|_| PresetError::Serialization)
 }
@@ -133,6 +156,7 @@ mod tests {
             true,
             json!({"amount": 2}).as_object().cloned().expect("fixture"),
             Map::new(),
+            Map::new(),
         )
         .expect("valid document");
         let json = serde_json::to_vec(&document).expect("serialize fixture");
@@ -158,7 +182,7 @@ mod tests {
         assert!(normalized.keyframes.is_empty());
 
         let unsupported = json!({
-            "version": 2,
+            "version": 3,
             "effectId": "effect.test",
             "name": "Warm Look",
             "enabled": true,

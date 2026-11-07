@@ -1061,10 +1061,17 @@ impl WorkspaceModel {
             return false;
         };
         let effect_id = effect.id.clone();
-        let (params, keyframes) = match scope {
+        let saved_expressions = effect
+            .extra
+            .get("expressions")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let (params, keyframes, expressions) = match scope {
             None => (
                 effect.params.clone(),
                 effect.keyframes.clone().unwrap_or_default(),
+                saved_expressions,
             ),
             Some(names) => {
                 if names.is_empty() {
@@ -1100,10 +1107,24 @@ impl WorkspaceModel {
                             .collect::<Map<String, Value>>()
                     })
                     .unwrap_or_default();
-                (params, keyframes)
+                // A scoped preset carries the expressions of its own
+                // parameters only, so applying it leaves the rest alone.
+                let expressions = saved_expressions
+                    .iter()
+                    .filter(|(param, _)| names.iter().any(|name| name == *param))
+                    .map(|(param, expression)| (param.clone(), expression.clone()))
+                    .collect::<Map<String, Value>>();
+                (params, keyframes, expressions)
             }
         };
-        let result = store.save(&effect_id, name, params, keyframes, effect.enabled);
+        let result = store.save(
+            &effect_id,
+            name,
+            params,
+            keyframes,
+            expressions,
+            effect.enabled,
+        );
         match result {
             Ok(()) => {
                 self.set_status(status_message!(
@@ -1260,7 +1281,15 @@ impl WorkspaceModel {
                 (params, keyframes)
             }
         };
-        let result = store.save(&plugin_id, name, params, keyframes, plugin.enabled);
+        // Audio-plugin parameters have no expression form yet.
+        let result = store.save(
+            &plugin_id,
+            name,
+            params,
+            keyframes,
+            Map::new(),
+            plugin.enabled,
+        );
         match result {
             Ok(()) => {
                 self.set_status(status_message!(
@@ -5782,6 +5811,24 @@ fn effect_preset_commands(
                 }),
         );
     }
+    // Presets from version 2 know about expressions. A covered parameter with
+    // no saved expression clears the target's binding so the preset's value is
+    // what renders; a legacy preset cannot say either way and is left alone.
+    if preset.records_expressions() {
+        commands.extend(preset.params.keys().map(|name| {
+            let expression = preset
+                .expressions
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            TimelineCommand::SetEffectExpression {
+                clip_id: clip.id,
+                effect_index,
+                param_name: name.clone(),
+                expression,
+            }
+        }));
+    }
     commands.push(TimelineCommand::SetEffectEnabled {
         clip_id: clip.id,
         effect_index,
@@ -10153,6 +10200,7 @@ mod tests {
             .as_object()
             .cloned()
             .expect("keyframes"),
+            expressions: Map::new(),
             extra: Default::default(),
         };
 
@@ -10311,21 +10359,35 @@ mod tests {
             dirty: false,
         });
         workspace.click_clip(1, false);
+        assert!(workspace.set_effect_expression(0, "size", Some("5 * 2")));
+        assert!(workspace.set_effect_expression(0, "quality", Some("3 * 3")));
 
         let scope = ["size".to_owned()];
         assert!(workspace.save_effect_preset_scoped(&store, 0, "Sized", Some(&scope)));
         let preset = store.load_preset("blur", "Sized").expect("preset loads");
         assert_eq!(preset.params.keys().collect::<Vec<_>>(), ["size"]);
         assert_eq!(preset.keyframes.keys().collect::<Vec<_>>(), ["size"]);
+        assert_eq!(preset.expressions.keys().collect::<Vec<_>>(), ["size"]);
 
         // Loading the scoped preset restores the chosen item and leaves the
         // other one at the value the user set in the meantime.
         assert!(workspace.set_effect_parameter_at_frame(0, "size", 0, json!(1.0)));
         assert!(workspace.set_effect_parameter_at_frame(0, "quality", 0, json!(9.0)));
+        assert!(workspace.set_effect_expression(0, "size", Some("1 * 1")));
         assert!(workspace.load_effect_preset(&store, 0, "Sized"));
         let effect = &workspace.document().clips[0].effects[0];
         assert_eq!(effect.params["size"], json!(5));
         assert_eq!(effect.params["quality"], json!(9.0));
+        assert_eq!(
+            workspace.effect_expression(0, "size").as_deref(),
+            Some("5 * 2"),
+            "the selected parameter's expression comes back"
+        );
+        assert_eq!(
+            workspace.effect_expression(0, "quality").as_deref(),
+            Some("3 * 3"),
+            "a scoped preset leaves unselected expressions alone"
+        );
 
         assert!(
             !workspace.save_effect_preset_scoped(&store, 0, "Empty", Some(&[])),
@@ -10334,6 +10396,113 @@ mod tests {
         let unknown = ["missing".to_owned()];
         assert!(!workspace.save_effect_preset_scoped(&store, 0, "Unknown", Some(&unknown)));
         assert!(store.names("blur").iter().all(|name| name == "Sized"));
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn effect_presets_round_trip_expressions_and_keep_evaluating() {
+        use freya_nle_core::api::SceneRenderPlan;
+
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-expression-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(3.0)));
+        assert!(workspace.set_effect_expression(0, "count", Some("10 + time * 2")));
+        assert!(workspace.save_effect_preset(&store, 0, "Animated"));
+
+        // Moving both the fallback and the binding away must not survive the
+        // preset: the expression is part of what was saved.
+        assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(7.0)));
+        assert!(workspace.set_effect_expression(0, "count", None));
+        assert!(workspace.load_effect_preset(&store, 0, "Animated"));
+        assert_eq!(
+            workspace.effect_expression(0, "count").as_deref(),
+            Some("10 + time * 2")
+        );
+        assert_eq!(
+            workspace.document().clips[0].effects[0].params["count"]["value"],
+            json!(3),
+            "the fallback value comes back with the expression"
+        );
+
+        // The restored binding still drives evaluation, not just storage.
+        let mut plan = SceneRenderPlan::from_document(workspace.document(), 1)
+            .expect("the scene plans from the document");
+        let frame = plan.evaluate(60);
+        let rect = frame.layers[0]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "rect")
+            .expect("rect effect");
+        assert_eq!(rect.params["count"], json!(12.0));
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_preset_without_an_expression_clears_the_target_binding() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-plain-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        // Saved with no expression, so the preset describes a plain value.
+        assert!(workspace.save_effect_preset(&store, 0, "Plain"));
+        assert!(workspace.set_effect_expression(0, "count", Some("2 * 2")));
+        assert!(workspace.load_effect_preset(&store, 0, "Plain"));
+        assert_eq!(
+            workspace.effect_expression(0, "count"),
+            None,
+            "a current-format preset clears a binding it does not carry"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_legacy_preset_leaves_the_target_expression_alone() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-legacy-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let effect_id = workspace.document().clips[0].effects[0].id.clone();
+        // Version 1 predates expression storage: it cannot say whether the
+        // source effect was expression-driven, so it must not clear a binding.
+        std::fs::create_dir_all(root.join(&effect_id)).expect("preset directory");
+        std::fs::write(
+            root.join(&effect_id).join("Legacy.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "effectId": effect_id,
+                "name": "Legacy",
+                "enabled": true,
+                "params": {"count": 2.0},
+                "keyframes": {}
+            }))
+            .expect("legacy preset serializes"),
+        )
+        .expect("legacy preset is writable");
+
+        assert!(workspace.set_effect_expression(0, "count", Some("2 * 3")));
+        assert!(workspace.load_effect_preset(&store, 0, "Legacy"));
+        assert_eq!(
+            workspace.effect_expression(0, "count").as_deref(),
+            Some("2 * 3"),
+            "a legacy preset leaves the target expression untouched"
+        );
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }

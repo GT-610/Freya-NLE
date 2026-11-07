@@ -108,11 +108,17 @@ fn public_api_owns_effect_metadata_and_preset_documents() {
         true,
         metadata.params.clone(),
         Map::new(),
+        json!({"size": "time * 10"})
+            .as_object()
+            .cloned()
+            .expect("expressions"),
     )
     .expect("preset builds");
     let preset =
         parse_effect_preset(&bytes, &metadata.id, "Warm blur").expect("preset identity validates");
     assert_eq!(preset.params["quality"], 1);
+    assert_eq!(preset.expressions["size"], "time * 10");
+    assert!(preset.records_expressions());
     assert!(parse_effect_preset(&bytes, "mosaic", "Warm blur").is_err());
 }
 
