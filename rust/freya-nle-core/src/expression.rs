@@ -143,16 +143,43 @@ pub(crate) fn expand_text_scripts(
 
 struct TextScriptVm {
     vm: Vm,
+    /// Captured before the script environment hides them: each block needs them
+    /// to install and compile its environment, and a script must not reach them.
+    setmetatable: Value,
+    setfenv: Value,
+    load: Value,
 }
 
-/// Runs the block in a fresh environment.
+/// Runs one block in a fresh environment.
 ///
-/// `setfenv(1, __env)` keeps one object's globals out of the next object's
-/// script and out of the next frame; `__collector` and `mes` are globals the
-/// prelude installs, so the block reads them through `__index = _G`.
-const TEXT_SCRIPT_PRELUDE: &str = "\
-local __env = setmetatable({}, { __index = _G })\n\
-setfenv(1, __env)\n";
+/// The wrapper receives the functions it needs as chunk arguments, so they can
+/// be hidden from the block, and compiles the block itself as a separate chunk:
+/// a chunk shares no locals with its loader, so the block cannot reach the
+/// wrapper's environment or helpers. `__env` reads through `_G`, whose library
+/// tables are guarded proxies (see `TextScriptVm::new`), and every escape hatch
+/// that could reach a shared table or replace the environment is shadowed with
+/// `false` for the duration of the block. Assigning `nil` would remove the key
+/// and let `__index` find the real global again.
+const TEXT_SCRIPT_WRAPPER: &str = "\
+local __setmetatable, __setfenv, __load, __source = ...\n\
+local __env = __setmetatable({}, { __index = _G })\n\
+__setfenv(1, __env)\n\
+_G = false\n\
+setmetatable = false\n\
+getmetatable = false\n\
+setfenv = false\n\
+getfenv = false\n\
+rawset = false\n\
+rawget = false\n\
+local __chunk = __load(__source)\n\
+__setfenv(__chunk, __env)\n\
+local __collector = __collector\n\
+local __concat = table.concat\n\
+__collector.items = {}\n\
+__chunk()\n\
+local out = __concat(__collector.items)\n\
+__collector.items = {}\n\
+return out\n";
 
 impl TextScriptVm {
     fn new() -> Self {
@@ -165,6 +192,9 @@ impl TextScriptVm {
             .with_memory_cap(MEMORY_CAP)
             .build();
         vm.set_loader_input_budget(LOADER_INPUT_BUDGET);
+        let setmetatable = table_global(&mut vm, "setmetatable");
+        let setfenv = table_global(&mut vm, "setfenv");
+        let load = table_global(&mut vm, "loadstring");
         for name in [
             "load",
             "loadstring",
@@ -178,15 +208,34 @@ impl TextScriptVm {
         ] {
             let _ = vm.set_global(name, ());
         }
-        let math = table_global(&mut vm, "math");
-        let _ = vm.set_global("m", math);
+        // `setfenv` isolates assignments and reads per block, but a script can
+        // still mutate a table it reaches through a shared global: `math.sin`
+        // lives on the one `math` table every text clip on this thread sees.
+        // Give each library an empty proxy whose metatable reads the real table
+        // and sends every write to a scratch table. Reads behave exactly as
+        // before and no write can reach the shared library, without cloning the
+        // tables per object or per frame.
         let _ = vm.eval_chunk(
-            "sin = math.sin; cos = math.cos; tan = math.tan; abs = math.abs; \
-             max = math.max; min = math.min; floor = math.floor; ceil = math.ceil; \
+            "local __writes = {}\n\
+             local function __discard(_, key, value) __writes[key] = value end\n\
+             local function __guard(real)\n\
+             return setmetatable({}, { __index = real, __newindex = __discard })\n\
+             end\n\
+             math = __guard(math)\n\
+             string = __guard(string)\n\
+             table = __guard(table)\n\
+             m = math\n\
+             sin = math.sin; cos = math.cos; tan = math.tan; abs = math.abs; \n\
+             max = math.max; min = math.min; floor = math.floor; ceil = math.ceil; \n\
              pi = math.pi; random = math.random;",
-            "=text-script-shortcuts",
+            "=text-script-libraries",
         );
-        Self { vm }
+        Self {
+            vm,
+            setmetatable,
+            setfenv,
+            load,
+        }
     }
 
     /// Builds the `obj` table for this frame and resets the print collector.
@@ -276,19 +325,22 @@ impl TextScriptVm {
         // successful return: a block that prints and then fails would otherwise
         // leave its text for the next block in the same object to print ahead
         // of its own output.
-        let source = format!(
-            "{TEXT_SCRIPT_PRELUDE};__collector.items = {{}}\n\
-             (function() {script} end)()\n\
-             local out = table.concat(__collector.items)\n\
-             __collector.items = {{}}\n\
-             return out"
-        );
-        let closure = self.vm.load(source.as_bytes(), b"=text-script").ok()?;
+        let wrapper = self
+            .vm
+            .load(TEXT_SCRIPT_WRAPPER.as_bytes(), b"=text-script")
+            .ok()?;
+        let source = Value::Str(self.vm.intern_str(&script));
         // The budget is per call, not per VM: this VM is reused for every text
         // object on the thread, so without re-arming it the allowance would be
         // spent by earlier scripts until a later one fails and stays literal.
         self.vm.set_instr_budget(Some(INSTRUCTION_BUDGET));
-        let values = self.vm.call_value(Value::Closure(closure), &[]).ok()?;
+        let values = self
+            .vm
+            .call_value(
+                Value::Closure(wrapper),
+                &[self.setmetatable, self.setfenv, self.load, source],
+            )
+            .ok()?;
         // The chunk always returns a string; a block that printed nothing
         // yields the empty string.
         Some(match values.first()? {
@@ -698,6 +750,73 @@ mod tests {
         );
         assert_eq!(text("plain text", &clock), "plain text");
         assert_eq!(text("dangling <?x", &clock), "dangling <?x");
+    }
+
+    #[test]
+    fn a_text_script_cannot_poison_a_shared_library_table() {
+        let first = clock(0.0, 1.0);
+        let second = clock(1.0, 2.0);
+        // Replacing an existing key must not reach the table the next clip on
+        // this thread reads, on a later frame or after the object changes.
+        assert_eq!(
+            text(
+                "<? math.floor = function() return 0 end ?><?=math.floor(2.9)?>",
+                &first
+            ),
+            "2"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &second), "2");
+        // The `m` alias and the shortcut globals read the same guarded table;
+        // writing through either must be discarded.
+        assert_eq!(text("<? m.floor = function() return 0 end ?>", &first), "");
+        assert_eq!(text("<?=m.floor(2.9)?>/<?=floor(2.9)?>", &second), "2/2");
+        // The other exposed library tables are guarded the same way.
+        assert_eq!(
+            text("<? string.rep = function() return 'x' end ?>", &first),
+            ""
+        );
+        assert_eq!(text("<?=string.rep('a', 2)?>", &second), "aa");
+        assert_eq!(
+            text("<? table.concat = function() return 'x' end ?>", &first),
+            ""
+        );
+        assert_eq!(text("<?=table.concat({'a','b'})?>", &second), "ab");
+    }
+
+    #[test]
+    fn a_text_script_cannot_bypass_the_guard_through_the_environment() {
+        let clock = clock(0.0, 1.0);
+        // The escape hatches are shadowed inside the block, so mutating the
+        // proxy directly fails and keeps the block literal instead of reaching
+        // the real table.
+        assert_eq!(
+            text(
+                "<? rawset(math, 'floor', function() return 0 end) ?>",
+                &clock
+            ),
+            "<? rawset(math, 'floor', function() return 0 end) ?>"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
+        assert_eq!(
+            text("<? setmetatable(math, {}) ?>", &clock),
+            "<? setmetatable(math, {}) ?>"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
+        assert_eq!(
+            text("<? _G.math.floor = function() return 0 end ?>", &clock),
+            "<? _G.math.floor = function() return 0 end ?>"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
+        // The loader's own locals are out of reach because the block is a
+        // separate chunk, not interpolated into the wrapper.
+        assert_eq!(
+            text("<? __setmetatable(math, {}) ?>", &clock),
+            "<? __setmetatable(math, {}) ?>"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
+        // Ordinary reads still work, including the string library's methods.
+        assert_eq!(text("<?=string.format('%02d', 5)?>", &clock), "05");
+        assert_eq!(text("<?=('ab'):upper()?>", &clock), "AB");
     }
 
     #[test]
