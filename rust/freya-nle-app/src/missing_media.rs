@@ -23,9 +23,14 @@ pub struct MediaRelinkPlan {
     pub media_duration_seconds: Option<f64>,
 }
 
+/// Reports clips whose media does not exist on disk.
+///
+/// `media_directory` is the directory relative paths resolve against, not a
+/// project file: a session restored from a backup is unsaved and records the
+/// directory directly, so taking a parent here would look one level too high.
 pub fn find_missing_media(
     document: &ProjectDocument,
-    project_path: Option<&Path>,
+    media_directory: Option<&Path>,
 ) -> Vec<MissingMediaEntry> {
     document
         .clips
@@ -40,7 +45,7 @@ pub fn find_missing_media(
                     .get(parameter)?,
             )
             .as_str()?;
-            if path.is_empty() || resolve_path(project_path, path).exists() {
+            if path.is_empty() || resolve_in_directory(media_directory, path).exists() {
                 return None;
             }
             Some(MissingMediaEntry {
@@ -183,13 +188,37 @@ mod tests {
     }
 
     #[test]
-    fn missing_media_scan_resolves_paths_relative_to_the_project() {
-        let project_path = Path::new("/tmp/project/example.aviqtl");
+    fn missing_media_scan_resolves_paths_relative_to_the_directory() {
+        let directory = Path::new("/projects/demo");
         let document = document_with_media("media/missing.png", "image");
-        let missing = find_missing_media(&document, Some(project_path));
+        let missing = find_missing_media(&document, Some(directory));
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].clip_id, 7);
         assert_eq!(missing[0].name, "missing.png");
+    }
+
+    /// The scan has to resolve against the directory it is given, not its
+    /// parent — a restored session passes the directory directly.
+    #[test]
+    fn missing_media_scan_does_not_look_one_level_above_the_directory() {
+        let root = temporary_path("scan").with_extension("dir");
+        let media = root.join("media");
+        fs::create_dir_all(&media).expect("media directory creates");
+        let still = media.join("present.png");
+        fs::write(&still, b"pixels").expect("still writes");
+
+        let document = document_with_media("media/present.png", "image");
+        let missing = find_missing_media(&document, Some(&root));
+        assert!(
+            missing.is_empty(),
+            "an existing still next to the directory must not be reported: {missing:?}"
+        );
+
+        // And one that really is absent is still reported.
+        let document = document_with_media("media/absent.png", "image");
+        assert_eq!(find_missing_media(&document, Some(&root)).len(), 1);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
