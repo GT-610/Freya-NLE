@@ -1495,24 +1495,52 @@ fn justify_run_lines(lines: &mut [ShapedRunLine], target_width: f32) {
 /// A gap can sit inside a styled run or on a boundary between runs, so each
 /// segment's glyphs are shifted by the advance collected within it and the
 /// segment's width grows by the gaps it contains. That keeps the following
-/// runs, strikethroughs, and ruby spans in step with the wider line.
+/// runs, strikethroughs, and ruby spans in step with the wider line. A space
+/// only counts as a gap when text follows it on the line: a trailing space
+/// would otherwise take a share of the spare width and stretch the line's
+/// strikethrough past the text it belongs to.
 fn justify_run_line(line: &mut ShapedRunLine, target_width: f32) -> bool {
     if line.anchor.is_some() {
         return false;
     }
+    // The last glyph on the line that is not a space. Any space after it is
+    // trailing and cannot be a word gap.
+    let mut last_text = None;
+    for (segment_index, segment) in line.segments.iter().enumerate() {
+        for (glyph_index, _) in segment.glyphs.iter().enumerate() {
+            if segment.spaces.binary_search(&glyph_index).is_err() {
+                last_text = Some((segment_index, glyph_index));
+            }
+        }
+    }
+    let is_gap = |segment_index: usize, glyph_index: usize| {
+        last_text.is_some_and(|last| (segment_index, glyph_index) < last)
+    };
     let gaps = line
         .segments
         .iter()
-        .map(|segment| segment.spaces.len())
+        .enumerate()
+        .map(|(segment_index, segment)| {
+            segment
+                .spaces
+                .iter()
+                .filter(|&&glyph_index| is_gap(segment_index, glyph_index))
+                .count()
+        })
         .sum::<usize>();
     if gaps == 0 || !target_width.is_finite() || target_width <= line.width {
         return false;
     }
     let extra_per_gap = (target_width - line.width) / gaps as f32;
     let mut shift = 0.0_f32;
-    for segment in &mut line.segments {
+    for (segment_index, segment) in line.segments.iter_mut().enumerate() {
         let start_shift = shift;
-        let mut spaces = segment.spaces.iter().copied().peekable();
+        let mut spaces = segment
+            .spaces
+            .iter()
+            .copied()
+            .filter(|glyph_index| is_gap(segment_index, *glyph_index))
+            .peekable();
         for (index, glyph) in segment.glyphs.iter_mut().enumerate() {
             glyph.x += shift - start_shift;
             if spaces.peek() == Some(&index) {
@@ -2444,6 +2472,50 @@ mod tests {
         let mut one_word = shaped_run_line(vec![shaped_segment(&[0.0, 10.0], 20.0, &[], ink)]);
         assert!(!justify_run_line(&mut one_word, 100.0));
         assert_eq!(one_word.width, 20.0);
+    }
+
+    #[test]
+    fn a_trailing_space_is_not_a_word_gap() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        // "A " ends in a space with no text after it, so the line has no word
+        // gap and must not stretch (which would drag its strikethrough out to
+        // the block width).
+        let mut trailing = shaped_run_line(vec![shaped_segment(&[0.0, 10.0], 20.0, &[1], ink)]);
+        assert!(!justify_run_line(&mut trailing, 60.0));
+        assert_eq!(trailing.width, 20.0);
+        assert_eq!(
+            trailing.segments[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0]
+        );
+
+        // "A B " has one real gap and one trailing space: only the real gap is
+        // spread, and the trailing space rides along with the word before it.
+        let mut mixed = shaped_run_line(vec![shaped_segment(
+            &[0.0, 10.0, 20.0, 30.0],
+            40.0,
+            &[1, 3],
+            ink,
+        )]);
+        assert!(justify_run_line(&mut mixed, 60.0));
+        assert_eq!(mixed.width, 60.0);
+        assert_eq!(
+            mixed.segments[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0, 40.0, 50.0],
+            "the one real gap takes the whole twenty spare pixels"
+        );
     }
 
     #[test]
