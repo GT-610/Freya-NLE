@@ -1503,10 +1503,16 @@ fn justify_run_line(line: &mut ShapedRunLine, target_width: f32) -> bool {
     if line.anchor.is_some() {
         return false;
     }
-    // The last glyph on the line that is not a space. Any space after it is
-    // trailing and cannot be a word gap.
+    // The last glyph on the line that is not a space, or the last emoji cell.
+    // Any space after it is trailing and cannot be a word gap.
     let mut last_text = None;
     for (segment_index, segment) in line.segments.iter().enumerate() {
+        if segment.emoji.is_some() {
+            // An emoji is content even though it carries no glyphs, so a space
+            // before it is a real word gap.
+            last_text = Some((segment_index, usize::MAX));
+            continue;
+        }
         for (glyph_index, _) in segment.glyphs.iter().enumerate() {
             if segment.spaces.binary_search(&glyph_index).is_err() {
                 last_text = Some((segment_index, glyph_index));
@@ -2516,6 +2522,31 @@ mod tests {
             [0.0, 10.0, 40.0, 50.0],
             "the one real gap takes the whole twenty spare pixels"
         );
+    }
+
+    #[test]
+    fn an_emoji_after_a_space_is_content() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        // "ab " + emoji: the emoji follows the space, so the space is a real
+        // word gap even though the emoji segment carries no glyphs of its own.
+        let mut emoji = shaped_segment(&[], 10.0, &[], ink);
+        emoji.emoji = Some("__test_star".to_owned());
+        let mut line = shaped_run_line(vec![
+            shaped_segment(&[0.0, 10.0, 20.0], 30.0, &[2], ink),
+            emoji,
+        ]);
+        assert!(justify_run_line(&mut line, 60.0));
+        assert_eq!(line.width, 60.0);
+        assert_eq!(
+            line.segments[0].width, 50.0,
+            "the gap before the emoji takes the whole twenty spare pixels"
+        );
+        assert_eq!(line.segments[1].width, 10.0, "the emoji cell is unchanged");
     }
 
     #[test]
