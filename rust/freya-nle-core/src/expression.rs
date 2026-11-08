@@ -840,27 +840,19 @@ mod tests {
     #[test]
     fn a_text_script_cannot_reach_the_globals_by_removing_a_shadow() {
         let clock = clock(0.0, 1.0);
-        // Dropping the `_G` shadow (`_G = nil`) used to let the next lookup fall
-        // through `__index` to the real global table, so `_G.math` reached the
-        // unguarded library. The `__index` handler now rejects the name itself:
-        // the assignment succeeds, but the follow-up read of `_G.math` fails and
-        // keeps its block literal.
+        // Removing the `_G` shadow must not expose the shared global table. Because
+        // each block gets a fresh environment, the removal and the lookup have to
+        // share one block for the assertion to mean anything: without the
+        // `__index` rejection, `_G.math = {}` would reach the real table.
         assert_eq!(
-            text(
-                "<? _G = nil ?><? _G.math.floor = function() return 0 end ?>",
-                &clock
-            ),
-            "<? _G.math.floor = function() return 0 end ?>"
+            text("<? _G = nil; _G.math = {} ?>", &clock),
+            "<? _G = nil; _G.math = {} ?>"
         );
         assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
-        // The same holds for the other escape hatches after their shadows are
-        // removed: none of them can be reached through the environment.
+        // The same holds for setmetatable once its shadow is removed.
         assert_eq!(
-            text(
-                "<? setmetatable = nil ?><? setmetatable(math, {}) ?>",
-                &clock
-            ),
-            "<? setmetatable(math, {}) ?>"
+            text("<? setmetatable = nil; setmetatable(math, {}) ?>", &clock),
+            "<? setmetatable = nil; setmetatable(math, {}) ?>"
         );
         assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
     }
