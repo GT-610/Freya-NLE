@@ -1493,7 +1493,7 @@ fn justify_run_lines(lines: &mut [ShapedRunLine], target_width: f32) {
 /// Spreads a justified run line's spare width across its word gaps.
 ///
 /// A gap can sit inside a styled run or on a boundary between runs, so each
-/// segment's glyphs are shifted by the advance collected so far and the
+/// segment's glyphs are shifted by the advance collected within it and the
 /// segment's width grows by the gaps it contains. That keeps the following
 /// runs, strikethroughs, and ruby spans in step with the wider line.
 fn justify_run_line(line: &mut ShapedRunLine, target_width: f32) -> bool {
@@ -1514,7 +1514,7 @@ fn justify_run_line(line: &mut ShapedRunLine, target_width: f32) -> bool {
         let start_shift = shift;
         let mut spaces = segment.spaces.iter().copied().peekable();
         for (index, glyph) in segment.glyphs.iter_mut().enumerate() {
-            glyph.x += shift;
+            glyph.x += shift - start_shift;
             if spaces.peek() == Some(&index) {
                 shift += extra_per_gap;
                 spaces.next();
@@ -2401,8 +2401,8 @@ mod tests {
                 .iter()
                 .map(|glyph| glyph.x)
                 .collect::<Vec<_>>(),
-            [10.0, 20.0],
-            "the following run starts one extra gap later"
+            [0.0, 10.0],
+            "the following run retains segment-local positions"
         );
 
         // "ab" (red) + "c d" (green): the gap is inside the second run.
