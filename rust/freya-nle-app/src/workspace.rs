@@ -1171,10 +1171,11 @@ impl WorkspaceModel {
                 return false;
             }
         };
-        for command in commands {
-            if !self.execute(command) {
-                return false;
-            }
+        // Plan and apply the whole preset as one transaction: a validation
+        // failure (for example an expression over the size limit) must leave
+        // the effect unchanged rather than committing the earlier commands.
+        if !self.execute_batch(commands) {
+            return false;
         }
         self.set_status(status_message!(
             "Loaded preset {}",
@@ -1340,10 +1341,10 @@ impl WorkspaceModel {
                 return false;
             }
         };
-        for command in commands {
-            if !self.execute(command) {
-                return false;
-            }
+        // Apply the whole preset as one transaction so a failed load leaves the
+        // plugin unchanged.
+        if !self.execute_batch(commands) {
+            return false;
         }
         self.set_status(status_message!(
             "Loaded preset {}",
@@ -5814,17 +5815,26 @@ fn effect_preset_commands(
     // Presets from version 2 know about expressions. A covered parameter with
     // no saved expression clears the target's binding so the preset's value is
     // what renders; a legacy preset cannot say either way and is left alone.
+    // A parameter can carry a keyframe track without a `params` entry (a
+    // keyframe set at a later frame on a parameter with no base value), so the
+    // names to cover are the union of the saved parameters and keyframe tracks.
     if preset.records_expressions() {
-        commands.extend(preset.params.keys().map(|name| {
+        let mut names = preset.params.keys().cloned().collect::<Vec<_>>();
+        for name in preset.keyframes.keys() {
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.clone());
+            }
+        }
+        commands.extend(names.into_iter().map(|name| {
             let expression = preset
                 .expressions
-                .get(name)
+                .get(&name)
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             TimelineCommand::SetEffectExpression {
                 clip_id: clip.id,
                 effect_index,
-                param_name: name.clone(),
+                param_name: name,
                 expression,
             }
         }));
@@ -9331,6 +9341,11 @@ mod tests {
             ranged_audio.effects[0].params["linkedVideo"],
             Value::Bool(true)
         );
+        assert_eq!(
+            ranged_audio.effects[0].params["startTime"],
+            serde_json::json!(5.0 / 60.0),
+            "the linked audio in-point follows the ranged video"
+        );
 
         std::fs::remove_file(path).expect("temporary media placeholder is removable");
     }
@@ -10503,6 +10518,91 @@ mod tests {
             Some("2 * 3"),
             "a legacy preset leaves the target expression untouched"
         );
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_preset_replays_the_expression_of_a_keyframe_only_parameter() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-keyframe-only-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let effect_id = workspace.document().clips[0].effects[1].id.clone();
+        // A parameter can carry a keyframe track without a `params` entry (a
+        // keyframe set at a later frame on a parameter with no base value). Its
+        // expression must still be replayed when the preset is applied.
+        std::fs::create_dir_all(root.join(&effect_id)).expect("preset directory");
+        std::fs::write(
+            root.join(&effect_id).join("KeyframeOnly.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "effectId": effect_id,
+                "name": "KeyframeOnly",
+                "enabled": true,
+                "params": {},
+                "keyframes": {"size": [{"frame": 0, "value": 5}]},
+                "expressions": {"size": "10 * 2"}
+            }))
+            .expect("preset serializes"),
+        )
+        .expect("preset is writable");
+
+        assert!(workspace.load_effect_preset(&store, 1, "KeyframeOnly"));
+        assert_eq!(
+            workspace.effect_expression(1, "size").as_deref(),
+            Some("10 * 2"),
+            "a keyframe-only parameter's expression is replayed"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn an_oversized_preset_expression_leaves_the_effect_unchanged() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-oversized-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let effect_id = workspace.document().clips[0].effects[1].id.clone();
+        // Move the target away from the preset's value first: a failed load must
+        // not commit the parameter change that precedes the bad expression.
+        assert!(workspace.set_effect_parameter_at_frame(1, "size", 0, json!(7.0)));
+        let oversized = "x".repeat(10_001);
+        std::fs::create_dir_all(root.join(&effect_id)).expect("preset directory");
+        std::fs::write(
+            root.join(&effect_id).join("Oversized.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "effectId": effect_id,
+                "name": "Oversized",
+                "enabled": true,
+                "params": {"size": 5},
+                "keyframes": {},
+                "expressions": {"size": oversized}
+            }))
+            .expect("preset serializes"),
+        )
+        .expect("preset is writable");
+
+        assert!(
+            !workspace.load_effect_preset(&store, 1, "Oversized"),
+            "an expression over the size limit is refused"
+        );
+        assert_eq!(
+            workspace.document().clips[0].effects[1].params["size"],
+            json!(7.0),
+            "the parameter change before the bad expression is rolled back"
+        );
+        assert_eq!(workspace.effect_expression(1, "size"), None);
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
