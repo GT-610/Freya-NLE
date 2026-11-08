@@ -5802,8 +5802,29 @@ fn effect_preset_commands(
             .or_else(|| effect.params.get(name))
             .cloned()
             .unwrap_or(Value::Null);
+        let points = inspect_keyframe_track(Some(track), &fallback, clip.duration);
+        let preset_frames = points.iter().map(|point| point.frame).collect::<Vec<_>>();
+        // Replace the covered track rather than merging into it: a destination
+        // keyframe the preset does not carry would keep animating the parameter
+        // past what was saved. Unselected tracks are left untouched.
+        if let Some(existing) = effect
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get(name))
+        {
+            for point in inspect_keyframe_track(Some(existing), &fallback, clip.duration) {
+                if !preset_frames.contains(&point.frame) {
+                    commands.push(TimelineCommand::RemoveEffectKeyframe {
+                        clip_id: clip.id,
+                        effect_index,
+                        param_name: name.clone(),
+                        frame: point.frame,
+                    });
+                }
+            }
+        }
         commands.extend(
-            inspect_keyframe_track(Some(track), &fallback, clip.duration)
+            points
                 .into_iter()
                 .map(|point| TimelineCommand::SetEffectKeyframe {
                     clip_id: clip.id,
@@ -10470,6 +10491,67 @@ mod tests {
         assert!(preset.params.is_empty());
         assert_eq!(preset.keyframes.keys().collect::<Vec<_>>(), ["size"]);
         assert_eq!(preset.expressions.keys().collect::<Vec<_>>(), ["size"]);
+
+        // Apply it to a destination with no base `size` parameter and different
+        // keyframes: the saved track and expression must replace them, and the
+        // destination-only keyframe must not survive.
+        let destination = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1,
+                    "sceneId": 1,
+                    "type": "rect",
+                    "start": 0,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{
+                        "id": "blur",
+                        "name": "Blur",
+                        "params": {},
+                        "keyframes": {
+                            "size": [{"frame": 0, "value": 9}, {"frame": 30, "value": 1}]
+                        }
+                    }]
+                }]
+            }"#,
+        )
+        .expect("destination fixture loads");
+        let document = destination.snapshot();
+        let mut destination_workspace = WorkspaceModel::new(ProjectSession {
+            state: destination,
+            document,
+            path: None,
+            media_directory: None,
+            dirty: false,
+        });
+        destination_workspace.click_clip(1, false);
+        assert!(destination_workspace.load_effect_preset(&store, 0, "Tracked"));
+        assert_eq!(
+            destination_workspace
+                .effect_expression(0, "size")
+                .as_deref(),
+            Some("5 * 2"),
+            "the saved expression comes back"
+        );
+        let effect = &destination_workspace.document().clips[0].effects[0];
+        let points = inspect_keyframe_track(
+            effect
+                .keyframes
+                .as_ref()
+                .and_then(|tracks| tracks.get("size")),
+            &json!(0),
+            100,
+        );
+        assert_eq!(
+            points.len(),
+            1,
+            "the destination-only keyframe is replaced by the preset track"
+        );
+        assert_eq!(points[0].frame, 0);
+        assert_eq!(points[0].value, json!(5), "the saved keyframe value wins");
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
