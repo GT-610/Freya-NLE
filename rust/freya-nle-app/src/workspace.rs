@@ -10867,7 +10867,8 @@ mod tests {
                         "enabled": true,
                         "params": {"0": 0.25},
                         "keyframes": {
-                            "0": [{"frame": 0, "value": 0.1}, {"frame": 30, "value": 0.9}]
+                            "0": [{"frame": 0, "value": 0.1}, {"frame": 30, "value": 0.9}],
+                            "1": [{"frame": 0, "value": 0.4}, {"frame": 50, "value": 0.7}]
                         }
                     }]
                 }]
@@ -10899,6 +10900,12 @@ mod tests {
         )
         .expect("preset is writable");
 
+        let unselected_track = workspace.document().clips[0].audio_plugins[0]
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get("1"))
+            .cloned()
+            .expect("unselected track");
         assert!(workspace.load_audio_plugin_preset(&store, 0, "Fixed"));
         let plugin = &workspace.document().clips[0].audio_plugins[0];
         let points = inspect_keyframe_track(
@@ -10913,6 +10920,11 @@ mod tests {
         );
         assert_eq!(points[0].frame, 0);
         assert_eq!(points[0].value, json!(0.5));
+        assert_eq!(
+            plugin.keyframes.as_ref().and_then(|tracks| tracks.get("1")),
+            Some(&unselected_track),
+            "an unselected audio track is left alone"
+        );
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
