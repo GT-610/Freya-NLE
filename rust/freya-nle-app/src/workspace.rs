@@ -1088,14 +1088,6 @@ impl WorkspaceModel {
                     .filter(|(param, _)| names.iter().any(|name| name == *param))
                     .map(|(param, value)| (param.clone(), value.clone()))
                     .collect::<Map<String, Value>>();
-                if params.is_empty() {
-                    self.set_status(status_message!(
-                        "The selected parameters are not in this effect",
-                        "所选参数不属于这个特效",
-                        "選択した項目はこのエフェクトにありません"
-                    ));
-                    return false;
-                }
                 let keyframes = effect
                     .keyframes
                     .as_ref()
@@ -1107,6 +1099,17 @@ impl WorkspaceModel {
                             .collect::<Map<String, Value>>()
                     })
                     .unwrap_or_default();
+                // A parameter can carry a keyframe track without a `params`
+                // entry, so a scope naming only that parameter is still in
+                // this effect and must be accepted.
+                if params.is_empty() && keyframes.is_empty() {
+                    self.set_status(status_message!(
+                        "The selected parameters are not in this effect",
+                        "所选参数不属于这个特效",
+                        "選択した項目はこのエフェクトにありません"
+                    ));
+                    return false;
+                }
                 // A scoped preset carries the expressions of its own
                 // parameters only, so applying it leaves the rest alone.
                 let expressions = saved_expressions
@@ -10411,6 +10414,62 @@ mod tests {
         let unknown = ["missing".to_owned()];
         assert!(!workspace.save_effect_preset_scoped(&store, 0, "Unknown", Some(&unknown)));
         assert!(store.names("blur").iter().all(|name| name == "Sized"));
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_scoped_preset_accepts_a_keyframe_only_parameter() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-keyframe-only-scope-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let state = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1,
+                    "sceneId": 1,
+                    "type": "rect",
+                    "start": 0,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{
+                        "id": "blur",
+                        "name": "Blur",
+                        "params": {},
+                        "keyframes": {"size": [{"frame": 0, "value": 5}]}
+                    }]
+                }]
+            }"#,
+        )
+        .expect("keyframe-only scoped preset fixture loads");
+        let document = state.snapshot();
+        let mut workspace = WorkspaceModel::new(ProjectSession {
+            state,
+            document,
+            path: None,
+            media_directory: None,
+            dirty: false,
+        });
+        workspace.click_clip(1, false);
+        assert!(workspace.set_effect_expression(0, "size", Some("5 * 2")));
+
+        // `size` has a keyframe track but no `params` entry, so the scope has to
+        // be checked against the tracks too, not only the parameters.
+        let scope = ["size".to_owned()];
+        assert!(
+            workspace.save_effect_preset_scoped(&store, 0, "Tracked", Some(&scope)),
+            "a keyframe-only parameter can be saved on its own"
+        );
+        let preset = store.load_preset("blur", "Tracked").expect("preset loads");
+        assert!(preset.params.is_empty());
+        assert_eq!(preset.keyframes.keys().collect::<Vec<_>>(), ["size"]);
+        assert_eq!(preset.expressions.keys().collect::<Vec<_>>(), ["size"]);
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
