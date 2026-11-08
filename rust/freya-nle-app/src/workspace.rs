@@ -5899,8 +5899,29 @@ fn audio_plugin_preset_commands(
             .or_else(|| plugin.params.get(name))
             .cloned()
             .unwrap_or(Value::Null);
+        let points = inspect_keyframe_track(Some(track), &fallback, clip.duration);
+        let preset_frames = points.iter().map(|point| point.frame).collect::<Vec<_>>();
+        // Replace the covered track rather than merging into it: a destination
+        // keyframe the preset does not carry would keep animating the plugin
+        // parameter past what was saved. Unselected tracks are left untouched.
+        if let Some(existing) = plugin
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get(name))
+        {
+            for point in inspect_keyframe_track(Some(existing), &fallback, clip.duration) {
+                if !preset_frames.contains(&point.frame) {
+                    commands.push(TimelineCommand::RemoveAudioPluginKeyframe {
+                        clip_id: clip.id,
+                        plugin_index,
+                        param_name: name.clone(),
+                        frame: point.frame,
+                    });
+                }
+            }
+        }
         commands.extend(
-            inspect_keyframe_track(Some(track), &fallback, clip.duration)
+            points
                 .into_iter()
                 .map(|point| TimelineCommand::SetAudioPluginKeyframe {
                     clip_id: clip.id,
@@ -10512,7 +10533,8 @@ mod tests {
                         "name": "Blur",
                         "params": {},
                         "keyframes": {
-                            "size": [{"frame": 0, "value": 9}, {"frame": 30, "value": 1}]
+                            "size": [{"frame": 0, "value": 9}, {"frame": 30, "value": 1}],
+                            "quality": [{"frame": 0, "value": 3}, {"frame": 20, "value": 4}]
                         }
                     }]
                 }]
@@ -10528,6 +10550,12 @@ mod tests {
             dirty: false,
         });
         destination_workspace.click_clip(1, false);
+        let quality_track = destination_workspace.document().clips[0].effects[0]
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get("quality"))
+            .cloned()
+            .expect("quality track");
         assert!(destination_workspace.load_effect_preset(&store, 0, "Tracked"));
         assert_eq!(
             destination_workspace
@@ -10537,6 +10565,14 @@ mod tests {
             "the saved expression comes back"
         );
         let effect = &destination_workspace.document().clips[0].effects[0];
+        assert_eq!(
+            effect
+                .keyframes
+                .as_ref()
+                .and_then(|tracks| tracks.get("quality")),
+            Some(&quality_track),
+            "an unselected track is left alone"
+        );
         let points = inspect_keyframe_track(
             effect
                 .keyframes
@@ -10802,6 +10838,82 @@ mod tests {
 
         assert!(workspace.delete_audio_plugin_preset(&store, 0, "Current"));
         assert!(store.names("gain").is_empty());
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn an_audio_plugin_preset_replaces_the_covered_keyframe_track() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-audio-plugin-track-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let state = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 9,
+                    "sceneId": 1,
+                    "type": "audio",
+                    "start": 20,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{"id": "audio", "name": "Audio", "params": {"volume": 1.0}}],
+                    "audioPlugins": [{
+                        "id": "gain",
+                        "enabled": true,
+                        "params": {"0": 0.25},
+                        "keyframes": {
+                            "0": [{"frame": 0, "value": 0.1}, {"frame": 30, "value": 0.9}]
+                        }
+                    }]
+                }]
+            }"#,
+        )
+        .expect("audio plugin track fixture loads");
+        let document = state.snapshot();
+        let mut workspace = WorkspaceModel::new(ProjectSession {
+            state,
+            document,
+            path: None,
+            media_directory: None,
+            dirty: false,
+        });
+        workspace.click_clip(9, false);
+        std::fs::create_dir_all(root.join("gain")).expect("preset directory");
+        std::fs::write(
+            root.join("gain").join("Fixed.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "effectId": "gain",
+                "name": "Fixed",
+                "enabled": true,
+                "params": {},
+                "keyframes": {"0": [{"frame": 0, "value": 0.5}]},
+                "expressions": {}
+            }))
+            .expect("preset serializes"),
+        )
+        .expect("preset is writable");
+
+        assert!(workspace.load_audio_plugin_preset(&store, 0, "Fixed"));
+        let plugin = &workspace.document().clips[0].audio_plugins[0];
+        let points = inspect_keyframe_track(
+            plugin.keyframes.as_ref().and_then(|tracks| tracks.get("0")),
+            &json!(0.0),
+            100,
+        );
+        assert_eq!(
+            points.len(),
+            1,
+            "the destination-only keyframe is replaced by the preset track"
+        );
+        assert_eq!(points[0].frame, 0);
+        assert_eq!(points[0].value, json!(0.5));
+
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
 }
