@@ -58,10 +58,11 @@ impl PresetStore {
         name: &str,
         params: Map<String, Value>,
         keyframes: Map<String, Value>,
+        expressions: Map<String, Value>,
         enabled: bool,
     ) -> Result<(), String> {
         let path = self.preset_path(effect_id, name, true)?;
-        let bytes = build_effect_preset(effect_id, name, enabled, params, keyframes)
+        let bytes = build_effect_preset(effect_id, name, enabled, params, keyframes, expressions)
             .map_err(|error| error.to_string())?;
         write_atomic(&path, &bytes).map_err(|error| format!("{}: {error}", path.display()))
     }
@@ -156,9 +157,16 @@ mod tests {
                     .cloned()
                     .expect("params"),
                 Map::new(),
+                Map::new(),
                 true,
             )
             .expect("save preset");
+        // The saved file records that it knows about expressions, so applying
+        // it can clear a target expression the preset does not carry.
+        let saved = store
+            .load_preset("blur", "Warm")
+            .expect("load saved preset");
+        assert!(saved.records_expressions());
         assert_eq!(store.names("blur"), ["Warm"]);
         assert_eq!(
             store

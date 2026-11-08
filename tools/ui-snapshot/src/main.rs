@@ -828,3 +828,65 @@ fn media(
         selected,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    // The row is used inside `SystemSettingsWindow`, which is a `Window`; Slint
+    // only generates host code for window roots, so wrap it in one for the test.
+    slint::slint! {
+        import { SystemSettingPathRow } from "../../../rust/freya-nle/ui/system-settings.slint";
+        export component PathRowHarness inherits Window {
+            in-out property <string> value <=> row.value;
+            in-out property <string> text <=> row.text;
+            callback edited(string);
+            width: 640px;
+            height: 44px;
+            row := SystemSettingPathRow {
+                label: "Backup folder";
+                edited(value) => { root.edited(value); }
+            }
+        }
+    }
+
+    /// A typed value used to break the row's only binding to `value`, so a
+    /// later Browse or Reload left the old text on screen while Apply saved
+    /// whatever the window property held. The row now follows `value` and
+    /// reports every text change, which is what this drives directly.
+    #[test]
+    fn backup_folder_row_follows_external_value_changes_after_typing() {
+        slint::platform::set_platform(Box::new(OffscreenPlatform))
+            .expect("install the offscreen platform");
+
+        let row = PathRowHarness::new().expect("create the path row");
+        let edits = Rc::new(RefCell::new(Vec::<String>::new()));
+        let edits_sink = edits.clone();
+        row.on_edited(move |text| edits_sink.borrow_mut().push(text.to_string()));
+
+        // Typing writes the field text and reports it immediately, so Apply and
+        // OK always save the displayed path.
+        row.set_text("/typed/elsewhere".into());
+        // Changed handlers run at the end of an event-loop iteration.
+        slint::platform::update_timers_and_animations();
+        assert_eq!(edits.borrow().as_slice(), ["/typed/elsewhere"]);
+
+        // Browse and Reload replace the value under a field that still holds a
+        // typed value; the row has to show the new path.
+        row.set_value("/picked/folder".into());
+        slint::platform::update_timers_and_animations();
+        assert_eq!(row.get_text(), "/picked/folder");
+        assert_eq!(
+            row.get_text(),
+            row.get_value(),
+            "the displayed path and the value Apply saves agree"
+        );
+
+        // Clearing the field keeps the two in step too.
+        row.set_text(String::new().into());
+        row.set_value("/another/folder".into());
+        slint::platform::update_timers_and_animations();
+        assert_eq!(row.get_text(), "/another/folder");
+    }
+}

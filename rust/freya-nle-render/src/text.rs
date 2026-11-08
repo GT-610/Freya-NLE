@@ -308,6 +308,9 @@ struct GlyphPlacement {
 struct LineLayout {
     glyphs: Vec<GlyphPlacement>,
     width: f32,
+    /// Glyph indices that are space characters, in ascending order. A
+    /// justified line inserts its extra advance after each of them.
+    spaces: Vec<usize>,
 }
 
 fn rasterize_with_face(
@@ -355,6 +358,7 @@ fn rasterize_with_face(
                 lines[index] = LineLayout {
                     glyphs,
                     width: logical_width,
+                    spaces: Vec::new(),
                 };
             }
         }
@@ -651,6 +655,9 @@ struct ShapedSegment {
     /// base span after layout.
     run_index: usize,
     glyphs: Vec<GlyphPlacement>,
+    /// Glyph indices in `glyphs` that are spaces; each one is a word gap for
+    /// justification.
+    spaces: Vec<usize>,
     width: f32,
     ascent: f32,
     scale: f32,
@@ -749,6 +756,7 @@ fn shape_ruby_block(block: &mut RubyBlockShape, segments: &[RunSegment], faces: 
             run_index: index,
             emoji: None,
             glyphs: layout.glyphs,
+            spaces: layout.spaces,
             width: layout.width,
             ascent: segment_ascent,
             scale,
@@ -907,6 +915,7 @@ fn rasterize_runs(
                 shaped_segments.push(ShapedSegment {
                     run_index: index,
                     glyphs: Vec::new(),
+                    spaces: Vec::new(),
                     width: cell_width,
                     ascent: segment.font_size * 0.8,
                     scale: 1.0,
@@ -938,6 +947,7 @@ fn rasterize_runs(
             shaped_segments.push(ShapedSegment {
                 run_index: segment.face_index,
                 glyphs: layout.glyphs,
+                spaces: layout.spaces,
                 width: layout.width,
                 ascent: (f32::from(face.ascender()) * scale).max(segment.font_size * 0.5),
                 scale,
@@ -979,6 +989,11 @@ fn rasterize_runs(
         .filter(|line| line.anchor.is_none())
         .map(|line| line.width)
         .fold(0.0_f32, f32::max);
+    // AviUtl justifies every line of a paragraph except its last one, which is
+    // the rule the single-style path already follows.
+    if plan.alignment == TextAlignment::Justify {
+        justify_run_lines(&mut lines, normal_width);
+    }
     // Which line each base run landed on, and how tall the tallest base glyph
     // on that line is, decide where furigana sits and how much the previous
     // line has to grow to make room for it.
@@ -1371,7 +1386,15 @@ fn shape_line(face: &Face<'_>, text: &str, scale: f32, letter_spacing: f32) -> L
     let mut minimum = 0.0_f32;
     let mut maximum = 0.0_f32;
     let mut placements = Vec::with_capacity(infos.len());
+    let mut spaces = Vec::new();
     for (index, (info, position)) in infos.iter().zip(positions).enumerate() {
+        if text
+            .as_bytes()
+            .get(info.cluster as usize)
+            .is_some_and(|byte| *byte == b' ')
+        {
+            spaces.push(index);
+        }
         placements.push(GlyphPlacement {
             glyph_id: info.glyph_id as u16,
             x: pen_x + position.x_offset as f32 * scale,
@@ -1390,6 +1413,7 @@ fn shape_line(face: &Face<'_>, text: &str, scale: f32, letter_spacing: f32) -> L
     LineLayout {
         glyphs: placements,
         width: (maximum - minimum).max(0.0),
+        spaces,
     }
 }
 
@@ -1423,6 +1447,8 @@ fn justified_glyphs(
             });
         }
     }
+    // The justified positions are offsets into this rebuilt glyph list, which
+    // the single-face path does not use.
     Some(glyphs)
 }
 
@@ -1453,6 +1479,85 @@ fn justified_word_offsets(
         }
     }
     Some(offsets)
+}
+
+/// Justifies every line of a run block except its last one, which keeps its
+/// natural width the way the single-style path leaves a paragraph's last line.
+fn justify_run_lines(lines: &mut [ShapedRunLine], target_width: f32) {
+    let last = lines.len().saturating_sub(1);
+    for line in &mut lines[..last] {
+        justify_run_line(line, target_width);
+    }
+}
+
+/// Spreads a justified run line's spare width across its word gaps.
+///
+/// A gap can sit inside a styled run or on a boundary between runs, so each
+/// segment's glyphs are shifted by the advance collected within it and the
+/// segment's width grows by the gaps it contains. That keeps the following
+/// runs, strikethroughs, and ruby spans in step with the wider line. A space
+/// only counts as a gap when text follows it on the line: a trailing space
+/// would otherwise take a share of the spare width and stretch the line's
+/// strikethrough past the text it belongs to.
+fn justify_run_line(line: &mut ShapedRunLine, target_width: f32) -> bool {
+    if line.anchor.is_some() {
+        return false;
+    }
+    // The last glyph on the line that is not a space, or the last emoji cell.
+    // Any space after it is trailing and cannot be a word gap.
+    let mut last_text = None;
+    for (segment_index, segment) in line.segments.iter().enumerate() {
+        if segment.emoji.is_some() {
+            // An emoji is content even though it carries no glyphs, so a space
+            // before it is a real word gap.
+            last_text = Some((segment_index, usize::MAX));
+            continue;
+        }
+        for (glyph_index, _) in segment.glyphs.iter().enumerate() {
+            if segment.spaces.binary_search(&glyph_index).is_err() {
+                last_text = Some((segment_index, glyph_index));
+            }
+        }
+    }
+    let is_gap = |segment_index: usize, glyph_index: usize| {
+        last_text.is_some_and(|last| (segment_index, glyph_index) < last)
+    };
+    let gaps = line
+        .segments
+        .iter()
+        .enumerate()
+        .map(|(segment_index, segment)| {
+            segment
+                .spaces
+                .iter()
+                .filter(|&&glyph_index| is_gap(segment_index, glyph_index))
+                .count()
+        })
+        .sum::<usize>();
+    if gaps == 0 || !target_width.is_finite() || target_width <= line.width {
+        return false;
+    }
+    let extra_per_gap = (target_width - line.width) / gaps as f32;
+    let mut shift = 0.0_f32;
+    for (segment_index, segment) in line.segments.iter_mut().enumerate() {
+        let start_shift = shift;
+        let mut spaces = segment
+            .spaces
+            .iter()
+            .copied()
+            .filter(|glyph_index| is_gap(segment_index, *glyph_index))
+            .peekable();
+        for (index, glyph) in segment.glyphs.iter_mut().enumerate() {
+            glyph.x += shift - start_shift;
+            if spaces.peek() == Some(&index) {
+                shift += extra_per_gap;
+                spaces.next();
+            }
+        }
+        segment.width += shift - start_shift;
+    }
+    line.width = target_width;
+    true
 }
 
 fn alignment_offset(alignment: TextAlignment, width: f32, line_width: f32) -> f32 {
@@ -1515,6 +1620,7 @@ impl GlyphScale {
                 })
                 .collect(),
             width: layout.width * self.x,
+            spaces: layout.spaces,
         }
     }
 }
@@ -2227,6 +2333,239 @@ mod tests {
         assert_eq!(
             justified_word_offsets(&[10.0, 10.0], 5.0, f32::INFINITY),
             None
+        );
+    }
+
+    fn shaped_segment(
+        glyph_xs: &[f32],
+        width: f32,
+        spaces: &[usize],
+        color: RgbaColor,
+    ) -> ShapedSegment {
+        ShapedSegment {
+            run_index: 0,
+            glyphs: glyph_xs
+                .iter()
+                .map(|x| GlyphPlacement {
+                    glyph_id: 1,
+                    x: *x,
+                    y_offset: 0.0,
+                })
+                .collect(),
+            spaces: spaces.to_vec(),
+            width,
+            ascent: 64.0,
+            scale: 1.0,
+            x_scale: 1.0,
+            y_scale: 1.0,
+            rotation: 0.0,
+            color,
+            outline_color: color,
+            outline_width: None,
+            face_index: 0,
+            font_size: 64.0,
+            strikethrough: false,
+            line_spacing: None,
+            emoji: None,
+        }
+    }
+
+    fn shaped_run_line(segments: Vec<ShapedSegment>) -> ShapedRunLine {
+        ShapedRunLine {
+            width: segments.iter().map(|segment| segment.width).sum(),
+            segments,
+            anchor: None,
+        }
+    }
+
+    #[test]
+    fn justification_spreads_authoritative_runs_across_their_word_gaps() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        // A plain authoritative run: two gaps, both inside the one segment.
+        let mut plain = shaped_run_line(vec![shaped_segment(
+            &[0.0, 10.0, 20.0, 30.0, 40.0],
+            50.0,
+            &[1, 3],
+            ink,
+        )]);
+        assert!(justify_run_line(&mut plain, 90.0));
+        assert_eq!(plain.width, 90.0);
+        assert_eq!(
+            plain.segments[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0, 40.0, 50.0, 80.0],
+            "each gap takes half of the twenty spare pixels"
+        );
+        assert_eq!(plain.segments[0].width, 90.0);
+    }
+
+    #[test]
+    fn justification_follows_a_gap_across_a_styled_run_boundary() {
+        let red = RgbaColor {
+            red: 255,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        let green = RgbaColor {
+            red: 0,
+            green: 255,
+            blue: 0,
+            alpha: 255,
+        };
+        // "ab " (red) + "cd" (green): the only gap ends the red run.
+        let mut boundary = shaped_run_line(vec![
+            shaped_segment(&[0.0, 10.0, 20.0], 30.0, &[2], red),
+            shaped_segment(&[0.0, 10.0], 20.0, &[], green),
+        ]);
+        assert!(justify_run_line(&mut boundary, 60.0));
+        assert_eq!(boundary.width, 60.0);
+        assert_eq!(boundary.segments[0].width, 40.0);
+        assert_eq!(
+            boundary.segments[1]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0],
+            "the following run retains segment-local positions"
+        );
+
+        // "ab" (red) + "c d" (green): the gap is inside the second run.
+        let mut inside = shaped_run_line(vec![
+            shaped_segment(&[0.0, 10.0], 20.0, &[], red),
+            shaped_segment(&[0.0, 10.0, 20.0], 30.0, &[1], green),
+        ]);
+        assert!(justify_run_line(&mut inside, 70.0));
+        assert_eq!(inside.segments[0].width, 20.0);
+        assert_eq!(
+            inside.segments[1]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0, 40.0],
+            "the space stays where it is and the next word moves over"
+        );
+        assert_eq!(inside.segments[1].width, 50.0);
+    }
+
+    #[test]
+    fn a_line_without_eligible_word_gaps_keeps_its_natural_width() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        let mut no_gaps = shaped_run_line(vec![
+            shaped_segment(&[0.0, 10.0], 20.0, &[], ink),
+            shaped_segment(&[0.0, 10.0], 20.0, &[], ink),
+        ]);
+        assert!(!justify_run_line(&mut no_gaps, 100.0));
+        assert_eq!(no_gaps.width, 40.0);
+        assert_eq!(no_gaps.segments[1].width, 20.0);
+
+        // A single word is not stretched even when it is narrower.
+        let mut one_word = shaped_run_line(vec![shaped_segment(&[0.0, 10.0], 20.0, &[], ink)]);
+        assert!(!justify_run_line(&mut one_word, 100.0));
+        assert_eq!(one_word.width, 20.0);
+    }
+
+    #[test]
+    fn a_trailing_space_is_not_a_word_gap() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        // "A " ends in a space with no text after it, so the line has no word
+        // gap and must not stretch (which would drag its strikethrough out to
+        // the block width).
+        let mut trailing = shaped_run_line(vec![shaped_segment(&[0.0, 10.0], 20.0, &[1], ink)]);
+        assert!(!justify_run_line(&mut trailing, 60.0));
+        assert_eq!(trailing.width, 20.0);
+        assert_eq!(
+            trailing.segments[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0]
+        );
+
+        // "A B " has one real gap and one trailing space: only the real gap is
+        // spread, and the trailing space rides along with the word before it.
+        let mut mixed = shaped_run_line(vec![shaped_segment(
+            &[0.0, 10.0, 20.0, 30.0],
+            40.0,
+            &[1, 3],
+            ink,
+        )]);
+        assert!(justify_run_line(&mut mixed, 60.0));
+        assert_eq!(mixed.width, 60.0);
+        assert_eq!(
+            mixed.segments[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x)
+                .collect::<Vec<_>>(),
+            [0.0, 10.0, 40.0, 50.0],
+            "the one real gap takes the whole twenty spare pixels"
+        );
+    }
+
+    #[test]
+    fn an_emoji_after_a_space_is_content() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        // "ab " + emoji: the emoji follows the space, so the space is a real
+        // word gap even though the emoji segment carries no glyphs of its own.
+        let mut emoji = shaped_segment(&[], 10.0, &[], ink);
+        emoji.emoji = Some("__test_star".to_owned());
+        let mut line = shaped_run_line(vec![
+            shaped_segment(&[0.0, 10.0, 20.0], 30.0, &[2], ink),
+            emoji,
+        ]);
+        assert!(justify_run_line(&mut line, 60.0));
+        assert_eq!(line.width, 60.0);
+        assert_eq!(
+            line.segments[0].width, 50.0,
+            "the gap before the emoji takes the whole twenty spare pixels"
+        );
+        assert_eq!(line.segments[1].width, 10.0, "the emoji cell is unchanged");
+    }
+
+    #[test]
+    fn the_last_authoritative_line_keeps_its_natural_width() {
+        let ink = RgbaColor {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        };
+        let mut lines = vec![
+            shaped_run_line(vec![shaped_segment(&[0.0, 10.0, 20.0], 30.0, &[1], ink)]),
+            shaped_run_line(vec![shaped_segment(&[0.0, 10.0, 20.0], 30.0, &[1], ink)]),
+        ];
+        justify_run_lines(&mut lines, 60.0);
+        assert_eq!(lines[0].width, 60.0, "the first line is spread");
+        assert_eq!(
+            lines[1].width, 30.0,
+            "the last line of the block keeps its natural width"
         );
     }
 

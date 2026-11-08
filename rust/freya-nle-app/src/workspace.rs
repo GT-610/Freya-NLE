@@ -1061,10 +1061,17 @@ impl WorkspaceModel {
             return false;
         };
         let effect_id = effect.id.clone();
-        let (params, keyframes) = match scope {
+        let saved_expressions = effect
+            .extra
+            .get("expressions")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let (params, keyframes, expressions) = match scope {
             None => (
                 effect.params.clone(),
                 effect.keyframes.clone().unwrap_or_default(),
+                saved_expressions,
             ),
             Some(names) => {
                 if names.is_empty() {
@@ -1081,14 +1088,6 @@ impl WorkspaceModel {
                     .filter(|(param, _)| names.iter().any(|name| name == *param))
                     .map(|(param, value)| (param.clone(), value.clone()))
                     .collect::<Map<String, Value>>();
-                if params.is_empty() {
-                    self.set_status(status_message!(
-                        "The selected parameters are not in this effect",
-                        "所选参数不属于这个特效",
-                        "選択した項目はこのエフェクトにありません"
-                    ));
-                    return false;
-                }
                 let keyframes = effect
                     .keyframes
                     .as_ref()
@@ -1100,10 +1099,35 @@ impl WorkspaceModel {
                             .collect::<Map<String, Value>>()
                     })
                     .unwrap_or_default();
-                (params, keyframes)
+                // A parameter can carry a keyframe track without a `params`
+                // entry, so a scope naming only that parameter is still in
+                // this effect and must be accepted.
+                if params.is_empty() && keyframes.is_empty() {
+                    self.set_status(status_message!(
+                        "The selected parameters are not in this effect",
+                        "所选参数不属于这个特效",
+                        "選択した項目はこのエフェクトにありません"
+                    ));
+                    return false;
+                }
+                // A scoped preset carries the expressions of its own
+                // parameters only, so applying it leaves the rest alone.
+                let expressions = saved_expressions
+                    .iter()
+                    .filter(|(param, _)| names.iter().any(|name| name == *param))
+                    .map(|(param, expression)| (param.clone(), expression.clone()))
+                    .collect::<Map<String, Value>>();
+                (params, keyframes, expressions)
             }
         };
-        let result = store.save(&effect_id, name, params, keyframes, effect.enabled);
+        let result = store.save(
+            &effect_id,
+            name,
+            params,
+            keyframes,
+            expressions,
+            effect.enabled,
+        );
         match result {
             Ok(()) => {
                 self.set_status(status_message!(
@@ -1150,10 +1174,11 @@ impl WorkspaceModel {
                 return false;
             }
         };
-        for command in commands {
-            if !self.execute(command) {
-                return false;
-            }
+        // Plan and apply the whole preset as one transaction: a validation
+        // failure (for example an expression over the size limit) must leave
+        // the effect unchanged rather than committing the earlier commands.
+        if !self.execute_batch(commands) {
+            return false;
         }
         self.set_status(status_message!(
             "Loaded preset {}",
@@ -1260,7 +1285,15 @@ impl WorkspaceModel {
                 (params, keyframes)
             }
         };
-        let result = store.save(&plugin_id, name, params, keyframes, plugin.enabled);
+        // Audio-plugin parameters have no expression form yet.
+        let result = store.save(
+            &plugin_id,
+            name,
+            params,
+            keyframes,
+            Map::new(),
+            plugin.enabled,
+        );
         match result {
             Ok(()) => {
                 self.set_status(status_message!(
@@ -1311,10 +1344,10 @@ impl WorkspaceModel {
                 return false;
             }
         };
-        for command in commands {
-            if !self.execute(command) {
-                return false;
-            }
+        // Apply the whole preset as one transaction so a failed load leaves the
+        // plugin unchanged.
+        if !self.execute_batch(commands) {
+            return false;
         }
         self.set_status(status_message!(
             "Loaded preset {}",
@@ -1362,6 +1395,11 @@ impl WorkspaceModel {
     /// Content and file parameters are left out for the same reason effect
     /// defaults leave them out: a new text object must not repeat the previous
     /// text and a new media object must not point at the previous file.
+    ///
+    /// A scene object's `targetSceneId` is project-specific rather than
+    /// stylistic: the target a fresh scene object gets is decided when it is
+    /// inserted, so a saved default would point the new object at whatever
+    /// scene the source project used.
     pub fn object_default_parameters(&self) -> Option<(String, Map<String, Value>)> {
         let clip = self.selected_clip_document()?;
         let mut effects = Map::new();
@@ -1372,7 +1410,12 @@ impl WorkspaceModel {
             let params = effect
                 .params
                 .iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "text" | "path" | "source" | "file"))
+                .filter(|(name, _)| {
+                    !matches!(
+                        name.as_str(),
+                        "text" | "path" | "source" | "file" | "targetSceneId"
+                    )
+                })
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect::<Map<String, Value>>();
             if !params.is_empty() {
@@ -3266,6 +3309,29 @@ impl WorkspaceModel {
         }
     }
 
+    /// Turns ExEdit's file-local `group` numbers into native group ids.
+    ///
+    /// The numbers in an object file count from one within that file, so reusing
+    /// them would merge an imported group with any project group that happens to
+    /// hold the same id. Clips that shared a source group share one fresh id,
+    /// each distinct source group gets its own, and `exoGroup` stays on the clip
+    /// so nothing the file said is lost.
+    fn map_exo_groups(&self, clips: &mut [ClipDocument]) {
+        let mut next = self.next_group_id();
+        let mut map = std::collections::BTreeMap::new();
+        for clip in clips {
+            let Some(source) = clip.extra.get("exoGroup").and_then(Value::as_i64) else {
+                continue;
+            };
+            let mapped = *map.entry(source).or_insert_with(|| {
+                let id = next;
+                next = next.saturating_add(1);
+                id
+            });
+            clip.group = Some(mapped);
+        }
+    }
+
     /// One past the largest group id in the project, so a new group never
     /// inherits another group's members.
     fn next_group_id(&self) -> i32 {
@@ -4104,6 +4170,20 @@ impl WorkspaceModel {
             text_default,
         );
         apply_clip_defaults(&mut clip, defaults);
+        // Defaults are stored per object type, not per project, so a target
+        // saved with a scene object must not replace the one this insertion
+        // just assigned. Applying it afterwards keeps every other saved
+        // parameter while pinning the target to the new object.
+        if let Some(target_scene_id) = target_scene_id
+            && let Some(scene_effect) = clip
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == object.id)
+        {
+            scene_effect
+                .params
+                .insert("targetSceneId".to_owned(), Value::from(target_scene_id));
+        }
         if !self.execute(TimelineCommand::InsertClip { index: None, clip }) {
             return false;
         }
@@ -4191,7 +4271,9 @@ impl WorkspaceModel {
             return None;
         }
         let summary = outcome.report.summary();
-        let next = self.insert_imported_clips(&scene, outcome.clips, summary)?;
+        let mut clips = outcome.clips;
+        self.map_exo_groups(&mut clips);
+        let next = self.insert_imported_clips(&scene, clips, summary)?;
         self.last_import_report = Some(outcome.report);
         Some(next)
     }
@@ -4444,6 +4526,7 @@ impl WorkspaceModel {
     /// range being written, not about discarding a neighbour's work. Both variants use the same
     /// importer, so the source range, linked video/audio pair, and probing rules cannot drift
     /// between them.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_media_from_bin(
         &mut self,
         entry_id: i32,
@@ -4452,6 +4535,8 @@ impl WorkspaceModel {
         maximum_layers: i32,
         catalog: &EffectCatalog,
         overwrite: bool,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Option<(i32, i32)> {
         let entry = self.media_bin().entry(entry_id)?.clone();
         let path =
@@ -4637,7 +4722,15 @@ impl WorkspaceModel {
             failed = Some(self.status.clone());
         }
         let inserted = if failed.is_none() {
-            self.import_media_file_at(&path, start, layer, placement, catalog)
+            self.import_media_file_at(
+                &path,
+                start,
+                layer,
+                placement,
+                catalog,
+                effect_defaults,
+                object_defaults,
+            )
         } else {
             Err(failed.unwrap_or_default())
         };
@@ -4677,6 +4770,7 @@ impl WorkspaceModel {
             None => Ok(()),
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn import_media_files(
         &mut self,
         paths: &[PathBuf],
@@ -4685,6 +4779,8 @@ impl WorkspaceModel {
         default_duration_frames: i32,
         maximum_layers: i32,
         catalog: &EffectCatalog,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Option<(i32, i32)> {
         let mut imported = 0usize;
         let mut errors = Vec::new();
@@ -4694,7 +4790,15 @@ impl WorkspaceModel {
             source_range: None,
         };
         for path in paths {
-            match self.import_media_file(path, frame, layer, placement, catalog) {
+            match self.import_media_file(
+                path,
+                frame,
+                layer,
+                placement,
+                catalog,
+                effect_defaults,
+                object_defaults,
+            ) {
                 Ok((next_frame, target_layer)) => {
                     frame = next_frame;
                     layer = target_layer;
@@ -4725,6 +4829,7 @@ impl WorkspaceModel {
         (imported > 0).then_some((frame, layer))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn import_media_file(
         &mut self,
         path: &Path,
@@ -4732,6 +4837,8 @@ impl WorkspaceModel {
         target_layer: i32,
         placement: MediaPlacement,
         catalog: &EffectCatalog,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Result<(i32, i32), String> {
         let scene_fps = self
             .selected_scene_document()
@@ -4765,11 +4872,20 @@ impl WorkspaceModel {
             )
             .map_err(|error| error.to_string())?,
         };
-        self.import_media_file_at(Path::new(&path), start, layer, placement, catalog)
+        self.import_media_file_at(
+            Path::new(&path),
+            start,
+            layer,
+            placement,
+            catalog,
+            effect_defaults,
+            object_defaults,
+        )
     }
 
     /// The one importer for a known start frame. Gap search and overwrite both end up here, so
     /// they cannot disagree about clip construction, linked audio, or source in-points.
+    #[allow(clippy::too_many_arguments)]
     fn import_media_file_at(
         &mut self,
         path: &Path,
@@ -4777,6 +4893,8 @@ impl WorkspaceModel {
         layer: i32,
         placement: MediaPlacement,
         catalog: &EffectCatalog,
+        effect_defaults: &Map<String, Value>,
+        object_defaults: &Map<String, Value>,
     ) -> Result<(i32, i32), String> {
         let scene_fps = self
             .selected_scene_document()
@@ -4808,40 +4926,62 @@ impl WorkspaceModel {
                     .state
                     .reserve_clip_ids(2)
                     .map_err(|error| error.to_string())?;
+                let mut video_clip = media_clip_from_metadata(
+                    ids[0],
+                    scene_id,
+                    start,
+                    layer,
+                    duration,
+                    video,
+                    Some(transform),
+                    "path",
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                apply_media_defaults(&mut video_clip, "video", effect_defaults, object_defaults);
+                pin_media_identity(
+                    &mut video_clip,
+                    "video",
+                    "path",
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                let mut audio_clip = media_clip_from_metadata(
+                    ids[1],
+                    scene_id,
+                    start,
+                    layer.saturating_add(1),
+                    duration,
+                    audio,
+                    None,
+                    "source",
+                    &path,
+                    true,
+                    placement.source_range,
+                    scene_fps,
+                );
+                apply_media_defaults(&mut audio_clip, "audio", effect_defaults, object_defaults);
+                pin_media_identity(
+                    &mut audio_clip,
+                    "audio",
+                    "source",
+                    &path,
+                    true,
+                    placement.source_range,
+                    scene_fps,
+                );
                 vec![
                     TimelineCommand::InsertClip {
                         index: None,
-                        clip: media_clip_from_metadata(
-                            ids[0],
-                            scene_id,
-                            start,
-                            layer,
-                            duration,
-                            video,
-                            Some(transform),
-                            "path",
-                            &path,
-                            false,
-                            placement.source_range,
-                            scene_fps,
-                        ),
+                        clip: video_clip,
                     },
                     TimelineCommand::InsertClip {
                         index: None,
-                        clip: media_clip_from_metadata(
-                            ids[1],
-                            scene_id,
-                            start,
-                            layer.saturating_add(1),
-                            duration,
-                            audio,
-                            None,
-                            "source",
-                            &path,
-                            true,
-                            placement.source_range,
-                            scene_fps,
-                        ),
+                        clip: audio_clip,
                     },
                 ]
             }
@@ -4872,23 +5012,31 @@ impl WorkspaceModel {
                     .state
                     .reserve_clip_ids(1)
                     .map_err(|error| error.to_string())?;
-                vec![TimelineCommand::InsertClip {
-                    index: None,
-                    clip: media_clip_from_metadata(
-                        ids[0],
-                        scene_id,
-                        start,
-                        layer,
-                        duration,
-                        object,
-                        transform,
-                        path_parameter,
-                        &path,
-                        false,
-                        placement.source_range,
-                        scene_fps,
-                    ),
-                }]
+                let mut clip = media_clip_from_metadata(
+                    ids[0],
+                    scene_id,
+                    start,
+                    layer,
+                    duration,
+                    object,
+                    transform,
+                    path_parameter,
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                apply_media_defaults(&mut clip, object_id, effect_defaults, object_defaults);
+                pin_media_identity(
+                    &mut clip,
+                    object_id,
+                    path_parameter,
+                    &path,
+                    false,
+                    placement.source_range,
+                    scene_fps,
+                );
+                vec![TimelineCommand::InsertClip { index: None, clip }]
             }
         };
         if !self.execute_batch(commands) {
@@ -5654,8 +5802,29 @@ fn effect_preset_commands(
             .or_else(|| effect.params.get(name))
             .cloned()
             .unwrap_or(Value::Null);
+        let points = inspect_keyframe_track(Some(track), &fallback, clip.duration);
+        let preset_frames = points.iter().map(|point| point.frame).collect::<Vec<_>>();
+        // Replace the covered track rather than merging into it: a destination
+        // keyframe the preset does not carry would keep animating the parameter
+        // past what was saved. Unselected tracks are left untouched.
+        if let Some(existing) = effect
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get(name))
+        {
+            for point in inspect_keyframe_track(Some(existing), &fallback, clip.duration) {
+                if !preset_frames.contains(&point.frame) {
+                    commands.push(TimelineCommand::RemoveEffectKeyframe {
+                        clip_id: clip.id,
+                        effect_index,
+                        param_name: name.clone(),
+                        frame: point.frame,
+                    });
+                }
+            }
+        }
         commands.extend(
-            inspect_keyframe_track(Some(track), &fallback, clip.duration)
+            points
                 .into_iter()
                 .map(|point| TimelineCommand::SetEffectKeyframe {
                     clip_id: clip.id,
@@ -5666,6 +5835,33 @@ fn effect_preset_commands(
                     options: point.options,
                 }),
         );
+    }
+    // Presets from version 2 know about expressions. A covered parameter with
+    // no saved expression clears the target's binding so the preset's value is
+    // what renders; a legacy preset cannot say either way and is left alone.
+    // A parameter can carry a keyframe track without a `params` entry (a
+    // keyframe set at a later frame on a parameter with no base value), so the
+    // names to cover are the union of the saved parameters and keyframe tracks.
+    if preset.records_expressions() {
+        let mut names = preset.params.keys().cloned().collect::<Vec<_>>();
+        for name in preset.keyframes.keys() {
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.clone());
+            }
+        }
+        commands.extend(names.into_iter().map(|name| {
+            let expression = preset
+                .expressions
+                .get(&name)
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            TimelineCommand::SetEffectExpression {
+                clip_id: clip.id,
+                effect_index,
+                param_name: name,
+                expression,
+            }
+        }));
     }
     commands.push(TimelineCommand::SetEffectEnabled {
         clip_id: clip.id,
@@ -5703,8 +5899,29 @@ fn audio_plugin_preset_commands(
             .or_else(|| plugin.params.get(name))
             .cloned()
             .unwrap_or(Value::Null);
+        let points = inspect_keyframe_track(Some(track), &fallback, clip.duration);
+        let preset_frames = points.iter().map(|point| point.frame).collect::<Vec<_>>();
+        // Replace the covered track rather than merging into it: a destination
+        // keyframe the preset does not carry would keep animating the plugin
+        // parameter past what was saved. Unselected tracks are left untouched.
+        if let Some(existing) = plugin
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get(name))
+        {
+            for point in inspect_keyframe_track(Some(existing), &fallback, clip.duration) {
+                if !preset_frames.contains(&point.frame) {
+                    commands.push(TimelineCommand::RemoveAudioPluginKeyframe {
+                        clip_id: clip.id,
+                        plugin_index,
+                        param_name: name.clone(),
+                        frame: point.frame,
+                    });
+                }
+            }
+        }
         commands.extend(
-            inspect_keyframe_track(Some(track), &fallback, clip.duration)
+            points
                 .into_iter()
                 .map(|point| TimelineCommand::SetAudioPluginKeyframe {
                     clip_id: clip.id,
@@ -5802,34 +6019,84 @@ fn media_clip_from_metadata(
     let mut clip = object_clip_from_metadata(
         clip_id, scene_id, start, layer, duration, object, transform, None, None,
     );
-    if let Some(object_effect) = clip
+    pin_media_identity(
+        &mut clip,
+        object.id.as_str(),
+        path_parameter,
+        path,
+        linked_video,
+        source_range,
+        scene_fps,
+    );
+    clip
+}
+
+/// Re-establishes which media a clip refers to.
+///
+/// Creation defaults are saved per object type and can still name a path,
+/// source range, or link from whatever object they came from. A newly imported
+/// clip must keep the file it was imported from, so the identity fields are
+/// written after the defaults rather than before them.
+fn pin_media_identity(
+    clip: &mut ClipDocument,
+    object_id: &str,
+    path_parameter: &str,
+    path: &str,
+    linked_video: bool,
+    source_range: Option<(i32, i32)>,
+    scene_fps: f64,
+) {
+    let Some(object_effect) = clip
         .effects
         .iter_mut()
-        .find(|effect| effect.id == object.id)
-    {
+        .find(|effect| effect.id == object_id)
+    else {
+        return;
+    };
+    object_effect
+        .params
+        .insert(path_parameter.to_owned(), Value::from(path));
+    object_effect.params.remove("linkedVideo");
+    if linked_video {
         object_effect
             .params
-            .insert(path_parameter.to_owned(), Value::from(path));
-        if linked_video {
-            object_effect
-                .params
-                .insert("linkedVideo".to_owned(), Value::Bool(true));
-        }
-        if let Some((start, _)) = source_range {
-            let (name, value) = match object.id.as_str() {
-                "video" => ("startFrame", Value::from(start)),
-                "audio" => (
-                    "startTime",
-                    Value::from(f64::from(start) / scene_fps.max(f64::EPSILON)),
-                ),
-                _ => ("", Value::Null),
-            };
-            if !name.is_empty() {
-                object_effect.params.insert(name.to_owned(), value);
-            }
+            .insert("linkedVideo".to_owned(), Value::Bool(true));
+    }
+    object_effect.params.remove("startFrame");
+    object_effect.params.remove("startTime");
+    // Without a trimmed range the source starts at its first frame, so a stale
+    // saved in-point is replaced rather than merely dropped.
+    let source_start = source_range.map_or(0, |(start, _)| start);
+    let (name, value) = match object_id {
+        "video" => ("startFrame", Value::from(source_start)),
+        "audio" => (
+            "startTime",
+            Value::from(f64::from(source_start) / scene_fps.max(f64::EPSILON)),
+        ),
+        _ => ("", Value::Null),
+    };
+    if !name.is_empty() {
+        object_effect.params.insert(name.to_owned(), value);
+    }
+}
+
+/// Applies the effect defaults, overlaid with the defaults saved for this
+/// object type, to a newly imported media clip.
+fn apply_media_defaults(
+    clip: &mut ClipDocument,
+    object_id: &str,
+    effect_defaults: &Map<String, Value>,
+    object_defaults: &Map<String, Value>,
+) {
+    let mut merged = effect_defaults.clone();
+    if let Some(params) = object_defaults.get(object_id).and_then(Value::as_object) {
+        // The object type's own entry wins over an effect default for the same
+        // effect, matching catalog object creation.
+        for (effect_id, params) in params {
+            merged.insert(effect_id.clone(), params.clone());
         }
     }
-    clip
+    apply_clip_defaults(clip, &merged);
 }
 
 fn find_vacant_linked_media_frame(
@@ -6560,6 +6827,68 @@ mod tests {
     }
 
     #[test]
+    fn scene_object_defaults_do_not_capture_the_target_scene() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        assert!(workspace.insert_catalog_object_at(
+            "scene",
+            10,
+            4,
+            30,
+            &catalog,
+            None,
+            &Map::new()
+        ));
+        // The inserted object carries a target chosen for this project.
+        let scene = workspace
+            .selected_clip_document()
+            .expect("new scene object becomes the selection");
+        assert_eq!(scene.effects[1].params["targetSceneId"], 2);
+
+        let (object_id, defaults) = workspace
+            .object_default_parameters()
+            .expect("the selected scene object has defaults");
+        assert_eq!(object_id, "scene");
+        let scene_defaults = defaults["scene"]
+            .as_object()
+            .expect("the scene effect contributes defaults");
+        assert!(
+            !scene_defaults.contains_key("targetSceneId"),
+            "a project-specific target must not become a creation default: {scene_defaults:?}"
+        );
+        // Everything stylistic still carries over.
+        assert!(scene_defaults.contains_key("speed"));
+        assert!(scene_defaults.contains_key("opacity"));
+    }
+
+    #[test]
+    fn a_new_scene_object_keeps_its_target_when_stored_defaults_are_stale() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        // A defaults file saved before this fix, or from another project, can
+        // still name a target that does not belong to this insertion.
+        let mut stale = serde_json::Map::new();
+        stale.insert("targetSceneId".to_owned(), json!(99));
+        stale.insert("speed".to_owned(), json!(2.5));
+        let mut defaults = serde_json::Map::new();
+        defaults.insert("scene".to_owned(), serde_json::Value::Object(stale));
+
+        assert!(workspace.insert_catalog_object_at("scene", 10, 4, 30, &catalog, None, &defaults));
+        let scene = workspace
+            .selected_clip_document()
+            .expect("new scene object becomes the selection");
+        let params = &scene.effects[1].params;
+        assert_eq!(
+            params["targetSceneId"], 2,
+            "the target assigned at creation wins over the stored default"
+        );
+        assert_eq!(
+            params["speed"], 2.5,
+            "other saved scene-object defaults still apply"
+        );
+    }
+
+    #[test]
     fn object_list_reports_the_objects_under_the_playhead_in_layer_order() {
         let mut workspace = workspace();
         workspace.seek(10);
@@ -6688,6 +7017,31 @@ mod tests {
         freya_nle_core::exo::ExoFile::parse(&bytes).expect("fixture parses")
     }
 
+    /// A minimal object file with four text objects: a group shared by the
+    /// first two, a distinct group on the third, and an ungrouped fourth.
+    fn grouped_object_file_fixture() -> freya_nle_core::exo::ExoFile {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(
+            b"[exedit]\r\nwidth=1920\r\nheight=1080\r\nrate=60\r\nscale=100\r\nlength=300\r\n\
+              audio_rate=48000\r\naudio_ch=2\r\n",
+        );
+        for (index, (layer, group)) in [(2, Some(1)), (3, Some(1)), (4, Some(2)), (5, None)]
+            .into_iter()
+            .enumerate()
+        {
+            bytes.extend_from_slice(
+                format!("[{index}]\r\nstart=1\r\nend=16\r\nlayer={layer}\r\n").as_bytes(),
+            );
+            if let Some(group) = group {
+                bytes.extend_from_slice(format!("group={group}\r\n").as_bytes());
+            }
+            bytes.extend_from_slice(format!("[{index}.0]\r\n_name=").as_bytes());
+            bytes.extend_from_slice(&[0xce, 0xc4, 0xb1, 0xbe]); // 文本
+            bytes.extend_from_slice(b"\r\ntext=4100\r\n");
+        }
+        freya_nle_core::exo::ExoFile::parse(&bytes).expect("grouped fixture parses")
+    }
+
     #[test]
     fn exo_import_adds_clips_as_one_undoable_edit() {
         let (catalog, _) = EffectCatalog::load();
@@ -6719,6 +7073,155 @@ mod tests {
         assert_eq!(workspace.document().clips.len(), before);
         assert!(workspace.redo());
         assert_eq!(workspace.document().clips.len(), before + 1);
+    }
+
+    #[test]
+    fn exo_import_maps_source_groups_to_fresh_native_groups() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        // Give the project a group with id 1, the number the file also uses.
+        workspace.click_clip(1, false);
+        workspace.click_clip(2, true);
+        assert!(workspace.group_selected_clips());
+        let existing_group = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.id == 1)
+            .and_then(|clip| clip.group)
+            .expect("the fixture group exists");
+
+        assert!(
+            workspace
+                .import_exo_object_file(
+                    &grouped_object_file_fixture(),
+                    crate::exo_import::ImportPlacement::default(),
+                    &catalog,
+                )
+                .is_some()
+        );
+        let imported = selected_ids(&workspace);
+        assert_eq!(imported.len(), 4);
+        let clip = |id: i32| {
+            workspace
+                .document()
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .cloned()
+                .expect("the imported clip exists")
+        };
+        let shared = clip(imported[0]);
+        let partner = clip(imported[1]);
+        let distinct = clip(imported[2]);
+        let ungrouped = clip(imported[3]);
+
+        let shared_group = shared.group.expect("a source group becomes a native group");
+        assert_eq!(
+            partner.group,
+            Some(shared_group),
+            "objects that shared a source group share one native group"
+        );
+        assert_ne!(
+            shared_group, existing_group,
+            "a file-local group number must not merge with a project group using it"
+        );
+        assert!(shared_group > existing_group);
+        let distinct_group = distinct
+            .group
+            .expect("a second source group becomes a second native group");
+        assert_ne!(distinct_group, shared_group);
+        assert_eq!(ungrouped.group, None, "an ungrouped object stays ungrouped");
+
+        // The source number stays on the clip for a future object-file export.
+        assert_eq!(shared.extra["exoGroup"], serde_json::json!(1));
+        assert_eq!(partner.extra["exoGroup"], serde_json::json!(1));
+        assert_eq!(distinct.extra["exoGroup"], serde_json::json!(2));
+
+        // Selection and dragging treat the imported group as one unit.
+        workspace.click_clip(imported[0], false);
+        assert_eq!(selected_ids(&workspace), [imported[0], imported[1]]);
+        let request = TimelineDragRequest {
+            anchor_clip_id: imported[0],
+            kind: TimelineDragKind::Move,
+            delta_pixels: (10.0, 0.0),
+            pixels_per_frame: 1.0,
+            layer_height: 30.0,
+            minimum_duration_frames: 1,
+            maximum_layers: 128,
+            ignore_snap: true,
+        };
+        assert!(workspace.drag_selected_clips(request));
+        let start = |id: i32| {
+            workspace
+                .document()
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .map(|clip| clip.start)
+                .expect("the imported clip still exists")
+        };
+        assert_eq!(start(imported[0]), 10);
+        assert_eq!(start(imported[1]), 10);
+        assert_eq!(start(imported[2]), 0);
+
+        // Undo removes the import, and redo brings the same grouping back.
+        assert!(workspace.undo());
+        assert!(workspace.undo());
+        assert!(
+            workspace
+                .document()
+                .clips
+                .iter()
+                .all(|clip| !imported.contains(&clip.id))
+        );
+        assert!(workspace.redo());
+        assert_eq!(
+            workspace
+                .document()
+                .clips
+                .iter()
+                .find(|clip| clip.id == imported[0])
+                .and_then(|clip| clip.group),
+            Some(shared_group)
+        );
+    }
+
+    #[test]
+    fn repeated_exo_imports_keep_their_groups_apart() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let file = grouped_object_file_fixture();
+        let mut import = || {
+            assert!(
+                workspace
+                    .import_exo_object_file(
+                        &file,
+                        crate::exo_import::ImportPlacement::default(),
+                        &catalog,
+                    )
+                    .is_some()
+            );
+            selected_ids(&workspace)
+                .into_iter()
+                .filter_map(|id| {
+                    workspace
+                        .document()
+                        .clips
+                        .iter()
+                        .find(|clip| clip.id == id)
+                        .and_then(|clip| clip.group)
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = import();
+        let second = import();
+        assert_eq!(first.len(), 3, "two grouped objects and one distinct group");
+        assert_eq!(second.len(), 3);
+        assert!(
+            first.iter().all(|group| !second.contains(group)),
+            "a repeated import must not join the previous import's groups"
+        );
     }
 
     #[test]
@@ -7741,7 +8244,7 @@ mod tests {
 
         let before = workspace.document().clips.len();
         let inserted = workspace
-            .insert_media_from_bin(id, 0, 2, 8, &catalog, false)
+            .insert_media_from_bin(id, 0, 2, 8, &catalog, false, &Map::new(), &Map::new())
             .expect("the image is inserted");
         assert_eq!(inserted.0, 10, "ten source frames are placed");
         assert_eq!(workspace.document().clips.len(), before + 1);
@@ -7777,7 +8280,7 @@ mod tests {
         let undo_depth = workspace.undo.len();
         assert!(
             workspace
-                .insert_media_from_bin(id, 10, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 10, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_some()
         );
         assert_eq!(
@@ -7839,7 +8342,7 @@ mod tests {
         let revision = workspace.document_revision();
         assert!(
             workspace
-                .insert_media_from_bin(id, 0, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 0, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_none()
         );
         assert!(workspace.status().contains("Layer 2 is locked"));
@@ -7865,7 +8368,7 @@ mod tests {
         // the head of clip 3; both neighbours keep the frames the replacement does not cover.
         assert!(
             workspace
-                .insert_media_from_bin(id, 25, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 25, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_some()
         );
         let spans = workspace
@@ -7903,7 +8406,7 @@ mod tests {
         let revision = workspace.document_revision();
         assert!(
             workspace
-                .insert_media_from_bin(id, 10, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 10, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_none()
         );
         assert_eq!(
@@ -7926,7 +8429,7 @@ mod tests {
         let before = workspace.document().clips.clone();
         assert!(
             workspace
-                .insert_media_from_bin(id, 10, 0, 8, &catalog, true)
+                .insert_media_from_bin(id, 10, 0, 8, &catalog, true, &Map::new(), &Map::new())
                 .is_none()
         );
         assert_eq!(workspace.document_revision(), revision);
@@ -8623,7 +9126,16 @@ mod tests {
         let mut workspace = workspace();
 
         assert_eq!(
-            workspace.import_media_files(&paths, 60, 4, 15, 128, &catalog),
+            workspace.import_media_files(
+                &paths,
+                60,
+                4,
+                15,
+                128,
+                &catalog,
+                &Map::new(),
+                &Map::new()
+            ),
             Some((105, 4))
         );
         assert_eq!(workspace.status(), "Imported 3 media file(s)");
@@ -8687,6 +9199,253 @@ mod tests {
         for path in paths {
             std::fs::remove_file(path).expect("temporary media placeholder is removable");
         }
+    }
+
+    #[test]
+    fn media_import_applies_creation_defaults_without_losing_the_source() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let path = temporary_media_file("png");
+        let expected_path = Value::from(path.to_string_lossy().into_owned());
+
+        // The object type's default wins over the effect default for the same
+        // effect, and the stale path inside both must not replace the import.
+        let effect_defaults = serde_json::json!({
+            "transform": {"x": 50.0},
+            "image": {"path": "/saved/picture.png"}
+        })
+        .as_object()
+        .cloned()
+        .expect("effect defaults are an object");
+        let object_defaults = serde_json::json!({
+            "image": {
+                "transform": {"x": 320.0},
+                "image": {"path": "/saved/picture.png", "opacity": 0.4}
+            }
+        })
+        .as_object()
+        .cloned()
+        .expect("object defaults are an object");
+
+        assert_eq!(
+            workspace.import_media_files(
+                std::slice::from_ref(&path),
+                0,
+                2,
+                15,
+                8,
+                &catalog,
+                &effect_defaults,
+                &object_defaults,
+            ),
+            Some((15, 2))
+        );
+        let image = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "image")
+            .expect("the image clip exists");
+        assert_eq!(image.duration, 15);
+        let transform = image
+            .effects
+            .iter()
+            .find(|effect| effect.id == "transform")
+            .expect("the image carries a transform");
+        assert_eq!(
+            transform.params["x"],
+            serde_json::json!(320.0),
+            "the object type's default wins over the effect default"
+        );
+        let image_effect = image
+            .effects
+            .iter()
+            .find(|effect| effect.id == "image")
+            .expect("the image effect exists");
+        assert_eq!(image_effect.params["path"], expected_path);
+        assert_eq!(image_effect.params["opacity"], serde_json::json!(0.4));
+
+        std::fs::remove_file(path).expect("temporary media placeholder is removable");
+    }
+
+    #[test]
+    fn media_import_keeps_a_linked_video_pair_over_stale_defaults() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace();
+        let path = temporary_media_file("mp4");
+        let expected_path = Value::from(path.to_string_lossy().into_owned());
+
+        // Saved defaults can name a file, in-point, and link state copied from
+        // another project; none of them may win over what was just imported.
+        let effect_defaults = serde_json::json!({
+            "video": {"path": "/saved/video.mp4", "startFrame": 42},
+            "audio": {"source": "/saved/audio.wav", "startTime": 2.0, "linkedVideo": false}
+        })
+        .as_object()
+        .cloned()
+        .expect("effect defaults are an object");
+        let object_defaults = serde_json::json!({
+            "video": {"video": {"path": "/saved/video.mp4", "startFrame": 99, "opacity": 0.5}},
+            "audio": {"audio": {
+                "source": "/saved/audio.wav",
+                "startTime": 3.5,
+                "linkedVideo": false,
+                "volume": 0.25
+            }}
+        })
+        .as_object()
+        .cloned()
+        .expect("object defaults are an object");
+
+        workspace.import_media_files(
+            std::slice::from_ref(&path),
+            0,
+            0,
+            15,
+            8,
+            &catalog,
+            &effect_defaults,
+            &object_defaults,
+        );
+        let video = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "video")
+            .expect("the video clip exists");
+        let video_effect = video
+            .effects
+            .iter()
+            .find(|effect| effect.id == "video")
+            .expect("the video object exists");
+        assert_eq!(video_effect.params["path"], expected_path);
+        assert_eq!(
+            video_effect.params["startFrame"],
+            serde_json::json!(0),
+            "an untrimmed import starts at the source's first frame"
+        );
+        assert_eq!(
+            video_effect.params["opacity"],
+            serde_json::json!(0.5),
+            "other saved video defaults still apply"
+        );
+
+        let linked_audio = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| {
+                clip.clip_type == "audio"
+                    && clip.effects[0].params["linkedVideo"] == Value::Bool(true)
+            })
+            .expect("the linked audio half exists");
+        let audio_effect = &linked_audio.effects[0].params;
+        assert_eq!(audio_effect["source"], expected_path);
+        assert_eq!(audio_effect["startTime"], serde_json::json!(0.0));
+        assert_eq!(audio_effect["volume"], serde_json::json!(0.25));
+
+        // The bin path honours the entry's in-point even when a saved default
+        // names another one, and the linked audio follows it.
+        let mut from_bin = self::workspace();
+        from_bin.add_media_to_bin(std::slice::from_ref(&path), 60.0, 40);
+        let entry_id = from_bin.media_bin().entries()[0].id;
+        assert!(from_bin.set_media_bin_range(entry_id, Some(5), Some(15)));
+        assert!(
+            from_bin
+                .insert_media_from_bin(
+                    entry_id,
+                    0,
+                    0,
+                    8,
+                    &catalog,
+                    false,
+                    &effect_defaults,
+                    &object_defaults,
+                )
+                .is_some()
+        );
+        let ranged_video = from_bin
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "video")
+            .expect("the ranged video exists");
+        assert_eq!(ranged_video.duration, 10);
+        assert_eq!(
+            ranged_video.effects[1].params["startFrame"],
+            serde_json::json!(5),
+            "the entry's in-point wins over the saved default"
+        );
+        let ranged_audio = from_bin
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "audio")
+            .expect("the linked audio follows the ranged video");
+        assert_eq!(
+            ranged_audio.effects[0].params["linkedVideo"],
+            Value::Bool(true)
+        );
+        assert_eq!(
+            ranged_audio.effects[0].params["startTime"],
+            serde_json::json!(5.0 / 60.0),
+            "the linked audio in-point follows the ranged video"
+        );
+
+        std::fs::remove_file(path).expect("temporary media placeholder is removable");
+    }
+
+    #[test]
+    fn media_bin_overwrite_applies_creation_defaults_and_keeps_the_range() {
+        let (catalog, _) = EffectCatalog::load();
+        let mut workspace = workspace_with_row();
+        let path = temporary_media_file("wav");
+        workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
+        let id = workspace.media_bin().entries()[0].id;
+        assert!(workspace.set_media_bin_range(id, Some(0), Some(5)));
+        let object_defaults = serde_json::json!({
+            "audio": {"audio": {
+                "source": "/saved/audio.wav",
+                "startTime": 4.5,
+                "volume": 0.25,
+                "pan": -0.4
+            }}
+        })
+        .as_object()
+        .cloned()
+        .expect("object defaults are an object");
+
+        // Overwrite the rect covering frames 0..10 with a five-frame audio clip.
+        assert_eq!(
+            workspace.insert_media_from_bin(
+                id,
+                0,
+                0,
+                8,
+                &catalog,
+                true,
+                &Map::new(),
+                &object_defaults,
+            ),
+            Some((5, 0))
+        );
+        let audio = workspace
+            .document()
+            .clips
+            .iter()
+            .find(|clip| clip.clip_type == "audio")
+            .expect("the overwriting audio clip exists");
+        assert_eq!(audio.duration, 5, "the bin range sets the length");
+        let params = &audio.effects[0].params;
+        assert_eq!(
+            params["source"],
+            Value::from(path.to_string_lossy().into_owned())
+        );
+        assert_eq!(params["startTime"], serde_json::json!(0.0));
+        assert_eq!(params["volume"], serde_json::json!(0.25));
+        assert_eq!(params["pan"], serde_json::json!(-0.4));
+
+        std::fs::remove_file(path).expect("temporary media placeholder is removable");
     }
 
     #[test]
@@ -9501,6 +10260,7 @@ mod tests {
             .as_object()
             .cloned()
             .expect("keyframes"),
+            expressions: Map::new(),
             extra: Default::default(),
         };
 
@@ -9659,21 +10419,35 @@ mod tests {
             dirty: false,
         });
         workspace.click_clip(1, false);
+        assert!(workspace.set_effect_expression(0, "size", Some("5 * 2")));
+        assert!(workspace.set_effect_expression(0, "quality", Some("3 * 3")));
 
         let scope = ["size".to_owned()];
         assert!(workspace.save_effect_preset_scoped(&store, 0, "Sized", Some(&scope)));
         let preset = store.load_preset("blur", "Sized").expect("preset loads");
         assert_eq!(preset.params.keys().collect::<Vec<_>>(), ["size"]);
         assert_eq!(preset.keyframes.keys().collect::<Vec<_>>(), ["size"]);
+        assert_eq!(preset.expressions.keys().collect::<Vec<_>>(), ["size"]);
 
         // Loading the scoped preset restores the chosen item and leaves the
         // other one at the value the user set in the meantime.
         assert!(workspace.set_effect_parameter_at_frame(0, "size", 0, json!(1.0)));
         assert!(workspace.set_effect_parameter_at_frame(0, "quality", 0, json!(9.0)));
+        assert!(workspace.set_effect_expression(0, "size", Some("1 * 1")));
         assert!(workspace.load_effect_preset(&store, 0, "Sized"));
         let effect = &workspace.document().clips[0].effects[0];
         assert_eq!(effect.params["size"], json!(5));
         assert_eq!(effect.params["quality"], json!(9.0));
+        assert_eq!(
+            workspace.effect_expression(0, "size").as_deref(),
+            Some("5 * 2"),
+            "the selected parameter's expression comes back"
+        );
+        assert_eq!(
+            workspace.effect_expression(0, "quality").as_deref(),
+            Some("3 * 3"),
+            "a scoped preset leaves unselected expressions alone"
+        );
 
         assert!(
             !workspace.save_effect_preset_scoped(&store, 0, "Empty", Some(&[])),
@@ -9682,6 +10456,330 @@ mod tests {
         let unknown = ["missing".to_owned()];
         assert!(!workspace.save_effect_preset_scoped(&store, 0, "Unknown", Some(&unknown)));
         assert!(store.names("blur").iter().all(|name| name == "Sized"));
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_scoped_preset_accepts_a_keyframe_only_parameter() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-keyframe-only-scope-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let state = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1,
+                    "sceneId": 1,
+                    "type": "rect",
+                    "start": 0,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{
+                        "id": "blur",
+                        "name": "Blur",
+                        "params": {},
+                        "keyframes": {"size": [{"frame": 0, "value": 5}]}
+                    }]
+                }]
+            }"#,
+        )
+        .expect("keyframe-only scoped preset fixture loads");
+        let document = state.snapshot();
+        let mut workspace = WorkspaceModel::new(ProjectSession {
+            state,
+            document,
+            path: None,
+            media_directory: None,
+            dirty: false,
+        });
+        workspace.click_clip(1, false);
+        assert!(workspace.set_effect_expression(0, "size", Some("5 * 2")));
+
+        // `size` has a keyframe track but no `params` entry, so the scope has to
+        // be checked against the tracks too, not only the parameters.
+        let scope = ["size".to_owned()];
+        assert!(
+            workspace.save_effect_preset_scoped(&store, 0, "Tracked", Some(&scope)),
+            "a keyframe-only parameter can be saved on its own"
+        );
+        let preset = store.load_preset("blur", "Tracked").expect("preset loads");
+        assert!(preset.params.is_empty());
+        assert_eq!(preset.keyframes.keys().collect::<Vec<_>>(), ["size"]);
+        assert_eq!(preset.expressions.keys().collect::<Vec<_>>(), ["size"]);
+
+        // Apply it to a destination with no base `size` parameter and different
+        // keyframes: the saved track and expression must replace them, and the
+        // destination-only keyframe must not survive.
+        let destination = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 1,
+                    "sceneId": 1,
+                    "type": "rect",
+                    "start": 0,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{
+                        "id": "blur",
+                        "name": "Blur",
+                        "params": {},
+                        "keyframes": {
+                            "size": [{"frame": 0, "value": 9}, {"frame": 30, "value": 1}],
+                            "quality": [{"frame": 0, "value": 3}, {"frame": 20, "value": 4}]
+                        }
+                    }]
+                }]
+            }"#,
+        )
+        .expect("destination fixture loads");
+        let document = destination.snapshot();
+        let mut destination_workspace = WorkspaceModel::new(ProjectSession {
+            state: destination,
+            document,
+            path: None,
+            media_directory: None,
+            dirty: false,
+        });
+        destination_workspace.click_clip(1, false);
+        let quality_track = destination_workspace.document().clips[0].effects[0]
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get("quality"))
+            .cloned()
+            .expect("quality track");
+        assert!(destination_workspace.load_effect_preset(&store, 0, "Tracked"));
+        assert_eq!(
+            destination_workspace
+                .effect_expression(0, "size")
+                .as_deref(),
+            Some("5 * 2"),
+            "the saved expression comes back"
+        );
+        let effect = &destination_workspace.document().clips[0].effects[0];
+        assert_eq!(
+            effect
+                .keyframes
+                .as_ref()
+                .and_then(|tracks| tracks.get("quality")),
+            Some(&quality_track),
+            "an unselected track is left alone"
+        );
+        let points = inspect_keyframe_track(
+            effect
+                .keyframes
+                .as_ref()
+                .and_then(|tracks| tracks.get("size")),
+            &json!(0),
+            100,
+        );
+        assert_eq!(
+            points.len(),
+            1,
+            "the destination-only keyframe is replaced by the preset track"
+        );
+        assert_eq!(points[0].frame, 0);
+        assert_eq!(points[0].value, json!(5), "the saved keyframe value wins");
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn effect_presets_round_trip_expressions_and_keep_evaluating() {
+        use freya_nle_core::api::SceneRenderPlan;
+
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-expression-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(3.0)));
+        assert!(workspace.set_effect_expression(0, "count", Some("10 + time * 2")));
+        assert!(workspace.save_effect_preset(&store, 0, "Animated"));
+
+        // Moving both the fallback and the binding away must not survive the
+        // preset: the expression is part of what was saved.
+        assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(7.0)));
+        assert!(workspace.set_effect_expression(0, "count", None));
+        assert!(workspace.load_effect_preset(&store, 0, "Animated"));
+        assert_eq!(
+            workspace.effect_expression(0, "count").as_deref(),
+            Some("10 + time * 2")
+        );
+        assert_eq!(
+            workspace.document().clips[0].effects[0].params["count"]["value"],
+            json!(3),
+            "the fallback value comes back with the expression"
+        );
+
+        // The restored binding still drives evaluation, not just storage.
+        let mut plan = SceneRenderPlan::from_document(workspace.document(), 1)
+            .expect("the scene plans from the document");
+        let frame = plan.evaluate(60);
+        let rect = frame.layers[0]
+            .effects
+            .iter()
+            .find(|effect| effect.id == "rect")
+            .expect("rect effect");
+        assert_eq!(rect.params["count"], json!(12.0));
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_preset_without_an_expression_clears_the_target_binding() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-plain-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        // Saved with no expression, so the preset describes a plain value.
+        assert!(workspace.save_effect_preset(&store, 0, "Plain"));
+        assert!(workspace.set_effect_expression(0, "count", Some("2 * 2")));
+        assert!(workspace.load_effect_preset(&store, 0, "Plain"));
+        assert_eq!(
+            workspace.effect_expression(0, "count"),
+            None,
+            "a current-format preset clears a binding it does not carry"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_legacy_preset_leaves_the_target_expression_alone() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-legacy-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let effect_id = workspace.document().clips[0].effects[0].id.clone();
+        // Version 1 predates expression storage: it cannot say whether the
+        // source effect was expression-driven, so it must not clear a binding.
+        std::fs::create_dir_all(root.join(&effect_id)).expect("preset directory");
+        std::fs::write(
+            root.join(&effect_id).join("Legacy.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "effectId": effect_id,
+                "name": "Legacy",
+                "enabled": true,
+                "params": {"count": 2.0},
+                "keyframes": {}
+            }))
+            .expect("legacy preset serializes"),
+        )
+        .expect("legacy preset is writable");
+
+        assert!(workspace.set_effect_expression(0, "count", Some("2 * 3")));
+        assert!(workspace.load_effect_preset(&store, 0, "Legacy"));
+        assert_eq!(
+            workspace.effect_expression(0, "count").as_deref(),
+            Some("2 * 3"),
+            "a legacy preset leaves the target expression untouched"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn a_preset_replays_the_expression_of_a_keyframe_only_parameter() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-keyframe-only-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let effect_id = workspace.document().clips[0].effects[1].id.clone();
+        // A parameter can carry a keyframe track without a `params` entry (a
+        // keyframe set at a later frame on a parameter with no base value). Its
+        // expression must still be replayed when the preset is applied.
+        std::fs::create_dir_all(root.join(&effect_id)).expect("preset directory");
+        std::fs::write(
+            root.join(&effect_id).join("KeyframeOnly.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "effectId": effect_id,
+                "name": "KeyframeOnly",
+                "enabled": true,
+                "params": {},
+                "keyframes": {"size": [{"frame": 0, "value": 5}]},
+                "expressions": {"size": "10 * 2"}
+            }))
+            .expect("preset serializes"),
+        )
+        .expect("preset is writable");
+
+        assert!(workspace.load_effect_preset(&store, 1, "KeyframeOnly"));
+        assert_eq!(
+            workspace.effect_expression(1, "size").as_deref(),
+            Some("10 * 2"),
+            "a keyframe-only parameter's expression is replayed"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn an_oversized_preset_expression_leaves_the_effect_unchanged() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-workspace-oversized-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let mut workspace = workspace_with_effects();
+        workspace.click_clip(1, false);
+        let effect_id = workspace.document().clips[0].effects[1].id.clone();
+        // Move the target away from the preset's value first: a failed load must
+        // not commit the parameter change that precedes the bad expression.
+        assert!(workspace.set_effect_parameter_at_frame(1, "size", 0, json!(7.0)));
+        let oversized = "x".repeat(10_001);
+        std::fs::create_dir_all(root.join(&effect_id)).expect("preset directory");
+        std::fs::write(
+            root.join(&effect_id).join("Oversized.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "effectId": effect_id,
+                "name": "Oversized",
+                "enabled": true,
+                "params": {"size": 5},
+                "keyframes": {},
+                "expressions": {"size": oversized}
+            }))
+            .expect("preset serializes"),
+        )
+        .expect("preset is writable");
+
+        assert!(
+            !workspace.load_effect_preset(&store, 1, "Oversized"),
+            "an expression over the size limit is refused"
+        );
+        assert_eq!(
+            workspace.document().clips[0].effects[1].params["size"],
+            json!(7.0),
+            "the parameter change before the bad expression is rolled back"
+        );
+        assert_eq!(workspace.effect_expression(1, "size"), None);
 
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
@@ -9740,6 +10838,94 @@ mod tests {
 
         assert!(workspace.delete_audio_plugin_preset(&store, 0, "Current"));
         assert!(store.names("gain").is_empty());
+        std::fs::remove_dir_all(root).expect("remove preset fixture");
+    }
+
+    #[test]
+    fn an_audio_plugin_preset_replaces_the_covered_keyframe_track() {
+        let root = std::env::temp_dir().join(format!(
+            "freya-nle-audio-plugin-track-preset-{}-{}",
+            std::process::id(),
+            crate::recovery::generate_recovery_id()
+        ));
+        let store = PresetStore::from_root(root.clone());
+        let state = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 1920, "height": 1080, "fps": 60, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "duration": 300}],
+                "clips": [{
+                    "id": 9,
+                    "sceneId": 1,
+                    "type": "audio",
+                    "start": 20,
+                    "duration": 100,
+                    "layer": 0,
+                    "effects": [{"id": "audio", "name": "Audio", "params": {"volume": 1.0}}],
+                    "audioPlugins": [{
+                        "id": "gain",
+                        "enabled": true,
+                        "params": {"0": 0.25},
+                        "keyframes": {
+                            "0": [{"frame": 0, "value": 0.1}, {"frame": 30, "value": 0.9}],
+                            "1": [{"frame": 0, "value": 0.4}, {"frame": 50, "value": 0.7}]
+                        }
+                    }]
+                }]
+            }"#,
+        )
+        .expect("audio plugin track fixture loads");
+        let document = state.snapshot();
+        let mut workspace = WorkspaceModel::new(ProjectSession {
+            state,
+            document,
+            path: None,
+            media_directory: None,
+            dirty: false,
+        });
+        workspace.click_clip(9, false);
+        std::fs::create_dir_all(root.join("gain")).expect("preset directory");
+        std::fs::write(
+            root.join("gain").join("Fixed.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "effectId": "gain",
+                "name": "Fixed",
+                "enabled": true,
+                "params": {},
+                "keyframes": {"0": [{"frame": 0, "value": 0.5}]},
+                "expressions": {}
+            }))
+            .expect("preset serializes"),
+        )
+        .expect("preset is writable");
+
+        let unselected_track = workspace.document().clips[0].audio_plugins[0]
+            .keyframes
+            .as_ref()
+            .and_then(|tracks| tracks.get("1"))
+            .cloned()
+            .expect("unselected track");
+        assert!(workspace.load_audio_plugin_preset(&store, 0, "Fixed"));
+        let plugin = &workspace.document().clips[0].audio_plugins[0];
+        let points = inspect_keyframe_track(
+            plugin.keyframes.as_ref().and_then(|tracks| tracks.get("0")),
+            &json!(0.0),
+            100,
+        );
+        assert_eq!(
+            points.len(),
+            1,
+            "the destination-only keyframe is replaced by the preset track"
+        );
+        assert_eq!(points[0].frame, 0);
+        assert_eq!(points[0].value, json!(0.5));
+        assert_eq!(
+            plugin.keyframes.as_ref().and_then(|tracks| tracks.get("1")),
+            Some(&unselected_track),
+            "an unselected audio track is left alone"
+        );
+
         std::fs::remove_dir_all(root).expect("remove preset fixture");
     }
 }

@@ -130,6 +130,11 @@ pub(super) fn install_timeline_file_drop(
             .borrow()
             .i32_value("defaultClipDuration", 100)
             .max(1);
+        // The importer probes the file to learn whether this is an image,
+        // video, or audio, so it gets both maps and picks the object type after
+        // the probe instead of guessing here.
+        let effect_defaults = crate::settings::effect_defaults(&dropped_settings.borrow());
+        let object_defaults = crate::settings::object_defaults(&dropped_settings.borrow());
         let path = PathBuf::from(path.as_str());
         // A file that cannot be read has to say why. Dropping one used to do nothing at all,
         // which reads as the drop not having been noticed.
@@ -190,6 +195,8 @@ pub(super) fn install_timeline_file_drop(
                     default_duration,
                     window.get_maximum_layers(),
                     &catalog,
+                    &effect_defaults,
+                    &object_defaults,
                 )
             })
         };
@@ -2212,6 +2219,7 @@ pub(super) fn install_callbacks(
     });
     let media_insert_model = model.clone();
     let media_insert_catalog = effect_catalog.clone();
+    let media_insert_settings = settings.clone();
     let media_insert_main = main.as_weak();
     let media_insert_timeline = timeline.as_weak();
     timeline.on_insert_media(move |id, overwrite| {
@@ -2219,6 +2227,8 @@ pub(super) fn install_callbacks(
             return;
         };
         let catalog = media_insert_catalog.borrow();
+        let effect_defaults = crate::settings::effect_defaults(&media_insert_settings.borrow());
+        let object_defaults = crate::settings::object_defaults(&media_insert_settings.borrow());
         if let Some(workspace) = media_insert_model.borrow_mut().current_workspace_mut() {
             workspace.insert_media_from_bin(
                 id,
@@ -2227,6 +2237,8 @@ pub(super) fn install_callbacks(
                 window.get_maximum_layers(),
                 &catalog,
                 overwrite,
+                &effect_defaults,
+                &object_defaults,
             );
         }
         sync_weak_windows(
