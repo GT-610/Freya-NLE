@@ -147,7 +147,11 @@ struct TextScriptVm {
     /// to install and compile its environment, and a script must not reach them.
     setmetatable: Value,
     setfenv: Value,
+    /// `loadstring` is removed from the globals so a block cannot reach it, but
+    /// the captured `Value` alone is not a GC root. Pinning it keeps the native
+    /// closure alive for every later block on this thread.
     load: Value,
+    load_ticket: HostRootTicket,
 }
 
 /// Runs one block in a fresh environment.
@@ -156,13 +160,21 @@ struct TextScriptVm {
 /// be hidden from the block, and compiles the block itself as a separate chunk:
 /// a chunk shares no locals with its loader, so the block cannot reach the
 /// wrapper's environment or helpers. `__env` reads through `_G`, whose library
-/// tables are guarded proxies (see `TextScriptVm::new`), and every escape hatch
-/// that could reach a shared table or replace the environment is shadowed with
-/// `false` for the duration of the block. Assigning `nil` would remove the key
-/// and let `__index` find the real global again.
+/// tables are guarded proxies (see `TextScriptVm::new`). The `__index` handler
+/// rejects the escape hatches by name, so a block cannot reach them even by
+/// removing a shadowed key (`_G = nil`) and falling through to the real global
+/// table; the shadowed `false` entries are a first line of defence only.
 const TEXT_SCRIPT_WRAPPER: &str = "\
 local __setmetatable, __setfenv, __load, __source = ...\n\
-local __env = __setmetatable({}, { __index = _G })\n\
+local __env = __setmetatable({}, {\n\
+  __index = function(_, key)\n\
+    if key == \"_G\" or key == \"setmetatable\" or key == \"getmetatable\"\n\
+       or key == \"setfenv\" or key == \"getfenv\" or key == \"rawset\" or key == \"rawget\" then\n\
+      return nil\n\
+    end\n\
+    return _G[key]\n\
+  end\n\
+})\n\
 __setfenv(1, __env)\n\
 _G = false\n\
 setmetatable = false\n\
@@ -212,12 +224,11 @@ impl TextScriptVm {
         // still mutate a table it reaches through a shared global: `math.sin`
         // lives on the one `math` table every text clip on this thread sees.
         // Give each library an empty proxy whose metatable reads the real table
-        // and sends every write to a scratch table. Reads behave exactly as
-        // before and no write can reach the shared library, without cloning the
-        // tables per object or per frame.
+        // and sends every write to a discard. Reads behave exactly as before
+        // and no write can reach the shared library, without cloning the tables
+        // per object or per frame.
         let _ = vm.eval_chunk(
-            "local __writes = {}\n\
-             local function __discard(_, key, value) __writes[key] = value end\n\
+            "local function __discard() end\n\
              local function __guard(real)\n\
              return setmetatable({}, { __index = real, __newindex = __discard })\n\
              end\n\
@@ -230,11 +241,13 @@ impl TextScriptVm {
              pi = math.pi; random = math.random;",
             "=text-script-libraries",
         );
+        let load_ticket = vm.pin_host(load);
         Self {
             vm,
             setmetatable,
             setfenv,
             load,
+            load_ticket,
         }
     }
 
@@ -338,7 +351,12 @@ impl TextScriptVm {
             .vm
             .call_value(
                 Value::Closure(wrapper),
-                &[self.setmetatable, self.setfenv, self.load, source],
+                &[
+                    self.setmetatable,
+                    self.setfenv,
+                    self.vm.read_host(self.load_ticket).unwrap_or(self.load),
+                    source,
+                ],
             )
             .ok()?;
         // The chunk always returns a string; a block that printed nothing
@@ -817,6 +835,34 @@ mod tests {
         // Ordinary reads still work, including the string library's methods.
         assert_eq!(text("<?=string.format('%02d', 5)?>", &clock), "05");
         assert_eq!(text("<?=('ab'):upper()?>", &clock), "AB");
+    }
+
+    #[test]
+    fn a_text_script_cannot_reach_the_globals_by_removing_a_shadow() {
+        let clock = clock(0.0, 1.0);
+        // Dropping the `_G` shadow (`_G = nil`) used to let the next lookup fall
+        // through `__index` to the real global table, so `_G.math` reached the
+        // unguarded library. The `__index` handler now rejects the name itself:
+        // the assignment succeeds, but the follow-up read of `_G.math` fails and
+        // keeps its block literal.
+        assert_eq!(
+            text(
+                "<? _G = nil ?><? _G.math.floor = function() return 0 end ?>",
+                &clock
+            ),
+            "<? _G.math.floor = function() return 0 end ?>"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
+        // The same holds for the other escape hatches after their shadows are
+        // removed: none of them can be reached through the environment.
+        assert_eq!(
+            text(
+                "<? setmetatable = nil ?><? setmetatable(math, {}) ?>",
+                &clock
+            ),
+            "<? setmetatable(math, {}) ?>"
+        );
+        assert_eq!(text("<?=math.floor(2.9)?>", &clock), "2");
     }
 
     #[test]
