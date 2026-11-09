@@ -70,8 +70,8 @@ pub enum FragmentError {
 impl Display for FragmentError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::NotAFragment => "the file is not an AviQtl-Plus fragment",
-            Self::UnsupportedVersion => "the fragment was written by a newer AviQtl-Plus",
+            Self::NotAFragment => "the file is not a Freya NLE fragment",
+            Self::UnsupportedVersion => "the fragment was written by a newer Freya NLE",
             Self::TooManyClips => "the fragment holds too many clips",
             Self::InvalidDocument => "the fragment is damaged or incomplete",
             Self::Serialization => "the fragment could not be serialized",

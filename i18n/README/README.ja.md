@@ -52,6 +52,8 @@ Freya NLE はモジュラーなエフェクトシステムを備えています�
 | パッケージ | タイプ | 内容 |
 |-----------|--------|------|
 | [weather-objects](../../effect-packages/weather-objects/) | オブジェクト | 雨、雪アニメーション |
+| [color-effects](../../effect-packages/color-effects/) | エフェクト | 色合い調整エフェクト |
+| [compute-effects](../../effect-packages/compute-effects/) | エフェクト | 計算シェーダーの彩度低下とぼかし |
 
 これらのパッケージは、実用的な追加機能であると同時に、カスタムエフェクト作成のための開発者リファレンスとしても活用できます。詳細は [effect-packages/README.md](../../effect-packages/README.md) を参照してください。
 

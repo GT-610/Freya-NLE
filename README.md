@@ -59,6 +59,7 @@ Freya NLE features a modular effect system. The `effect-packages/` directory con
 |---------|------|----------|
 | [weather-objects](effect-packages/weather-objects/) | Object | Rain, snow animations |
 | [color-effects](effect-packages/color-effects/) | Effect | Color tint effect |
+| [compute-effects](effect-packages/compute-effects/) | Effect | Compute-shader desaturate and blur |
 
 These packages serve as both useful additions and developer references for creating custom effects. See [effect-packages/README.md](effect-packages/README.md) for details.
 

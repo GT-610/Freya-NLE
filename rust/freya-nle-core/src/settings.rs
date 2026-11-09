@@ -76,8 +76,8 @@ fn default_settings(platform_defaults: &Map<String, Value>) -> Map<String, Value
         "pluginEnableEffects": true,
         "pluginEnableObjects": true,
         "packageRepositories": [{
-            "url": "https://raw.githubusercontent.com/GT-610/AviQtl-Plus/main/repos/repo.json",
-            "name": "AviQtl Official",
+            "url": "https://raw.githubusercontent.com/GT-610/Freya-NLE/main/repos/repo.json",
+            "name": "Freya NLE Official",
             "enabled": true,
             "priority": 10
         }],

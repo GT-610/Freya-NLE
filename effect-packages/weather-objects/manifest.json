@@ -2,7 +2,7 @@
   "id": "com.aviqtl.objects.weather",
   "name": "Weather Objects Pack",
   "version": "1.0.0",
-  "author": "AviQtl Team",
+  "author": "Freya NLE Team",
   "description": "Native WGSL weather objects for the Slint edition",
   "min_app_version": "0.4.0",
   "type": "object",

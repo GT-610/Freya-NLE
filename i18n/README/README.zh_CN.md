@@ -52,6 +52,8 @@ Freya NLE 拥有模块化效果系统。`effect-packages/` 目录包含即用型
 | 包 | 类型 | 内容 |
 |---|------|------|
 | [weather-objects](../../effect-packages/weather-objects/) | 对象 | 雨、雪动画 |
+| [color-effects](../../effect-packages/color-effects/) | 效果 | 色调效果 |
+| [compute-effects](../../effect-packages/compute-effects/) | 效果 | 计算着色器的去色与模糊 |
 
 这些效果包既是实用的附加组件，也是开发者创建自定义效果的参考。详见 [effect-packages/README.md](../../effect-packages/README.md)。
 

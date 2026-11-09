@@ -1,4 +1,4 @@
-# AviQtl-Plus native render packages
+# Freya NLE native render packages
 
 This directory contains installable Effect and Object packages for the Slint/wgpu application.
 
@@ -139,8 +139,8 @@ and export use.
 
 ## Testing a package
 
-1. Put the package under `<AviQtl Data>/effects/<package-id>/` or `<AviQtl Data>/objects/<package-id>/`.
-2. Restart AviQtl-Plus so the catalog is reloaded.
+1. Put the package under `<Freya NLE Data>/effects/<package-id>/` or `<Freya NLE Data>/objects/<package-id>/`.
+2. Restart Freya NLE so the catalog is reloaded.
 3. Add the Effect or Object and test its controls, keyframes, resolutions, and timeline positions.
 4. Package the directory as a ZIP and publish its SHA-256 in the repository metadata.
 

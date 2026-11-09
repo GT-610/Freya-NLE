@@ -621,7 +621,7 @@ fn placeholder_note(display: &str, script: Option<&str>) -> String {
             "{display}: needs the ExEdit script {script}, preserved as a disabled placeholder"
         ),
         None => {
-            format!("{display}: no AviQtl-Plus equivalent, preserved as a disabled placeholder")
+            format!("{display}: no Freya NLE equivalent, preserved as a disabled placeholder")
         }
     }
 }
@@ -1419,7 +1419,7 @@ mod tests {
         );
         // A filter with no script identifier keeps the plain wording.
         let plain = placeholder_note("图形", None);
-        assert!(plain.contains("no AviQtl-Plus equivalent"));
+        assert!(plain.contains("no Freya NLE equivalent"));
         assert!(!plain.contains("needs the ExEdit script"));
     }
 
