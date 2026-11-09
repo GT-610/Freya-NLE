@@ -199,6 +199,20 @@ class TestBuildScript(unittest.TestCase):
                 (source / "build" / "freya-nle").read_text(encoding="utf-8"), "binary"
             )
 
+    def test_ci_verifies_the_executable_the_build_actually_writes(self):
+        # msvc.yml asserted on `build\AviQtl.exe` while packaging wrote
+        # `freya-nle.exe`, so the MSVC job failed after the rename landed. Keep
+        # the workflow's expectations tied to the name the packager uses.
+        workflow = (SOURCE_DIR / ".github" / "workflows" / "msvc.yml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            expected = builder.packaged_executable_name(windows=True)
+        self.assertIn(f'build\\{expected}', workflow)
+        self.assertNotIn("AviQtl.exe", workflow)
+
     def test_macos_archive_publishes_the_bundle_packaging_creates(self):
         # The rename left packaging writing "Freya NLE.app" while archiving still
         # looked for "AviQtl.app", so a macOS release failed at the archive step.
