@@ -6,7 +6,7 @@
       "display_name": "Freya NLE",
       "short_description": "Freya NLE video editor",
       "type": "application",
-      "version": "0.4.0",
+      "version": "0.8.0",
       "author": "GT-610",
       "categories": ["editor"],
       "min_app_version": "0.4.0",
