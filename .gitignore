@@ -21,6 +21,9 @@
 # Exports
 /project_context.json
 
+# Local agent session notes and screenshots
+/.dsh/
+
 # ---> VisualStudioCode
 .vscode/
 !.vscode/settings.json

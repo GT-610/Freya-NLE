@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 
-/// Reads the compositor's WGSL straight out of `aviqtl-render/src/lib.rs`, so the probe
+/// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
 /// needs no intermediate copy and runs from a clean checkout.
 fn compositor_shader() -> String {
     fn repo_root() -> std::path::PathBuf {
@@ -25,7 +25,7 @@ fn compositor_shader() -> String {
                 .to_path_buf();
         }
     }
-    let path = repo_root().join("rust").join("aviqtl-render").join("src").join("lib.rs");
+    let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     const OPEN: &str = "const SHADER: &str = r#\"";
@@ -175,12 +175,14 @@ fn main() {
             }),
             None,
         ),
-        "complex" => (Some(wgpu::BlendState::ALPHA_BLENDING), None),
+        // The renderer's complex pipeline draws with `complex_fragment` and no blending.
+        "complex" => (None, None),
         other => panic!("unknown kind {other}"),
     };
 
     let (vertex, fragment) = match kind.as_str() {
         "effect" => ("effect_vertex", "effect_fragment"),
+        "complex" => ("vertex", "complex_fragment"),
         _ => ("vertex", "fragment"),
     };
 
@@ -204,6 +206,20 @@ fn main() {
     });
     println!("PIPELINE_LAYOUT_OK");
 
+    // `vertex-only` leaves the fragment stage out entirely: a fragment that fails
+    // to compile on WARP would otherwise fail the probe before the vertex stage is
+    // tested, so the result could not isolate a vertex fault.
+    let targets = [Some(wgpu::ColorTargetState {
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        blend,
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    let fragment_state = wgpu::FragmentState {
+        module: &shader,
+        entry_point: Some(fragment),
+        targets: &targets,
+        compilation_options: Default::default(),
+    };
     let _ = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("probe-pipeline"),
         layout: Some(&pipeline_layout),
@@ -213,16 +229,7 @@ fn main() {
             buffers: &[],
             compilation_options: Default::default(),
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some(fragment),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
+        fragment: (kind != "vertex-only").then_some(fragment_state),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),

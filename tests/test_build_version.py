@@ -7,9 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from BUILD import (
+    ArchBuilder,
     BuildConfig,
     Logger,
     MsvcBuilder,
+    Msys2Builder,
     PlatformBuilder,
     XcodeBuilder,
     determine_target,
@@ -160,6 +162,62 @@ class TestBuildScript(unittest.TestCase):
                     else destination.joinpath(*parts)
                 )
                 self.assertEqual(packaged.read_text(encoding="utf-8"), contents)
+
+    def test_packaged_executable_matches_the_macos_bundle(self):
+        # The rename stopped at the macOS bundle: Linux and Windows packaging kept
+        # writing "AviQtl"/"AviQtl.exe" into a Freya-NLE-* archive, so the shipped
+        # executable and the archive name disagreed on every non-macOS build.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            self.assertEqual(builder.packaged_executable_name(), "freya-nle")
+            self.assertEqual(builder.packaged_executable_name(windows=True), "freya-nle.exe")
+
+            bundle = XcodeBuilder(
+                config_for(source, target="xcode"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            # The bundle executable and the loose binaries share one name, so an
+            # archive can never disagree with the packaging that produced it.
+            self.assertEqual(builder.packaged_executable_name(), "freya-nle")
+            self.assertEqual(bundle.macos_app_bundle().name, "Freya NLE.app")
+
+    def test_packagers_stage_the_executable_under_its_package_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = ArchBuilder(
+                config_for(source, target="arch"), Logger(lambda _message: None, lambda *_args: None)
+            )
+            staged = builder.cargo_binary()
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_text("binary", encoding="utf-8")
+            builder.find_carla_discovery_tool = lambda *_args, **_kwargs: None
+            builder.package()
+            self.assertEqual(
+                (source / "build" / "freya-nle").read_text(encoding="utf-8"), "binary"
+            )
+
+    def test_ci_verifies_the_executable_the_build_actually_writes(self):
+        # msvc.yml asserted on `build\AviQtl.exe` while packaging wrote
+        # `freya-nle.exe`, so the MSVC job failed after the rename landed. Keep
+        # the workflow's expectations tied to the name the packager uses.
+        workflow = (SOURCE_DIR / ".github" / "workflows" / "msvc.yml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            expected = builder.packaged_executable_name(windows=True)
+        # Assert the guard itself, not the whole file: a matching name in a
+        # comment or an error string would satisfy a substring search while
+        # `Test-Path` still checked a file packaging no longer writes.
+        self.assertRegex(
+            workflow,
+            rf'Test-Path -LiteralPath "build\\{re.escape(expected)}"',
+        )
+        self.assertNotIn("AviQtl.exe", workflow)
 
     def test_macos_archive_publishes_the_bundle_packaging_creates(self):
         # The rename left packaging writing "Freya NLE.app" while archiving still

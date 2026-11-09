@@ -1,6 +1,6 @@
 # Weather Objects Pack
 
-Native WGSL rain and snow objects for the AviQtl-Plus Slint edition.
+Native WGSL rain and snow objects for the Freya NLE Slint edition.
 
 ## Included objects
 
@@ -11,9 +11,9 @@ Native WGSL rain and snow objects for the AviQtl-Plus Slint edition.
 
 ## Installation
 
-Package repositories distribute this directory as a ZIP archive. The package manager verifies the archive hash, validates every metadata and WGSL file, and installs it under `<AviQtl Data>/objects/com.aviqtl.objects.weather/`.
+Package repositories distribute this directory as a ZIP archive. The package manager verifies the archive hash, validates every metadata and WGSL file, and installs it under `<Freya NLE Data>/objects/com.aviqtl.objects.weather/`.
 
-For development, copy the whole directory to that location and restart AviQtl-Plus.
+For development, copy the whole directory to that location and restart Freya NLE.
 
 ## Directory structure
 
@@ -56,4 +56,4 @@ Objects receive a transparent input canvas. Effects receive the previous layer r
 
 ## License
 
-AGPL-3.0, the same license as AviQtl-Plus.
+AGPL-3.0, the same license as Freya NLE.

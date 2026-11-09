@@ -199,8 +199,8 @@ jobs:
       - name: Verify packaged runtime
         shell: pwsh
         run: |
-          if (-not (Test-Path -LiteralPath "build\AviQtl.exe")) {
-            throw "Packaged AviQtl.exe is missing"
+          if (-not (Test-Path -LiteralPath "build\freya-nle.exe")) {
+            throw "Packaged freya-nle.exe is missing"
           }
           if ((Get-ChildItem -LiteralPath build -Filter "avcodec*.dll" -File).Count -eq 0) {
             throw "FFmpeg runtime DLLs are missing"

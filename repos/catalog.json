@@ -1,16 +1,16 @@
 {
-  "repo_name": "AviQtl Official",
+  "repo_name": "Freya NLE Official",
   "packages": [
     {
       "id": "org.aviqtl.app",
-      "display_name": "AviQtl-Plus",
-      "short_description": "AviQtl-Plus video editor",
+      "display_name": "Freya NLE",
+      "short_description": "Freya NLE video editor",
       "type": "application",
-      "version": "0.4.0",
+      "version": "0.8.0",
       "author": "GT-610",
       "categories": ["editor"],
       "min_app_version": "0.4.0",
-      "metadata_url": "https://raw.githubusercontent.com/GT-610/AviQtl-Plus/main/repos/detail/org.aviqtl.app.json",
+      "metadata_url": "https://raw.githubusercontent.com/GT-610/Freya-NLE/main/repos/detail/org.aviqtl.app.json",
       "metadata_sha256": ""
     },
     {
@@ -25,7 +25,7 @@
       "author": "Community",
       "categories": ["glow", "bloom"],
       "min_app_version": "0.4.0",
-      "metadata_url": "https://raw.githubusercontent.com/GT-610/AviQtl-Plus/main/repos/detail/com.example.glow-effect.json",
+      "metadata_url": "https://raw.githubusercontent.com/GT-610/Freya-NLE/main/repos/detail/com.example.glow-effect.json",
       "metadata_sha256": ""
     },
     {
@@ -37,7 +37,7 @@
       "author": "Community",
       "categories": ["retro", "distortion"],
       "min_app_version": "0.4.0",
-      "metadata_url": "https://raw.githubusercontent.com/GT-610/AviQtl-Plus/main/repos/detail/com.example.vhs-effect.json",
+      "metadata_url": "https://raw.githubusercontent.com/GT-610/Freya-NLE/main/repos/detail/com.example.vhs-effect.json",
       "metadata_sha256": ""
     }
   ]

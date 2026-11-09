@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and package the AviQtl desktop application (Rust + Slint by default)."""
+"""Build and package the Freya NLE desktop application (Rust + Slint)."""
 
 import argparse
 import locale
@@ -207,6 +207,14 @@ class PlatformBuilder:
         suffix = ".exe" if windows else ""
         return self.config.cargo_target_dir / self.config.cargo_profile / f"freya-nle{suffix}"
 
+    def packaged_executable_name(self, windows: bool = False) -> str:
+        """Name the staged executable takes inside the archive.
+
+        The macOS bundle puts `freya-nle` under `Contents/MacOS`, so the other
+        platforms ship the same name instead of the pre-rename `AviQtl`.
+        """
+        return f"freya-nle{'.exe' if windows else ''}"
+
     def package(self):
         raise NotImplementedError
 
@@ -337,7 +345,7 @@ class LinuxBuilderBase(PlatformBuilder):
         source = self.cargo_binary()
         if not source.is_file():
             raise FileNotFoundError(f"Executable not found: {source}")
-        destination = self.config.output_dir / "AviQtl"
+        destination = self.config.output_dir / self.packaged_executable_name()
         shutil.copy2(source, destination)
         self.copy_resources(self.config.output_dir)
         if discovery := self.find_carla_discovery_tool():
@@ -458,7 +466,7 @@ class Msys2Builder(WindowsDependencyMixin, PlatformBuilder):
         source = self.cargo_binary(windows=True)
         if not source.is_file():
             raise FileNotFoundError(f"Executable not found: {source}")
-        destination = self.config.output_dir / "AviQtl.exe"
+        destination = self.config.output_dir / self.packaged_executable_name(windows=True)
         shutil.copy2(source, destination)
         self.copy_resources(self.config.output_dir)
         if discovery := self.find_carla_discovery_tool(windows=True):
@@ -739,7 +747,7 @@ class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
         source = self.cargo_binary(windows=True)
         if not source.is_file():
             raise FileNotFoundError(f"Executable not found: {source}")
-        destination = self.config.output_dir / "AviQtl.exe"
+        destination = self.config.output_dir / self.packaged_executable_name(windows=True)
         shutil.copy2(source, destination)
         self.copy_resources(self.config.output_dir)
         if discovery := self.find_carla_discovery_tool(windows=True):
@@ -911,7 +919,7 @@ class BuildWorker(threading.Thread):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="BUILD.py", description="Build and package the AviQtl desktop application",
+        prog="BUILD.py", description="Build and package the Freya NLE desktop application",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=("Examples:\n  python BUILD.py --arch\n  python BUILD.py --msvc --debug\n"
                 "  python BUILD.py --msys2\n  python BUILD.py --xcode --offline\n"),

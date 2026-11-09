@@ -506,9 +506,9 @@ impl PackageManagerModel {
                 requested_version.to_owned()
             };
             self.set_status(crate::status_message!(
-                "AviQtl update available. Restart to apply.",
-                "AviQtl 有可用更新。重启后生效。",
-                "AviQtl の更新があります。再起動すると適用されます。"
+                "Freya NLE update available. Restart to apply.",
+                "Freya NLE 有可用更新。重启后生效。",
+                "Freya NLE の更新があります。再起動すると適用されます。"
             ));
             return Ok(PackageInstallOutcome::SelfUpdate { version });
         }
@@ -535,7 +535,7 @@ impl PackageManagerModel {
             }
             "requires_newer_app" => {
                 return Err(format!(
-                    "Package {package_id} requires AviQtl {} or newer (current: {})",
+                    "Package {package_id} requires Freya NLE {} or newer (current: {})",
                     selection.minimum_app_version, self.app_version
                 ));
             }

@@ -5,7 +5,7 @@
 //! switch so the exact effect case that first triggers the compiler failure is
 //! identified by number.
 //!
-//! The shader is read straight out of `aviqtl-render/src/lib.rs` and every
+//! The shader is read straight out of `freya-nle-render/src/lib.rs` and every
 //! `textureSample` is rewritten to `textureSampleLevel(..., 0.0)` first, because
 //! the gradient instruction is what FXC cannot unroll in the dynamic loop.
 //! Without the rewrite the small prefixes still fail on X3511 briefly, which
@@ -16,7 +16,7 @@
 
 use std::borrow::Cow;
 
-/// Reads the compositor's WGSL straight out of `aviqtl-render/src/lib.rs`, so the probe
+/// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
 /// needs no intermediate copy and runs from a clean checkout.
 fn compositor_shader() -> String {
     fn repo_root() -> std::path::PathBuf {
@@ -31,7 +31,7 @@ fn compositor_shader() -> String {
                 .to_path_buf();
         }
     }
-    let path = repo_root().join("rust").join("aviqtl-render").join("src").join("lib.rs");
+    let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     const OPEN: &str = "const SHADER: &str = r#\"";
@@ -138,7 +138,11 @@ fn build_shader(cases_to_keep: usize) -> String {
         if index >= cases_to_keep {
             break;
         }
-        let end = case_positions[index + 1];
+        // `case_positions` ends with the switch's closing line as a sentinel, so a
+        // count at or past the real case total must not index one past it.
+        let Some(end) = case_positions.get(index + 1).copied() else {
+            break;
+        };
         for line in &lines[*start..end] {
             output.push_str(line);
             output.push('\n');
