@@ -102,13 +102,13 @@ other file may invent one. `BUILD.py` reads it from there, and the release
 workflow rejects a tag that is not exactly `v<version>`.
 
 Versions follow SemVer 2.0.0. A pre-release uses the dotted counter form, so the
-first release candidate of 0.7.0 is version `0.7.0-rc.1` with tag
-`v0.7.0-rc.1`:
+first release candidate of 0.8.0 is version `0.8.0-rc.1` with tag
+`v0.8.0-rc.1`:
 
-- `0.7.0-rc.1`, `0.7.0-rc.2`, … `0.7.0` sort in the order they are built,
+- `0.8.0-rc.1`, `0.8.0-rc.2`, … `0.8.0` sort in the order they are built,
   because SemVer compares dot-separated identifiers and `rc.10` is newer than
   `rc.9`.
-- `0.7.0-rc1` and `0.7.0-rc-1` are rejected. Each parses as one identifier, so
+- `0.8.0-rc1` and `0.8.0-rc-1` are rejected. Each parses as one identifier, so
   `rc10` sorts before `rc9`, and every tool that expects the counter form has to
   special-case it.
 

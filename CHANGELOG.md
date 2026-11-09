@@ -4,6 +4,88 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-09
+
+0.8 is the release the rename lands on: the project is Freya NLE everywhere a
+user can see it, the Qt Quick frontend is gone, and the editing surface has
+caught up with AviUtl2's everyday capabilities.
+
+### Added
+- The workspace layout follows AviUtl2: the chrome, the density, and the
+  arrangement of the timeline, preview, and settings panels, so a user coming
+  from AviUtl2 finds the controls where they left them
+- Scenes are a first-class part of the project. A scene can be labelled and
+  filtered, duplicated with its clips and settings, added to an export batch in
+  one action, and its frame marks are stored in the document; marks can be set,
+  jumped between, and annotated with a note. A duplicate gets its own group ids,
+  and a scene output name is checked for duplicates before it can overwrite one
+- Objects can be grouped so they select and move together, and the object list
+  lists what sits under the playhead, labels and filters rows by kind, opens the
+  object menu, and drags a row to change its layer. Layers carry names and
+  colours, and the layer settings dialog stores per-layer settings that the
+  frame plan applies
+- AviUtl text control characters are rendered: `<p>` positioning, `<gh>` line
+  spacing, `<tr>` rotation, `<tw>`/`<th>` glyph scaling, ruby annotations over
+  their base text, display timing, and the `<s...,outline>` directive for a run's
+  own outline width
+- Text scripts run with the guarantees the Qt frontend gave them: the scene and
+  object context, `mes()` output, and the ability to write the object's
+  transform. A text can name a colour from the user's palette via `<$name>`, and
+  text presets are applied from `<$name>`
+- Emoji are drawn from the application's emoji folder for every still format
+  `<&name>` accepts, and advance by the picture's aspect ratio
+- Reference expressions are evaluated on parameters, including across layers,
+  and a parameter expression can be set from its row menu or edited per
+  parameter; expression-driven parameters are marked in the settings list
+- Effect presets carry only the parameters the user chose, and a preset can
+  store parameter expressions. A preset applies atomically and replays
+  keyframe-only expressions, and loading one replaces the keyframe track it
+  covers instead of merging into it. Audio-plugin presets follow the same rule
+- The colour palette holds several switchable palettes, and a colour can be
+  picked from the picker. Effects and objects can copy, cut, and paste from the
+  keyboard and from the object menu, and a new effect or object starts from
+  saved creation defaults that an object type stores as its input and output
+- Project versions are kept as a history: saved versions are configurable and
+  can be added manually, the backup folder is configurable, the backup history
+  is browsable across projects and can be cleared in one action, and the whole
+  backup store is bounded by size
+- Several exports can be queued in a batch
+- The release checklist documents that every bundled package under
+  `effect-packages/` must declare a `min_app_version` no newer than the version
+  being released
+
+### Changed
+- The Linux and Windows builds package the executable as `freya-nle` and
+  `freya-nle.exe`, matching the macOS bundle and the archive names. They were
+  still writing `AviQtl`/`AviQtl.exe` into `Freya-NLE-*` archives after the
+  rename
+- User-facing package-manager text says Freya NLE instead of AviQtl, including
+  the translated self-update status line and the message shown when a package
+  needs a newer application
+- The default package repository is named Freya NLE and points at this
+  repository. Old links redirect, so existing installations keep working
+
+### Fixed
+- The aspect unit no longer stretches every object to 101× its width
+- A damaged project file cannot reach the compositor with infinities, a damaged
+  recovery snapshot reports what it is instead of misbehaving, and a hand-edited
+  settings file cannot produce unrepresentable values. A project document over
+  256 MiB is refused before it is read
+- Imported media starts from the saved creation defaults, and imported
+  object-file groups map onto native groups
+- The missing-media scan resolves against the directory it is given, and saving
+  a project stores project-internal media as a project-relative path
+- The backup folder field stays in step with Browse and Reload
+- An export dialog no longer stretches its audio pickers, and a dialog is
+  checked to still fit when the window grows
+- Scoped presets accept keyframe-only parameters, and an unselected audio track
+  survives a preset replacement
+- Justification offsets stay local to each segment, trailing spaces are excluded
+  from justification gaps, and authoritative text runs are justified between
+  their word gaps. An emoji after a space counts as content
+- The text-script sandbox keeps its standard libraries isolated from each other
+  and is hardened against shadow removal and loader collection
+
 ## [0.7.0-rc.2] - 2026-10-30
 
 ### Added
