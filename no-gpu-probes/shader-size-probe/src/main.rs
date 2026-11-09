@@ -124,7 +124,11 @@ fn build_shader(cases_to_keep: usize) -> String {
         if index >= cases_to_keep {
             break;
         }
-        let end = case_positions[index + 1];
+        // `case_positions` ends with the switch's closing line as a sentinel, so a
+        // count at or past the real case total must not index one past it.
+        let Some(end) = case_positions.get(index + 1).copied() else {
+            break;
+        };
         for line in &lines[*start..end] {
             output.push_str(line);
             output.push('\n');

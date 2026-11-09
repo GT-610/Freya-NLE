@@ -13,19 +13,21 @@ use std::borrow::Cow;
 
 /// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
 /// needs no intermediate copy and runs from a clean checkout.
-fn compositor_shader() -> String {
-    fn repo_root() -> std::path::PathBuf {
-        let mut current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        loop {
-            if current.join("rust").join("Cargo.toml").is_file() {
-                return current;
-            }
-            current = current
-                .parent()
-                .expect("the probe lives inside the repository")
-                .to_path_buf();
+/// The checkout the probes belong to, found by walking up to the workspace root.
+fn repo_root() -> std::path::PathBuf {
+    let mut current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        if current.join("rust").join("Cargo.toml").is_file() {
+            return current;
         }
+        current = current
+            .parent()
+            .expect("the probe lives inside the repository")
+            .to_path_buf();
     }
+}
+
+fn compositor_shader() -> String {
     let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -191,7 +193,16 @@ fn main() {
         });
         println!("OK pipeline {vertex}/{fragment}");
     }
-    std::fs::write("../../.build_tmp/app_shader_rewritten.wgsl", &rewritten)
-        .expect("write rewritten shader");
+    // Resolve against the repository root, not the shell's working directory, so
+    // running from the checkout root does not write outside the tree.
+    let output = repo_root()
+        .join(".build_tmp")
+        .join("app_shader_rewritten.wgsl");
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create {}: {error}", parent.display()));
+    }
+    std::fs::write(&output, &rewritten)
+        .unwrap_or_else(|error| panic!("write {}: {error}", output.display()));
     println!("RESULT textureSampleLevel rewrite compiles the compositor shader on WARP");
 }
