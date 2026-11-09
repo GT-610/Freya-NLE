@@ -210,7 +210,13 @@ class TestBuildScript(unittest.TestCase):
                 config_for(source), Logger(lambda _message: None, lambda *_args: None)
             )
             expected = builder.packaged_executable_name(windows=True)
-        self.assertIn(f'build\\{expected}', workflow)
+        # Assert the guard itself, not the whole file: a matching name in a
+        # comment or an error string would satisfy a substring search while
+        # `Test-Path` still checked a file packaging no longer writes.
+        self.assertRegex(
+            workflow,
+            rf'Test-Path -LiteralPath "build\\{re.escape(expected)}"',
+        )
         self.assertNotIn("AviQtl.exe", workflow)
 
     def test_macos_archive_publishes_the_bundle_packaging_creates(self):

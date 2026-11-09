@@ -11,7 +11,7 @@ measured rather than inferred.
 
 ## Conclusion
 
-**AviQtl requires a GPU-backed wgpu adapter. It does not ship a CPU or software renderer.**
+**Freya NLE requires a GPU-backed wgpu adapter. It does not ship a CPU or software renderer.**
 
 The frontend now detects the absence of a GPU-backed adapter before it initializes wgpu and
 exits with an actionable message naming the adapters it found, instead of crashing. The root
@@ -22,10 +22,10 @@ cause was measured, not guessed:
 | Slint software renderer (`slint-software-probe`) | Window and event loop run; no GPU required |
 | wgpu device, texture, shader module, render pipeline, readback (`compositor-cpu-probe`) | All succeed; readback returns matching bytes |
 | Slint's own wgpu backend selection (`slint-wgpu-probe`) | Fails without `SLINT_WGPU_CPU`, per Slint 1.17.1 |
-| **AviQtl's own compositor shader (`app-shader-probe`, `shader-size-probe`, `shader-fragment-probe`)** | **Fails: FXC cannot compile it, and past a size threshold the process dies with `0xC0000005`** |
+| **Freya NLE's own compositor shader (`app-shader-probe`, `shader-size-probe`, `shader-fragment-probe`)** | **Fails: FXC cannot compile it, and past a size threshold the process dies with `0xC0000005`** |
 
-The last row is the real constraint, and it is specific to AviQtl's renderer rather than to
-Slint or wgpu in general. The compositor shader in `aviqtl-render` is roughly 55 KB and wraps a
+The last row is the real constraint, and it is specific to Freya NLE's renderer rather than to
+Slint or wgpu in general. The compositor shader in `freya-nle-render` is roughly 55 KB and wraps a
 41-case `switch` inside a loop whose trip count is not a compile-time constant. FXC — the
 compiler WARP's DX12 backend falls back to — must fully unroll it and cannot.
 
@@ -52,7 +52,7 @@ rather than FXC. This is why the failure never appeared during earlier GPU-backe
 
 ## Why no software renderer
 
-AviQtl deliberately reports an unsupported host instead of degrading. This follows the shipped
+Freya NLE deliberately reports an unsupported host instead of degrading. This follows the shipped
 behavior of comparable applications rather than an internal guess:
 
 - Adobe documents GPU memory requirements for Premiere (4 GB minimum on Windows) and removed the
@@ -65,7 +65,7 @@ behavior of comparable applications rather than an internal guess:
   playback uses the CPU" and its official troubleshooting guide recommends disabling OpenGL
   (https://userbase.kde.org/Archive:Kdenlive/Manual/Troubleshooting_and_Common_Problems,
   https://docs.kdenlive.org/getting_started/installation.html). That works because Kdenlive
-  limits GPU use to optional render profiles. AviQtl's preview, export, and MSAA compositor are
+  limits GPU use to optional render profiles. Freya NLE's preview, export, and MSAA compositor are
   all GPU-only, so a CPU path would be a second implementation of the renderer whose output could
   diverge from the behavior baseline the project uses for acceptance.
 
@@ -85,7 +85,7 @@ cargo run -- 41
 
 Each probe prints `STAGE`/`RESULT` lines as it advances. Read the stage list first if you are
 chasing where a new failure appears. The shader probes read the compositor's WGSL directly out
-of `rust/aviqtl-render/src/lib.rs`, so they need no preparation step.
+of `rust/freya-nle-render/src/lib.rs`, so they need no preparation step.
 
 A hard access violation cannot be caught in-process, so each variant under test must run in its
 own child process — that is why these probes take the case count as an argument rather than
