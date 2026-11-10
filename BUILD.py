@@ -179,20 +179,29 @@ class PlatformBuilder:
 
     def build(self):
         self.logger.progress(10, f"{self.config.build_type} build started")
-        self.logger.section("Checking dependencies")
-        self.install_dependencies()
-        self.check_cancelled()
-        self.logger.section("Compiling Rust + Slint frontend")
-        self.compile()
-        self.logger.progress(70, "Compilation complete")
-        self.check_cancelled()
-        self.logger.section("Packaging")
-        self.package()
-        self.logger.progress(90, "Package assembled")
-        self.check_cancelled()
-        self.logger.section("Creating archive")
-        self.archive()
+        try:
+            self.logger.section("Checking dependencies")
+            self.install_dependencies()
+            self.check_cancelled()
+            self.logger.section("Compiling Rust + Slint frontend")
+            self.compile()
+            self.logger.progress(70, "Compilation complete")
+            self.check_cancelled()
+            self.logger.section("Packaging")
+            self.package()
+            self.logger.progress(90, "Package assembled")
+            self.check_cancelled()
+            self.logger.section("Creating archive")
+            self.archive()
+        finally:
+            # A container this build created is its own to remove, including
+            # when it failed partway through.
+            self.cleanup()
         self.logger.progress(100, "Complete")
+
+    def cleanup(self):
+        """Release anything the build owns outside the source tree."""
+        self.remove_podman_container()
 
     def check_cancelled(self):
         if self.cancelled:
@@ -259,6 +268,22 @@ class PlatformBuilder:
         raise NotImplementedError
 
     def prepare_output_dir(self):
+        """Empty the staging directory, protecting anything the build still needs.
+
+        Packaging owns `build/` and deletes its contents. Anything the build
+        linked against that happens to live there would be deleted out from
+        under the packaging step, which fails much later and much less clearly.
+        """
+        output = self.config.output_dir.resolve()
+        for protected in self.protected_paths():
+            try:
+                protected.relative_to(output)
+            except ValueError:
+                continue
+            raise RuntimeError(
+                f"{protected} is inside the packaging output directory "
+                f"{self.config.output_dir}, which packaging clears; store it elsewhere"
+            )
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         # Materialize the directory entries before removing anything.  Keeping
         # an os.scandir iterator alive while rmtree runs can leave the output
@@ -409,7 +434,7 @@ class PlatformBuilder:
             "name": "Freya NLE",
             "version": self.config.version_string,
             "platform": self.PLATFORM_OS,
-            "architecture": self.PLATFORM_ARCH,
+            "architecture": self.platform_architecture(),
             "variant": self.artifact_variant or None,
             "profile": self.config.build_type,
             "commit": self.git_commit(),
@@ -453,6 +478,13 @@ class PlatformBuilder:
     def runtime_requirements(self) -> dict:
         return {}
 
+    def protected_paths(self) -> list[Path]:
+        """Directories that must survive `prepare_output_dir`."""
+        paths: list[Path] = []
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            paths.append(Path(ffmpeg_dir).resolve())
+        return paths
+
     def copy_licenses(self, destination: Path):
         """Ship the licence texts the archive owes its recipients.
 
@@ -484,14 +516,20 @@ class PlatformBuilder:
             return ""
         return result.stdout if result.returncode == 0 else ""
 
-    def run_cmd(self, command: List[str], shell: bool = False, force_host: bool = False):
+    def run_cmd(self, command: List[str], shell: bool = False, force_host: bool = False,
+                allow_failure: bool = False):
         self.check_cancelled()
         in_container = self.use_container and not force_host
+        if in_container and isinstance(command, list):
+            # Paths a container sees are not the host's paths; translate before
+            # quoting so `--manifest-path /src/rust/Cargo.toml` stays valid.
+            command = self.container_command(command)
         display_command = shlex.join(command) if isinstance(command, list) else command
         self.logger.log(f"{'[Container] ' if in_container else ''}{display_command}")
         actual_command = command
         if in_container:
-            inner = f"cd {shlex.quote(str(self.config.source_dir))} && {display_command}"
+            workdir = self.container_source_dir()
+            inner = f"cd {shlex.quote(workdir)} && {display_command}"
             actual_command = self.container_invocation(inner)
             shell = True
         popen_options = {"start_new_session": True} if os.name != "nt" else {}
@@ -503,36 +541,86 @@ class PlatformBuilder:
         self.current_proc = process
         try:
             assert process.stdout is not None
-            for line in process.stdout:
-                self.logger.log(line.rstrip())
+            with process.stdout:
+                for line in process.stdout:
+                    self.logger.log(line.rstrip())
             process.wait()
         finally:
             self.current_proc = None
         self.check_cancelled()
-        if process.returncode != 0:
+        if process.returncode != 0 and not allow_failure:
             raise subprocess.CalledProcessError(process.returncode, actual_command)
+        return process.returncode
+
+    def container_source_dir(self) -> str:
+        """Where the source tree appears inside the build container.
+
+        `distrobox` shares the host filesystem, so the tree keeps its path. A
+        `podman` container only sees what is mounted, and this build mounts it at
+        `/src`.
+        """
+        return "/src" if self.container_engine == "podman" else str(self.config.source_dir)
+
+    def container_command(self, command: List[str]) -> List[str]:
+        """Rewrite host paths in a command for the container's filesystem."""
+        if self.container_engine != "podman":
+            return command
+        prefix = str(self.config.source_dir)
+        return [
+            argument.replace(prefix, "/src") if isinstance(argument, str) else argument
+            for argument in command
+        ]
 
     def container_invocation(self, inner: str) -> str:
         """Command that runs `inner` inside the build container.
 
-        `distrobox` is the preferred host because it creates the container as a
-        persistent home-oriented environment. It is not installed everywhere --
-        on macOS, in particular, only `podman` is -- so a plain `podman run`
-        against the same image is used instead of failing the build outright.
+        `distrobox` is the preferred host because it creates a persistent
+        environment keyed to the image. It is not installed everywhere -- on
+        macOS, in particular, only podman is -- and the fallback has to persist
+        too: a `podman run --rm` per command would discard every package the
+        previous command installed.
         """
         if self.container_engine == "podman":
             return " ".join([
-                "podman", "run", "--rm",
-                "--userns=keep-id",
-                "--security-opt", "label=disable",
-                "--platform", "linux/amd64",
-                "-v", f"{shlex.quote(str(self.config.source_dir))}:/src:Z",
+                "podman", "exec",
                 "-w", "/src",
-                "-v", f"{shlex.quote(str(self.config.temp_base))}:/src/.build_tmp:Z",
-                self.image_name,
+                shlex.quote(self.container_name),
                 "bash", "-lc", shlex.quote(inner),
             ])
         return f"distrobox enter {shlex.quote(self.container_name)} -- bash -lc {shlex.quote(inner)}"
+
+    def create_podman_container(self):
+        """Create the long-lived container the podman path executes into.
+
+        One container serves every command in the build, which is what lets an
+        `apt-get install` still be there for the compile that follows. The
+        source tree is mounted whole -- the build directories live inside it --
+        and the mount point has to exist before podman is asked for it.
+        """
+        self.config.temp_base.mkdir(parents=True, exist_ok=True)
+        self.run_cmd(["podman", "container", "rm", "--force", self.container_name],
+                     force_host=True, allow_failure=True)
+        self.run_cmd([
+            "podman", "run", "--detach",
+            "--name", self.container_name,
+            "--userns=keep-id",
+            "--security-opt", "label=disable",
+            "--platform", "linux/amd64",
+            "-v", f"{self.config.source_dir}:/src:Z",
+            "-w", "/src",
+            # Keep the container alive between commands; `exec` supplies the work.
+            self.image_name,
+            "sleep", "infinity",
+        ], force_host=True)
+
+    def remove_podman_container(self):
+        """Drop the container once the build is done, if this build made one."""
+        if getattr(self, "container_engine", "") != "podman" or not self.container_name:
+            return
+        if not shutil.which("podman"):
+            return
+        self.run_cmd(["podman", "container", "rm", "--force", self.container_name],
+                     force_host=True, allow_failure=True)
 
     def remove_tree(self, path: Path):
         def make_writable_and_retry(function, target, _exception):
@@ -571,6 +659,7 @@ class LinuxBuilderBase(PlatformBuilder):
             return
         if shutil.which("podman"):
             self.container_engine = "podman"
+            self.create_podman_container()
             self.run_cmd(["true"])
             return
         raise RuntimeError(
@@ -680,19 +769,24 @@ class AppImageBuilder(LinuxBuilderBase):
 
     def __init__(self, config: BuildConfig, logger: Logger):
         super().__init__(config, logger)
-        self.container_name = "ubuntu-appimage"
+        self.container_name = "freya-nle-appimage"
         self.image_name = APPIMAGE_BASE_IMAGE
-        # `podman run` is the reliable path for a one-shot toolchain container;
-        # distrobox creates a persistent home that this build does not want.
+        # The pinned image is a one-shot toolchain: distrobox would create a
+        # persistent home for it that nothing here needs, and podman can supply
+        # the same isolation without one.
         self.container_engine = "podman"
 
     def install_dependencies(self):
         if not self.use_container:
             self.logger.log("Host mode: skipping system package installation")
             return
+        # `apt-get install` only survives to the next command because the
+        # container outlives this call; a fresh container per command would
+        # discard it.
+        self.create_podman_container()
         # The pinned image is Ubuntu 22.04, so the packages come from apt. Rust
         # comes from rustup, not from the distribution: 22.04's rustc is far too
-        # old for this workspace and `rust-toolchain.toml` pins 1.97.1.
+        # old for this workspace and `rust-toolchain.toml` pins 1.99.1.
         self.run_cmd([
             "bash", "-c",
             "export DEBIAN_FRONTEND=noninteractive && "
@@ -700,7 +794,7 @@ class AppImageBuilder(LinuxBuilderBase):
             "apt-get install -y -qq --no-install-recommends "
             "build-essential curl ca-certificates git pkg-config zstd xz-utils "
             "libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev "
-            "libxcursor-dev libxi-dev libxrandr-dev file",
+            "libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin",
         ])
         self.install_rust()
 
@@ -731,19 +825,19 @@ class AppImageBuilder(LinuxBuilderBase):
 
     def build_ffmpeg(self):
         """Build the pinned FFmpeg inside the same container as the application."""
-        prefix = "/src/build/ffmpeg/x86_64-unknown-linux-gnu"
+        prefix = "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
         self.run_cmd([
             "bash", "/src/scripts/build-ffmpeg.sh",
             "--target", "x86_64-unknown-linux-gnu", "--prefix", prefix,
         ])
-        self.env["FFMPEG_DIR"] = str(self.config.source_dir / "build" / "ffmpeg"
+        self.env["FFMPEG_DIR"] = str(self.config.temp_base / "ffmpeg"
                                      / "x86_64-unknown-linux-gnu")
 
     def cargo_environment(self) -> dict:
         environment = {}
         if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
             # The build runs inside the container, where the source tree is /src.
-            environment["FFMPEG_DIR"] = "/src/build/ffmpeg/x86_64-unknown-linux-gnu"
+            environment["FFMPEG_DIR"] = "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
         return environment
 
     def package(self):
@@ -1378,7 +1472,8 @@ class XcodeBuilder(PlatformBuilder):
         script = self.config.source_dir / "scripts" / "build-ffmpeg.sh"
         if not script.is_file():
             raise FileNotFoundError(f"FFmpeg build script not found: {script}")
-        prefix = self.config.source_dir / "build" / "ffmpeg" / self.ffmpeg_target()
+        # Not under `build/`: packaging clears that directory.
+        prefix = self.config.temp_base / "ffmpeg" / self.ffmpeg_target()
         self.run_cmd([
             "bash", str(script), "--target", self.ffmpeg_target(), "--prefix", str(prefix),
         ], force_host=True)
@@ -1401,6 +1496,9 @@ class XcodeBuilder(PlatformBuilder):
         # so the same commit produces different requirements on different runner
         # images. Every dependency compiled from source honours it as well.
         environment = {"MACOSX_DEPLOYMENT_TARGET": self.DEPLOYMENT_TARGET}
+        # `.cargo/config.toml` carries the `-headerpad_max_install_names` link
+        # argument. Setting RUSTFLAGS here as well would override that file and
+        # leave the two mechanisms to drift apart.
         if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
             environment["FFMPEG_DIR"] = ffmpeg_dir
         return environment
@@ -1472,6 +1570,38 @@ class XcodeBuilder(PlatformBuilder):
     def is_macos_system_dependency(path: str) -> bool:
         return path.startswith(("/System/", "/usr/lib/", "@executable_path/", "@loader_path/"))
 
+    def dependency_search_paths(self) -> list[Path]:
+        """Directories an `@rpath` entry may point into during packaging.
+
+        The build links a pinned FFmpeg whose libraries install as `@rpath/...`,
+        so the packaging step has to look where that FFmpeg lives rather than
+        only at the absolute path a distribution bottle would record.
+        """
+        paths: list[Path] = []
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            paths.append(Path(ffmpeg_dir) / "lib")
+        for value in self.env.get("DYLD_FALLBACK_LIBRARY_PATH", "").split(os.pathsep):
+            if value:
+                paths.append(Path(value))
+        paths.extend((Path("/opt/homebrew/lib"), Path("/usr/local/lib")))
+        return [path for path in dict.fromkeys(paths) if path.is_dir()]
+
+    def resolve_rpath_dependency(self, dependency: str) -> Path | None:
+        """Find the file an `@rpath/` reference names, keeping that name.
+
+        The result is deliberately not canonicalised: FFmpeg installs
+        `libswscale.10.dylib` as a symlink to `libswscale.10.1.102.dylib`, and the
+        name other binaries refer to is the short one. Collapsing it to the fully
+        versioned file would leave a bundle whose libraries disagree about each
+        other's names.
+        """
+        name = Path(dependency).name
+        for directory in self.dependency_search_paths():
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+        return None
+
     def bundle_macos_dependencies(self, executable: Path, frameworks: Path):
         frameworks.mkdir(parents=True, exist_ok=True)
         pending = [executable]
@@ -1481,25 +1611,46 @@ class XcodeBuilder(PlatformBuilder):
             if binary in scanned:
                 continue
             scanned.add(binary)
-            for dependency in self.macos_dependencies(binary):
-                if self.is_macos_system_dependency(dependency):
+            for reference in self.macos_dependencies(binary):
+                if self.is_macos_system_dependency(reference):
                     continue
-                if dependency.startswith("@rpath/"):
-                    if (frameworks / Path(dependency).name).exists():
-                        continue
-                    raise FileNotFoundError(f"Could not resolve macOS @rpath dependency: {dependency}")
-                source = Path(dependency)
-                if not source.exists():
-                    raise FileNotFoundError(f"macOS dependency not found: {dependency}")
-                destination = frameworks / source.name
-                if not destination.exists():
-                    shutil.copy2(source.resolve(), destination)
-                    os.chmod(destination, destination.stat().st_mode | stat.S_IWUSR)
-                    pending.append(destination)
+                # `install_name_tool -change` matches the exact string recorded in
+                # the load command, so the original reference is kept even when
+                # the file it names is found somewhere else. Every reference is
+                # rewritten, whether or not this loop copied the file: a second
+                # binary naming an already-staged library still has to stop
+                # pointing at the build tree.
+                if reference.startswith("@rpath/"):
+                    name = Path(reference).name
+                    if (frameworks / name).exists():
+                        destination = frameworks / name
+                    else:
+                        # A library linked against a pinned FFmpeg refers to its
+                        # neighbour by name, not by the absolute path a Homebrew
+                        # bottle carries. Resolve it against that FFmpeg.
+                        source = self.resolve_rpath_dependency(reference)
+                        if source is None:
+                            raise FileNotFoundError(
+                                f"Could not resolve macOS @rpath dependency: {reference}"
+                            )
+                        destination = frameworks / source.name
+                        shutil.copy2(source.resolve(), destination)
+                        os.chmod(destination, destination.stat().st_mode | stat.S_IWUSR)
+                        pending.append(destination)
+                else:
+                    source = Path(reference)
+                    if not source.exists():
+                        raise FileNotFoundError(f"macOS dependency not found: {reference}")
+                    destination = frameworks / source.name
+                    if not destination.exists():
+                        shutil.copy2(source.resolve(), destination)
+                        os.chmod(destination, destination.stat().st_mode | stat.S_IWUSR)
+                        pending.append(destination)
                 relative = f"@executable_path/../Frameworks/{destination.name}"
-                self.run_cmd(["install_name_tool", "-change", dependency, relative, str(binary)])
+                self.run_cmd(["install_name_tool", "-change", reference, relative, str(binary)])
         for dylib in frameworks.iterdir():
-            self.run_cmd(["install_name_tool", "-id", f"@rpath/{dylib.name}", str(dylib)])
+            self.run_cmd(["install_name_tool", "-id", f"@executable_path/../Frameworks/{dylib.name}",
+                          str(dylib)])
 
     def macos_app_bundle(self) -> Path:
         """The one bundle path packaging creates and archiving publishes."""

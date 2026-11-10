@@ -1,0 +1,9 @@
+# macOS packaging relocates every bundled library into the application bundle.
+# The rewrite replaces `@rpath/libfoo.dylib` with a longer path, and the linker
+# only leaves room for that when asked to: without this, `install_name_tool`
+# refuses the change and the bundle cannot leave the build machine.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-headerpad_max_install_names"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-headerpad_max_install_names"]

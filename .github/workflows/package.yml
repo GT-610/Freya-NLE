@@ -82,8 +82,8 @@ jobs:
         run: |
           bash scripts/build-ffmpeg.sh \
             --target x86_64-unknown-linux-gnu \
-            --prefix "$GITHUB_WORKSPACE/build/ffmpeg/x86_64-unknown-linux-gnu"
-          echo "FFMPEG_DIR=$GITHUB_WORKSPACE/build/ffmpeg/x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+            --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
+          echo "FFMPEG_DIR=$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
       - name: Build and package
         # Already inside the pinned container, so BUILD.py must not open another.
         run: python3 BUILD.py --appimage --no-container
@@ -188,11 +188,11 @@ jobs:
         run: |
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             bash scripts/build-ffmpeg.sh --target "$target" \
-              --prefix "$GITHUB_WORKSPACE/build/ffmpeg/$target"
+              --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/$target"
           done
       - name: Build and package arm64
         env:
-          FFMPEG_DIR: ${{ github.workspace }}/build/ffmpeg/aarch64-apple-darwin
+          FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/aarch64-apple-darwin
         run: |
           python3 BUILD.py --xcode --strict-deployment-target --offline \
             --target aarch64-apple-darwin
@@ -202,7 +202,7 @@ jobs:
           mv dist/*-macos-arm64.zip dist/arm64/
       - name: Build and package x86_64
         env:
-          FFMPEG_DIR: ${{ github.workspace }}/build/ffmpeg/x86_64-apple-darwin
+          FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/x86_64-apple-darwin
         run: |
           python3 BUILD.py --xcode --strict-deployment-target --offline \
             --target x86_64-apple-darwin

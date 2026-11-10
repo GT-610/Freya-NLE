@@ -2,12 +2,16 @@ import argparse
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from BUILD import (
+    APPIMAGE_BASE_IMAGE,
+    ARCH_LINUX_IMAGE,
     AppImageBuilder,
     ArchBuilder,
     BuildConfig,
@@ -580,6 +584,69 @@ class TestMacosMinimumSystem(unittest.TestCase):
             self.assertEqual(builder.declared_minimum_system(Path("app")), builder.DEPLOYMENT_TARGET)
 
 
+class TestMacosBundling(unittest.TestCase):
+    """Relocating the libraries is what makes the bundle runnable elsewhere.
+
+    Three specific mistakes here produce a bundle that signs cleanly and then
+    refuses to start, which is how the previous release shipped a broken floor.
+    """
+
+    def builder(self, source):
+        return XcodeBuilder(
+            config_for(source, target="xcode"), Logger(lambda _m: None, lambda *_a: None)
+        )
+
+    def test_a_resolved_library_keeps_the_name_it_is_referred_to_by(self):
+        # FFmpeg installs `libswscale.10.dylib` as a symlink to the fully
+        # versioned file. Collapsing it to the target name leaves the bundle's
+        # libraries disagreeing about each other's names.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            lib = source / "lib" / "libswscale.10.dylib"
+            lib.parent.mkdir(parents=True)
+            lib.write_text("dylib", encoding="utf-8")
+            builder = self.builder(source)
+            builder.env["FFMPEG_DIR"] = str(source)
+            resolved = builder.resolve_rpath_dependency("@rpath/libswscale.10.dylib")
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.name, "libswscale.10.dylib")
+
+    def test_the_link_leaves_room_to_rewrite_library_paths(self):
+        # `install_name_tool` cannot lengthen a load command unless the linker
+        # reserved space for it, so the flag has to be in the repository config
+        # rather than in someone's shell.
+        config = (SOURCE_DIR / ".cargo" / "config.toml").read_text(encoding="utf-8")
+        self.assertIn("headerpad_max_install_names", config)
+        for triple in ("aarch64-apple-darwin", "x86_64-apple-darwin"):
+            with self.subTest(triple=triple):
+                self.assertIn(f"[target.{triple}]", config)
+
+    def test_the_build_does_not_override_the_repository_link_flags(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            environment = builder.cargo_environment()
+            # RUSTFLAGS would replace the config file's rustflags wholesale.
+            self.assertNotIn("RUSTFLAGS", environment)
+            self.assertEqual(environment["MACOSX_DEPLOYMENT_TARGET"], builder.DEPLOYMENT_TARGET)
+
+    def test_packaging_refuses_to_delete_the_libraries_it_links(self):
+        # The FFmpeg prefix must not live under `build/`, which packaging empties.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            builder.env["FFMPEG_DIR"] = str(source / "build" / "ffmpeg" / "arm64")
+            with self.assertRaises(RuntimeError):
+                builder.prepare_output_dir()
+
+    def test_a_prefix_outside_the_output_directory_is_allowed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            builder.env["FFMPEG_DIR"] = str(source / ".build_tmp" / "ffmpeg" / "arm64")
+            builder.prepare_output_dir()
+            self.assertTrue((source / "build").is_dir())
+
+
 class TestWindowsPortability(unittest.TestCase):
     def test_runtime_dlls_are_the_ones_the_binaries_import(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -625,6 +692,178 @@ class TestWindowsPortability(unittest.TestCase):
             builder.copy_windows_runtime()
             self.assertTrue((output / "vcruntime140.dll").is_file())
             self.assertFalse((output / "msvcp140.dll").exists())
+
+
+class TestContainerBuild(unittest.TestCase):
+    """The podman path has to behave like the distrobox one.
+
+    `apt-get install` only survives to the next command if every command shares
+    one container, and a command built from host paths is not valid inside a
+    container that only sees a mount.
+    """
+
+    def builder(self, source, target="appimage"):
+        return AppImageBuilder(
+            config_for(source, target=target),
+            Logger(lambda _message: None, lambda *_args: None),
+        )
+
+    def test_host_paths_are_rewritten_for_the_container(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            builder.container_engine = "podman"
+            command = ["cargo", "build", "--manifest-path", str(source / "rust" / "Cargo.toml")]
+            translated = builder.container_command(command)
+            self.assertEqual(
+                translated[-1], "/src/rust/Cargo.toml",
+            )
+            # The container mounts the tree at /src, so that is where the shell
+            # has to start as well.
+            self.assertEqual(builder.container_source_dir(), "/src")
+
+    def test_distrobox_keeps_host_paths(self):
+        # distrobox shares the host filesystem, so rewriting its paths would
+        # break a build that works today.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            builder.container_engine = "distrobox"
+            command = ["cargo", "build", "--manifest-path", str(source / "rust" / "Cargo.toml")]
+            self.assertEqual(builder.container_command(command), command)
+            self.assertEqual(builder.container_source_dir(), str(source))
+
+    def test_every_command_targets_one_long_lived_container(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.container_engine = "podman"
+            builder.container_name = "freya-nle-test"
+            first = builder.container_invocation("echo one")
+            second = builder.container_invocation("echo two")
+            # `podman exec` into a named container, not a fresh `podman run`:
+            # the latter would lose everything the previous command installed.
+            self.assertIn("podman exec", first)
+            self.assertIn("freya-nle-test", first)
+            self.assertIn("podman exec", second)
+            self.assertNotIn("--rm", first)
+
+    def test_a_failed_command_can_be_tolerated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.container_engine = "podman"
+            code = builder.run_cmd([sys.executable, "-c", "raise SystemExit(3)"],
+                                   allow_failure=True)
+            self.assertEqual(code, 3)
+            with self.assertRaises(subprocess.CalledProcessError):
+                builder.run_cmd([sys.executable, "-c", "raise SystemExit(3)"])
+
+
+class TestReleasePipeline(unittest.TestCase):
+    """The release has to publish a complete, named, verified set.
+
+    These read the workflow files rather than a fixture because the checks they
+    describe live there: a platform silently dropped from the matrix, or an
+    artifact published under a name the scheme does not produce, is exactly the
+    kind of regression a build script cannot catch.
+    """
+
+    def workflow(self, name):
+        return (SOURCE_DIR / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+    def test_a_tag_publishes_every_target(self):
+        release = self.workflow("release.yml")
+        package = self.workflow("package.yml")
+        # One release asset per target the scheme defines.
+        for target in (
+            "-linux-x86_64.AppImage",
+            "-linux-x86_64-archlinux.tar.zst",
+            "-macos-arm64.zip",
+            "-macos-x86_64.zip",
+            "-windows-x86_64.zip",
+        ):
+            with self.subTest(target=target):
+                self.assertIn(target, release)
+        # And a job building each of them.
+        for job in ("linux-appimage", "linux-arch", "macos", "windows"):
+            with self.subTest(job=job):
+                self.assertIn(f"{job}:", package)
+
+    def test_the_old_workflow_is_gone(self):
+        # Two workflows that both react to a tag would race to publish, and one
+        # of them would publish the unverified set this change replaced.
+        self.assertFalse((SOURCE_DIR / ".github" / "workflows" / "build.yml").exists())
+
+    def test_the_appimage_is_built_against_its_pinned_image(self):
+        package = self.workflow("package.yml")
+        # Building the portable track on the runner's own Ubuntu would link that
+        # Ubuntu's glibc and defeat the reason the track exists.
+        self.assertIn(APPIMAGE_BASE_IMAGE, package)
+
+    def test_the_arch_image_is_pinned_to_a_digest(self):
+        package = self.workflow("package.yml")
+        self.assertIn(ARCH_LINUX_IMAGE, package)
+        # A floating tag is what let the glibc requirement drift between builds.
+        self.assertNotIn("archlinux:latest", package)
+
+    def test_checksums_are_published(self):
+        self.assertIn("SHA256SUMS", self.workflow("release.yml"))
+
+    def test_macos_checks_every_mach_o_against_the_plist(self):
+        # The defect this guards: a bundle whose plist promised macOS 12 while
+        # its libraries needed 15.
+        package = self.workflow("package.yml")
+        self.assertIn("vtool -show-build", package)
+        self.assertIn("LSMinimumSystemVersion", package)
+
+    def test_windows_archive_is_checked_for_the_runtime(self):
+        package = self.workflow("package.yml")
+        self.assertIn("vcruntime140.dll", package)
+
+
+class TestCrossBuildTargets(unittest.TestCase):
+    """One runner produces both Apple architectures."""
+
+    def test_the_target_triple_separates_intermediate_trees(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            native = PlatformBuilder(
+                config_for(source, target="xcode"), Logger(lambda _m: None, lambda *_a: None)
+            )
+            cross = PlatformBuilder(
+                config_for(source, target="xcode"), Logger(lambda _m: None, lambda *_a: None)
+            )
+            cross.config.target_triple = "x86_64-apple-darwin"
+            # Sharing a directory would let the second build reuse the first's
+            # objects and report success without producing a new binary.
+            self.assertNotEqual(native.config.work_dir, cross.config.work_dir)
+
+    def test_a_cross_build_asks_cargo_for_that_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = PlatformBuilder(
+                config_for(Path(temporary)), Logger(lambda _m: None, lambda *_a: None)
+            )
+            builder.config.target_triple = "x86_64-apple-darwin"
+            command = builder.get_cargo_build_cmd()
+            self.assertEqual(command[command.index("--target") + 1], "x86_64-apple-darwin")
+            # The binary lands in the per-target directory cargo uses.
+            self.assertIn("x86_64-apple-darwin", str(builder.cargo_binary()))
+
+    def test_macos_names_a_cross_build_after_its_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = XcodeBuilder(
+                config_for(Path(temporary), target="xcode"),
+                Logger(lambda _m: None, lambda *_a: None),
+            )
+            builder.config.target_triple = "x86_64-apple-darwin"
+            self.assertEqual(builder.platform_architecture(), "x86_64")
+            self.assertTrue(builder.get_archive_name().endswith("-macos-x86_64"))
+
+    def test_a_native_build_has_no_target_argument(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = PlatformBuilder(
+                config_for(Path(temporary)), Logger(lambda _m: None, lambda *_a: None)
+            )
+            self.assertNotIn("--target", builder.get_cargo_build_cmd())
 
 
 class TestReleaseVersionBaseline(unittest.TestCase):

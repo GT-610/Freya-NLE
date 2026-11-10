@@ -14,7 +14,7 @@
 #
 #   --target   Rust target triple: x86_64-unknown-linux-gnu,
 #              aarch64-apple-darwin, x86_64-apple-darwin
-#   --prefix   Install prefix (default: build/ffmpeg/<triple>)
+#   --prefix   Install prefix (default: .build_tmp/ffmpeg/<triple>)
 #   --jobs     Parallel make jobs (default: number of CPUs)
 #
 # The result is a dynamic FFmpeg (`libav*.so`/`.dylib`), which is what
@@ -57,7 +57,9 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${WORK_DIR:-$ROOT/.build_tmp/ffmpeg}"
 SRC="$WORK/src/$TARGET"
-PREFIX="${PREFIX:-$ROOT/build/ffmpeg/$TARGET}"
+# Deliberately not under `build/`: packaging clears that directory, which
+# would delete the FFmpeg it is about to link against.
+PREFIX="${PREFIX:-$ROOT/.build_tmp/ffmpeg/$TARGET}"
 X264_PREFIX="$WORK/install/$TARGET/x264"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 
@@ -80,11 +82,13 @@ case "$TARGET" in
     aarch64-apple-darwin|x86_64-apple-darwin)
         FF_OS="darwin"
         if [ "$TARGET" = "aarch64-apple-darwin" ]; then
-            FF_ARCH_FLAGS=(--arch=arm64 --cpu=armv8-a --extra-cflags=-arch\ arm64 --extra-ldflags=-arch\ arm64)
+            FF_ARCH_FLAGS=(--arch=arm64 --cpu=armv8-a)
+            FF_CLANG_ARCH="arm64"
         else
             # Cross-compiling Intel on an arm64 runner: clang takes -arch, so no
             # separate cctools toolchain is needed, only the x86_64 nasm.
-            FF_ARCH_FLAGS=(--arch=x86_64 --cpu=x86-64 --extra-cflags=-arch\ x86_64 --extra-ldflags=-arch\ x86_64)
+            FF_ARCH_FLAGS=(--arch=x86_64 --cpu=x86-64)
+            FF_CLANG_ARCH="x86_64"
         fi
         FF_EXTRA=(
             --enable-pthreads
@@ -104,8 +108,14 @@ esac
 # Info.plist is a fiction. FFmpeg is the largest such binary.
 if [ "$FF_OS" = "darwin" ]; then
     export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
-    FF_EXTRA+=(--extra-cflags=-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET)
-    FF_EXTRA+=(--extra-ldflags=-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET)
+    # Packaging relocates each library into the bundle by rewriting its install
+    # name into a longer path. That only fits when the linker reserved space for
+    # it, and FFmpeg's own dylibs have several dependencies each.
+    FF_CFLAGS="-arch $FF_CLANG_ARCH -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+    FF_LDFLAGS="-arch $FF_CLANG_ARCH -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+    FF_LDFLAGS="$FF_LDFLAGS -Wl,-headerpad_max_install_names"
+    FF_EXTRA+=(--extra-cflags="$FF_CFLAGS")
+    FF_EXTRA+=(--extra-ldflags="$FF_LDFLAGS")
 fi
 
 mkdir -p "$WORK/src" "$WORK/install/$TARGET" "$PREFIX"
