@@ -4,6 +4,20 @@ name: Package
 # let a maintainer build one platform by hand to check a change without cutting
 # a release.
 on:
+  # A change to the packaging is only proven by packaging. These paths cover the
+  # build script, the release workflow, and the pinned FFmpeg recipe, so a pull
+  # request that touches them builds the artifacts instead of merging blind.
+  pull_request:
+    paths:
+      - ".github/workflows/package.yml"
+      - ".github/workflows/release.yml"
+      - ".github/actions/resolve-version/**"
+      - "BUILD.py"
+      - "scripts/**"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - "rust/Cargo.lock"
+      - "tests/test_build_version.py"
   workflow_call:
     inputs:
       version:
@@ -51,7 +65,7 @@ jobs:
     name: Linux AppImage (portable)
     needs: [test]
     if: |
-      github.event_name == 'workflow_call' ||
+      github.event_name != 'workflow_dispatch' ||
       inputs.platform == 'all' || inputs.platform == 'linux-appimage'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -107,7 +121,7 @@ jobs:
     name: Linux Arch archive (compatibility)
     needs: [test]
     if: |
-      github.event_name == 'workflow_call' ||
+      github.event_name != 'workflow_dispatch' ||
       inputs.platform == 'all' || inputs.platform == 'linux-arch'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -159,7 +173,7 @@ jobs:
     name: macOS (arm64 + x86_64)
     needs: [test]
     if: |
-      github.event_name == 'workflow_call' ||
+      github.event_name != 'workflow_dispatch' ||
       inputs.platform == 'all' || inputs.platform == 'macos'
     # `macos-15` is an arm64 runner. Intel is cross-compiled here rather than
     # built on an Intel runner, which GitHub only provides as a larger paid
@@ -250,7 +264,7 @@ jobs:
     name: Windows portable
     needs: [test]
     if: |
-      github.event_name == 'workflow_call' ||
+      github.event_name != 'workflow_dispatch' ||
       inputs.platform == 'all' || inputs.platform == 'windows'
     runs-on: windows-latest
     timeout-minutes: 120
