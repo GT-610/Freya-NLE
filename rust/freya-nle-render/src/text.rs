@@ -1837,31 +1837,39 @@ mod tests {
     ///
     /// The folder list is a process-wide static, so tests that run in parallel
     /// must agree on a single directory instead of each replacing it; otherwise
-    /// one test's registration hides the other's image.
+    /// one test's registration hides the other's image. For the same reason the
+    /// images are written once: rewriting a PNG on every call replaced it while
+    /// another thread was decoding it, which intermittently failed the load and
+    /// fell back to a square cell.
     fn emoji_test_directory() -> std::path::PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("freya-nle-emoji-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).expect("emoji directory");
-        for (name, width, height, color) in [
-            ("__test_star", 8u32, 8u32, [255u8, 0, 0, 255]),
-            ("__test_wide", 32, 8, [0, 255, 0, 255]),
-            ("__test_tall", 8, 32, [0, 0, 255, 255]),
-        ] {
-            let mut pixels = vec![0_u8; (width * height * 4) as usize];
-            for pixel in pixels.chunks_exact_mut(4) {
-                pixel.copy_from_slice(&color);
-            }
-            image::save_buffer(
-                directory.join(format!("{name}.png")),
-                &pixels,
-                width,
-                height,
-                image::ColorType::Rgba8,
-            )
-            .expect("write png");
-        }
-        set_emoji_directories(vec![directory.clone()]);
-        directory
+        static READY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        READY
+            .get_or_init(|| {
+                let directory =
+                    std::env::temp_dir().join(format!("freya-nle-emoji-{}", std::process::id()));
+                std::fs::create_dir_all(&directory).expect("emoji directory");
+                for (name, width, height, color) in [
+                    ("__test_star", 8u32, 8u32, [255u8, 0, 0, 255]),
+                    ("__test_wide", 32, 8, [0, 255, 0, 255]),
+                    ("__test_tall", 8, 32, [0, 0, 255, 255]),
+                ] {
+                    let mut pixels = vec![0_u8; (width * height * 4) as usize];
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        pixel.copy_from_slice(&color);
+                    }
+                    image::save_buffer(
+                        directory.join(format!("{name}.png")),
+                        &pixels,
+                        width,
+                        height,
+                        image::ColorType::Rgba8,
+                    )
+                    .expect("write png");
+                }
+                set_emoji_directories(vec![directory.clone()]);
+                directory
+            })
+            .clone()
     }
 
     #[test]
