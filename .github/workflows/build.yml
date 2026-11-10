@@ -26,7 +26,10 @@ jobs:
             artifact_name: Freya-NLE-Arch-Linux-x86_64
             artifact_path: dist/Freya-NLE-Arch-Linux-x86_64.zip
           - platform: macos
-            runs_on: macos-14
+            # macOS 14 images were retired from GitHub Actions on 2026-11-02.
+            # `macos-15` is the oldest supported arm64 image, which keeps the
+            # artifact the same architecture that `macos-14` produced.
+            runs_on: macos-15
             artifact_name: Freya-NLE-macOS
             artifact_path: dist/Freya-NLE-macOS-Xcode-*.zip
           - platform: windows
