@@ -843,11 +843,15 @@ class AppImageBuilder(LinuxBuilderBase):
                                      / "x86_64-unknown-linux-gnu")
 
     def cargo_environment(self) -> dict:
-        environment = {}
-        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
-            # The build runs inside the container, where the source tree is /src.
-            environment["FFMPEG_DIR"] = "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
-        return environment
+        if not self.env.get("FFMPEG_DIR"):
+            return {}
+        # Inside the container the tree is mounted at /src, so the FFmpeg prefix
+        # has to be named the way the container sees it. Building on the host --
+        # which is what CI does, inside the pinned image -- the path the caller
+        # exported is already correct and must not be rewritten.
+        if not self.use_container or self.container_engine != "podman":
+            return {}
+        return {"FFMPEG_DIR": "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"}
 
     def package(self):
         super().package()

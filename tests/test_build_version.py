@@ -501,6 +501,30 @@ class TestAppImage(unittest.TestCase):
             self.assertIn("Categories=AudioVideo;Video;", text)
             self.assertIn("Exec=freya-nle %f", text)
 
+    def test_the_ffmpeg_prefix_is_left_alone_on_the_host(self):
+        # CI builds the AppImage inside the pinned image without the container
+        # wrapper, so the exported path is already the one cargo must use.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            config = config_for(source, target="appimage")
+            config.use_container = False
+            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
+            builder.env["FFMPEG_DIR"] = str(source / ".build_tmp" / "ffmpeg" / "x")
+            self.assertEqual(builder.cargo_environment(), {})
+
+    def test_the_ffmpeg_prefix_is_translated_for_the_container(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            config = config_for(source, target="appimage")
+            config.use_container = True
+            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
+            builder.container_engine = "podman"
+            builder.env["FFMPEG_DIR"] = str(source / ".build_tmp" / "ffmpeg" / "x")
+            self.assertEqual(
+                builder.cargo_environment()["FFMPEG_DIR"],
+                "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu",
+            )
+
     def test_the_tool_is_pinned_by_checksum(self):
         # A downloaded build tool is a supply chain entry point, so the digest is
         # part of the source and a mismatch has to stop the build.
