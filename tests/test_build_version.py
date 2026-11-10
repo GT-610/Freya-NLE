@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from BUILD import (
+    AppImageBuilder,
     ArchBuilder,
     BuildConfig,
     Logger,
@@ -99,13 +100,17 @@ class TestBuildScript(unittest.TestCase):
             normalize_macos_architecture("powerpc")
 
     def test_legacy_target_switches_remain_supported(self):
-        defaults = {name: False for name in ("arch", "msys2", "msvc", "xcode")}
+        defaults = {name: False for name in ("appimage", "arch", "msys2", "msvc", "xcode")}
         for target in defaults:
             values = {**defaults, target: True}
             self.assertEqual(determine_target(argparse.Namespace(**values), "unknown"), target)
         self.assertEqual(determine_target(argparse.Namespace(**defaults), "Darwin"), "xcode")
         self.assertEqual(determine_target(argparse.Namespace(**defaults), "Windows"), "msvc")
         self.assertEqual(determine_target(argparse.Namespace(**defaults), "linux"), "arch")
+        # An unqualified Linux build stays Arch-compatible; the portable
+        # AppImage is explicit because it builds in a different container.
+        values = {**defaults, "appimage": True}
+        self.assertEqual(determine_target(argparse.Namespace(**values), "linux"), "appimage")
 
     def test_cargo_command_builds_only_slint_frontend(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -419,6 +424,109 @@ class TestArchiveContents(unittest.TestCase):
             )
             builder.copy_licenses(source / "out")
             self.assertFalse((source / "out").exists())
+
+
+class TestAppImage(unittest.TestCase):
+    """The portable Linux build.
+
+    The Arch archive is linked against a rolling release, so the AppImage is the
+    one a user on any distribution is expected to download. Its correctness
+    rests on three things that can be checked without the container: the file
+    name, the AppRun wrapper, and the pinned tool.
+    """
+
+    def builder(self, source):
+        return AppImageBuilder(
+            config_for(source, target="appimage"),
+            Logger(lambda _message: None, lambda *_args: None),
+        )
+
+    def test_names_the_portable_build_without_a_variant(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            # No variant suffix: this is *the* Linux build, unlike the Archive.
+            self.assertEqual(
+                builder.get_archive_name(), "Freya-NLE-0.7.0-rc.1-linux-x86_64"
+            )
+            self.assertEqual(builder.archive_extension, ".AppImage")
+
+    def test_appdir_staging_puts_resources_next_to_the_executable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            output = source / "build"
+            output.mkdir()
+            (output / "freya-nle").write_text("binary", encoding="utf-8")
+            (output / "effects").mkdir()
+            (output / "effects" / "blur.json").write_text("{}", encoding="utf-8")
+            builder = self.builder(source)
+            # The icon conversion shells out to an image tool; stub it out so the
+            # staging logic is what is under test.
+            builder.write_appimage_icon = lambda appdir: None
+            builder.stage_appdir()
+            appdir = builder.appdir_path()
+            self.assertEqual(
+                (appdir / "usr" / "bin" / "freya-nle").read_text(encoding="utf-8"), "binary"
+            )
+            # Resources must stay beside the executable: packaging copies them
+            # from the build output, and the runtime looks next to the binary.
+            self.assertTrue((appdir / "usr" / "bin" / "effects" / "blur.json").is_file())
+
+    def test_apprun_sets_the_library_path_and_forwards_arguments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            appdir = Path(temporary) / "FreyaNLE.AppDir"
+            appdir.mkdir()
+            builder.write_apprun(appdir)
+            script = (appdir / "AppRun").read_text(encoding="utf-8")
+            self.assertIn("LD_LIBRARY_PATH", script)
+            self.assertIn('exec "$HERE/usr/bin/freya-nle" "$@"', script)
+            # The mount point is not known until the image runs.
+            self.assertIn('readlink -f "$0"', script)
+            self.assertTrue(os.access(appdir / "AppRun", os.X_OK))
+
+    def test_desktop_entry_names_the_icon_and_opens_projects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            appdir = Path(temporary) / "FreyaNLE.AppDir"
+            (appdir / "usr" / "share" / "applications").mkdir(parents=True)
+            builder.write_desktop_entry(appdir)
+            root = appdir / f"{builder.DESKTOP_ID}.desktop"
+            self.assertTrue(root.is_file())
+            text = root.read_text(encoding="utf-8")
+            self.assertIn(f"Icon={builder.DESKTOP_ID}", text)
+            self.assertIn("Categories=AudioVideo;Video;", text)
+            self.assertIn("Exec=freya-nle %f", text)
+
+    def test_the_tool_is_pinned_by_checksum(self):
+        # A downloaded build tool is a supply chain entry point, so the digest is
+        # part of the source and a mismatch has to stop the build.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            self.assertRegex(builder.IMAGE_TOOL_SHA256, r"^[0-9a-f]{64}$")
+            self.assertTrue(builder.IMAGE_TOOL_URL.startswith("https://"))
+
+    def test_a_corrupt_tool_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            tool = source / ".build_tmp" / builder.IMAGE_TOOL
+            tool.parent.mkdir(parents=True)
+            tool.write_text("not an appimage", encoding="utf-8")
+            builder.IMAGE_TOOL_SHA256 = "0" * 64
+            builder.download = lambda url, destination: destination.write_text("x", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                builder.appimagetool_path()
+
+    def test_dependencies_are_declared_for_the_portable_track(self):
+        # Only ALSA is a host library the image cannot carry; the graphics stack
+        # is the driver's business.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.maximum_glibc_version = lambda: "2.35"
+            builder.ffmpeg_sonames = lambda: []
+            requirements = builder.runtime_requirements()
+            self.assertEqual(requirements["host_libraries"], ["libasound.so.2"])
+            self.assertEqual(requirements["glibc"], "2.35")
 
 
 class TestMacosMinimumSystem(unittest.TestCase):

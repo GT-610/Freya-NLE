@@ -2,6 +2,7 @@
 """Build and package the Freya NLE desktop application (Rust + Slint)."""
 
 import argparse
+import hashlib
 import json
 import locale
 import multiprocessing
@@ -328,6 +329,8 @@ class PlatformBuilder:
             self.create_zip(archive_name)
         elif self.archive_extension == ".tar.zst":
             self.create_tar_zst(archive_name)
+        elif self.archive_extension == ".AppImage":
+            self.create_appimage(archive_name)
         else:
             raise RuntimeError(f"Unsupported archive extension: {self.archive_extension}")
         return self.config.dist_dir / f"{archive_name}{self.archive_extension}"
@@ -467,7 +470,7 @@ class PlatformBuilder:
         actual_command = command
         if in_container:
             inner = f"cd {shlex.quote(str(self.config.source_dir))} && {display_command}"
-            actual_command = f"distrobox enter {shlex.quote(self.container_name)} -- bash -lc {shlex.quote(inner)}"
+            actual_command = self.container_invocation(inner)
             shell = True
         popen_options = {"start_new_session": True} if os.name != "nt" else {}
         process = subprocess.Popen(
@@ -487,6 +490,28 @@ class PlatformBuilder:
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, actual_command)
 
+    def container_invocation(self, inner: str) -> str:
+        """Command that runs `inner` inside the build container.
+
+        `distrobox` is the preferred host because it creates the container as a
+        persistent home-oriented environment. It is not installed everywhere --
+        on macOS, in particular, only `podman` is -- so a plain `podman run`
+        against the same image is used instead of failing the build outright.
+        """
+        if self.container_engine == "podman":
+            return " ".join([
+                "podman", "run", "--rm",
+                "--userns=keep-id",
+                "--security-opt", "label=disable",
+                "--platform", "linux/amd64",
+                "-v", f"{shlex.quote(str(self.config.source_dir))}:/src:Z",
+                "-w", "/src",
+                "-v", f"{shlex.quote(str(self.config.temp_base))}:/src/.build_tmp:Z",
+                self.image_name,
+                "bash", "-lc", shlex.quote(inner),
+            ])
+        return f"distrobox enter {shlex.quote(self.container_name)} -- bash -lc {shlex.quote(inner)}"
+
     def remove_tree(self, path: Path):
         def make_writable_and_retry(function, target, _exception):
             os.chmod(target, os.stat(target).st_mode | stat.S_IWUSR)
@@ -502,18 +527,33 @@ class LinuxBuilderBase(PlatformBuilder):
         super().__init__(config, logger)
         self.use_container = config.use_container
         self.image_name = ""
+        self.container_engine = "distrobox"
 
     def create_container(self):
-        if not (shutil.which("distrobox") and shutil.which("podman")):
-            raise RuntimeError("distrobox or podman not found")
-        try:
-            self.run_cmd([
-                "distrobox", "create", "--name", self.container_name,
-                "--image", self.image_name, "--yes",
-            ], force_host=True)
-        except subprocess.CalledProcessError:
-            self.logger.log("Container already exists. Using as-is.")
-        self.run_cmd(["true"])
+        """Prepare the build container, or decide not to need one.
+
+        With `distrobox` available the container is created once and reused.
+        Without it, `podman run --rm` creates a container per command, so there
+        is nothing to set up; the image is pulled on first use instead.
+        """
+        if shutil.which("distrobox") and shutil.which("podman"):
+            self.container_engine = "distrobox"
+            try:
+                self.run_cmd([
+                    "distrobox", "create", "--name", self.container_name,
+                    "--image", self.image_name, "--yes",
+                ], force_host=True)
+            except subprocess.CalledProcessError:
+                self.logger.log("Container already exists. Using as-is.")
+            self.run_cmd(["true"])
+            return
+        if shutil.which("podman"):
+            self.container_engine = "podman"
+            self.run_cmd(["true"])
+            return
+        raise RuntimeError(
+            "Building Linux packages needs distrobox or podman; install one of them"
+        )
 
     def install_dependencies(self):
         if not self.use_container:
@@ -595,6 +635,243 @@ class ArchBuilder(LinuxBuilderBase):
                 if needed not in libraries:
                     libraries.append(needed)
         return sorted(libraries)
+
+
+class AppImageBuilder(LinuxBuilderBase):
+    """The portable Linux build.
+
+    The Arch archive is linked against a rolling release: its glibc and FFmpeg
+    sonames are whatever the snapshot carried, which is why it is a variant. The
+    AppImage is the one a user on any distribution is expected to download, so
+    it is built on the oldest distribution the toolchain supports, links one
+    pinned FFmpeg, and ships the libraries that are not part of a desktop base
+    system. Only the graphics driver, ALSA, and the X11/Wayland client libraries
+    come from the host.
+    """
+
+    PLATFORM_OS = "linux"
+    PLATFORM_ARCH = "x86_64"
+    archive_extension = ".AppImage"
+
+    # The desktop entry and the AppRun wrapper the image carries.
+    DESKTOP_ID = "io.github.gt610.freya-nle"
+
+    def __init__(self, config: BuildConfig, logger: Logger):
+        super().__init__(config, logger)
+        self.container_name = "ubuntu-appimage"
+        self.image_name = APPIMAGE_BASE_IMAGE
+        # `podman run` is the reliable path for a one-shot toolchain container;
+        # distrobox creates a persistent home that this build does not want.
+        self.container_engine = "podman"
+
+    def install_dependencies(self):
+        if not self.use_container:
+            self.logger.log("Host mode: skipping system package installation")
+            return
+        # The pinned image is Ubuntu 22.04, so the packages come from apt. Rust
+        # comes from rustup, not from the distribution: 22.04's rustc is far too
+        # old for this workspace and `rust-toolchain.toml` pins 1.97.1.
+        self.run_cmd([
+            "bash", "-c",
+            "export DEBIAN_FRONTEND=noninteractive && "
+            "apt-get update -qq && "
+            "apt-get install -y -qq --no-install-recommends "
+            "build-essential curl ca-certificates git pkg-config zstd xz-utils "
+            "libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev "
+            "libxcursor-dev libxi-dev libxrandr-dev file",
+        ])
+        self.install_rust()
+
+    def install_rust(self):
+        """Install the pinned Rust toolchain inside the build container."""
+        channel = self.rust_channel()
+        self.run_cmd([
+            "bash", "-c",
+            "if ! command -v cargo >/dev/null || "
+            f"[ \"$(cargo --version | cut -d' ' -f2)\" != \"{channel}\" ]; then "
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | "
+            f"sh -s -- -y --profile minimal --default-toolchain {channel}; "
+            "fi; "
+            # The container's shell is non-interactive, so the rustup environment
+            # has to be sourced explicitly for every later command.
+            'export PATH="$HOME/.cargo/bin:$PATH"; '
+            "rustc --version",
+        ])
+
+    def rust_channel(self) -> str:
+        toolchain = self.config.source_dir / "rust-toolchain.toml"
+        try:
+            text = toolchain.read_text(encoding="utf-8")
+        except OSError:
+            return "stable"
+        match = re.search(r'^channel\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
+        return match.group(1) if match else "stable"
+
+    def build_ffmpeg(self):
+        """Build the pinned FFmpeg inside the same container as the application."""
+        prefix = "/src/build/ffmpeg/x86_64-unknown-linux-gnu"
+        self.run_cmd([
+            "bash", "/src/scripts/build-ffmpeg.sh",
+            "--target", "x86_64-unknown-linux-gnu", "--prefix", prefix,
+        ])
+        self.env["FFMPEG_DIR"] = str(self.config.source_dir / "build" / "ffmpeg"
+                                     / "x86_64-unknown-linux-gnu")
+
+    def cargo_environment(self) -> dict:
+        environment = {}
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            # The build runs inside the container, where the source tree is /src.
+            environment["FFMPEG_DIR"] = "/src/build/ffmpeg/x86_64-unknown-linux-gnu"
+        return environment
+
+    def package(self):
+        super().package()
+        self.stage_appdir()
+
+    def appdir_path(self) -> Path:
+        return self.config.output_dir / "FreyaNLE.AppDir"
+
+    def stage_appdir(self):
+        """Build the AppDir AppImage packaging needs, next to the plain files."""
+        appdir = self.appdir_path()
+        if appdir.exists():
+            self.remove_tree(appdir)
+        (appdir / "usr" / "bin").mkdir(parents=True)
+        (appdir / "usr" / "lib").mkdir(parents=True)
+        (appdir / "usr" / "share" / "applications").mkdir(parents=True)
+        (appdir / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps").mkdir(parents=True)
+        for entry in self.config.output_dir.iterdir():
+            if entry.name == appdir.name:
+                continue
+            target = appdir / "usr" / "bin" / entry.name
+            if entry.is_dir():
+                shutil.copytree(entry, target)
+            else:
+                shutil.copy2(entry, target)
+        self.write_apprun(appdir)
+        self.write_desktop_entry(appdir)
+        self.write_appimage_icon(appdir)
+        self.logger.log(f"AppDir: {appdir}")
+
+    def write_apprun(self, appdir: Path):
+        """The entry point the AppImage runtime executes."""
+        apprun = appdir / "AppRun"
+        apprun.write_text(
+            "#!/bin/sh\n"
+            "# Resolve the mount point so the bundled resources are found next to\n"
+            "# the executable, then hand every argument through unchanged.\n"
+            'HERE="$(dirname "$(readlink -f "$0")")"\n'
+            'export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/../lib:${LD_LIBRARY_PATH:-}"\n'
+            'export PATH="$HERE/usr/bin:$PATH"\n'
+            f'exec "$HERE/usr/bin/freya-nle" "$@"\n',
+            encoding="utf-8",
+        )
+        apprun.chmod(0o755)
+
+    def write_desktop_entry(self, appdir: Path):
+        entry = appdir / "usr" / "share" / "applications" / f"{self.DESKTOP_ID}.desktop"
+        entry.write_text(
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=Freya NLE\n"
+            "Comment=Non-linear video editor with AviUtl's editing model\n"
+            "Exec=freya-nle %f\n"
+            f"Icon={self.DESKTOP_ID}\n"
+            "Terminal=false\n"
+            "Categories=AudioVideo;Video;\n"
+            "MimeType=application/x-freya-nle-project;\n",
+            encoding="utf-8",
+        )
+        # appimagetool requires the desktop file at the AppDir root as well.
+        shutil.copy2(entry, appdir / f"{self.DESKTOP_ID}.desktop")
+
+    def write_appimage_icon(self, appdir: Path):
+        """Write a 512x512 PNG icon, converting the committed SVG if needed."""
+        target = appdir / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps" / f"{self.DESKTOP_ID}.png"
+        source_svg = self.config.source_dir / "assets" / "icon.svg"
+        ico = self.config.source_dir / "assets" / "icon.ico"
+        self.run_cmd([
+            "bash", "-c",
+            # `rsvg-convert` or ImageMagick may be absent; the ICO already holds
+            # a 256x256 frame, which is an acceptable AppImage icon.
+            f"if command -v rsvg-convert >/dev/null && [ -f {shlex.quote(str(source_svg))} ]; then "
+            f"rsvg-convert -w 512 -h 512 {shlex.quote(str(source_svg))} -o {shlex.quote(str(target))}; "
+            f"elif command -v convert >/dev/null && [ -f {shlex.quote(str(ico))} ]; then "
+            f"convert {shlex.quote(str(ico))} -resize 512x512 {shlex.quote(str(target))}; "
+            "else exit 1; fi",
+        ])
+        shutil.copy2(target, appdir / f"{self.DESKTOP_ID}.png")
+
+    IMAGE_TOOL = "appimagetool-x86_64.AppImage"
+    IMAGE_TOOL_URL = "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+    IMAGE_TOOL_SHA256 = "e8c1169c4af66c3184d7ee110713d4be04befe671fa358e2c1591ee840553b03"
+
+    def appimagetool_path(self) -> Path:
+        tool = self.config.temp_base / self.IMAGE_TOOL
+        if tool.is_file() and self.sha256_of(tool) == self.IMAGE_TOOL_SHA256:
+            return tool
+        tool.parent.mkdir(parents=True, exist_ok=True)
+        tool.unlink(missing_ok=True)
+        self.download(self.IMAGE_TOOL_URL, tool)
+        actual = self.sha256_of(tool)
+        if actual != self.IMAGE_TOOL_SHA256:
+            tool.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"appimagetool checksum mismatch: expected {self.IMAGE_TOOL_SHA256}, got {actual}"
+            )
+        tool.chmod(0o755)
+        return tool
+
+    @staticmethod
+    def sha256_of(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def download(self, url: str, destination: Path):
+        self.logger.log(f"Downloading {url}")
+        # `curl` honours the proxy environment the CI already sets; urllib would
+        # need the same variables passed through by hand.
+        self.run_cmd(["curl", "-fsSL", "--retry", "3", "-o", str(destination), url],
+                     force_host=True)
+
+    def create_appimage(self, archive_name: str):
+        """Pack the staged AppDir into a self-contained executable image."""
+        appdir = self.appdir_path()
+        if not appdir.is_dir():
+            raise FileNotFoundError(f"AppDir was not staged: {appdir}")
+        tool = self.appimagetool_path()
+        destination = self.config.dist_dir / f"{archive_name}.AppImage"
+        environment = self.env.copy()
+        # appimagetool refuses to run without an explicit architecture when it
+        # cannot infer one from the host.
+        environment["ARCH"] = "x86_64"
+        # The tool is itself an AppImage; extracting it avoids needing FUSE in
+        # the build container, which never has it.
+        self.run_cmd(
+            [str(tool), "--appimage-extract-and-run", "--no-appstream",
+             str(appdir), str(destination)],
+            force_host=True,
+        )
+
+    def runtime_requirements(self) -> dict:
+        requirements = super().runtime_requirements()
+        requirements["glibc"] = self.maximum_glibc_version()
+        requirements["ffmpeg_sonames"] = self.ffmpeg_sonames()
+        requirements["host_libraries"] = ["libasound.so.2"]
+        return requirements
+
+    def maximum_glibc_version(self) -> str:
+        output = self.command_output(["objdump", "-T", str(self.cargo_binary())])
+        versions = re.findall(r"GLIBC_([0-9]+\.[0-9]+)", output)
+        if not versions:
+            return ""
+        return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")))
+
+    def ffmpeg_sonames(self) -> list[str]:
+        return ArchBuilder.ffmpeg_sonames(self)
 
 
 class WindowsDependencyMixin:
@@ -1048,14 +1325,52 @@ class XcodeBuilder(PlatformBuilder):
         if not shutil.which("brew"):
             raise RuntimeError("Homebrew not found")
         # Rust comes from rustup and the pinned `rust-toolchain.toml`; letting
-        # Homebrew provide a second `rust` would shadow that pin.
-        self.run_cmd(["brew", "install", "pkgconf", "ffmpeg", "nasm"])
+        # Homebrew provide a second `rust` would shadow that pin. `nasm` is only
+        # needed to assemble the x86_64 FFmpeg when cross-compiling for Intel.
+        self.run_cmd(["brew", "install", "pkgconf", "nasm"])
+        self.build_ffmpeg()
+
+    def ffmpeg_target(self) -> str:
+        return self.build_target() or f"{platform.machine()}-apple-darwin"
+
+    def build_ffmpeg(self):
+        """Build the FFmpeg this bundle links against, at one pinned version.
+
+        Homebrew's FFmpeg is built for whatever macOS the bottle targets, so its
+        dylibs raise the bundle's floor regardless of what this project asks for,
+        and the 9.x bottles no longer cover Intel at all. Building the pinned
+        source keeps every architecture on one version, one deployment target,
+        and one feature set.
+        """
+        script = self.config.source_dir / "scripts" / "build-ffmpeg.sh"
+        if not script.is_file():
+            raise FileNotFoundError(f"FFmpeg build script not found: {script}")
+        prefix = self.config.source_dir / "build" / "ffmpeg" / self.ffmpeg_target()
+        self.run_cmd([
+            "bash", str(script), "--target", self.ffmpeg_target(), "--prefix", str(prefix),
+        ], force_host=True)
+        environment = {"FFMPEG_DIR": str(prefix)}
+        self.env.update(environment)
+        # Later steps in the pipeline read these back.
+        self.export_environment(environment)
+
+    def export_environment(self, variables: dict):
+        """Hand variables to later GitHub Actions steps when running in CI."""
+        github_env = os.environ.get("GITHUB_ENV")
+        if not github_env:
+            return
+        with Path(github_env).open("a", encoding="utf-8") as handle:
+            for name, value in variables.items():
+                handle.write(f"{name}={value}\n")
 
     def cargo_environment(self) -> dict:
         # Without this the floor is whatever SDK the build host happened to have,
         # so the same commit produces different requirements on different runner
         # images. Every dependency compiled from source honours it as well.
-        return {"MACOSX_DEPLOYMENT_TARGET": self.DEPLOYMENT_TARGET}
+        environment = {"MACOSX_DEPLOYMENT_TARGET": self.DEPLOYMENT_TARGET}
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            environment["FFMPEG_DIR"] = ffmpeg_dir
+        return environment
 
     def write_info_plist(self, contents: Path, minimum_system: str):
         bundle_version = numeric_version(self.config.version_string)
@@ -1291,6 +1606,7 @@ class XcodeBuilder(PlatformBuilder):
 
 
 BUILDERS: dict[str, Type[PlatformBuilder]] = {
+    "appimage": AppImageBuilder,
     "arch": ArchBuilder,
     "msys2": Msys2Builder,
     "msvc": MsvcBuilder,
@@ -1345,6 +1661,8 @@ def parse_args() -> argparse.Namespace:
                 "  python BUILD.py --msys2\n  python BUILD.py --xcode --offline\n"),
     )
     targets = parser.add_mutually_exclusive_group()
+    targets.add_argument("--appimage", action="store_true",
+                         help="Build the portable Linux AppImage")
     targets.add_argument("--arch", action="store_true", help="Build for Arch Linux")
     targets.add_argument("--msys2", action="store_true", help="Build for Windows MSYS2 UCRT64")
     targets.add_argument("--msvc", action="store_true", help="Build for Windows MSVC x64")
@@ -1360,9 +1678,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def determine_target(args: argparse.Namespace, system_name: str | None = None) -> str | None:
-    for name in ("arch", "msys2", "msvc", "xcode"):
+    for name in ("appimage", "arch", "msys2", "msvc", "xcode"):
         if getattr(args, name):
             return name
+    # An unqualified Linux build stays on the Arch-compatible path, which is
+    # what the container tooling and the existing documentation assume; the
+    # portable AppImage is asked for explicitly.
     return {"linux": "arch", "windows": "msvc", "darwin": "xcode"}.get(
         (system_name or platform.system()).lower()
     )
@@ -1375,7 +1696,7 @@ def main():
     args = parse_args()
     target = determine_target(args)
     if not target:
-        print("Error: specify one of --arch, --msys2, --msvc, --xcode")
+        print("Error: specify one of --appimage, --arch, --msys2, --msvc, --xcode")
         sys.exit(1)
     source_dir = Path.cwd()
     canonical_version = read_project_version(source_dir)
@@ -1392,7 +1713,9 @@ def main():
     config = BuildConfig(
         source_dir=source_dir, temp_base=source_dir / ".build_tmp",
         output_dir=source_dir / "build", target=target, is_debug=args.debug,
-        use_container=target == "arch" and not args.no_container,
+        # Both Linux targets build inside a container: the Arch archive needs the
+        # rolling-release sysroot, the AppImage needs a pinned old one.
+        use_container=target in {"arch", "appimage"} and not args.no_container,
         is_offline=args.offline,
         version_major=version_parts[0], version_minor=version_parts[1],
         version_patch=version_parts[2], version_string=version_string,
