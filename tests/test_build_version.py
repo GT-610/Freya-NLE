@@ -722,6 +722,25 @@ class TestContainerBuild(unittest.TestCase):
             # has to start as well.
             self.assertEqual(builder.container_source_dir(), "/src")
 
+    def test_a_windows_host_path_becomes_a_posix_path(self):
+        # The container is Linux: a translated path that still carries
+        # backslashes is not a path the container can open.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.container_engine = "podman"
+            translated = builder.container_path(r"D:\a\Freya-NLE\rust\Cargo.toml",
+                                                r"D:\a\Freya-NLE")
+            self.assertEqual(translated, "/src/rust/Cargo.toml")
+
+    def test_the_source_root_itself_becomes_the_mount_point(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.container_engine = "podman"
+            self.assertEqual(builder.container_path("/home/x/repo", "/home/x/repo"), "/src")
+            # A path that does not start with the tree is left alone.
+            self.assertEqual(builder.container_path("/usr/bin/cargo", "/home/x/repo"),
+                             "/usr/bin/cargo")
+
     def test_distrobox_keeps_host_paths(self):
         # distrobox shares the host filesystem, so rewriting its paths would
         # break a build that works today.

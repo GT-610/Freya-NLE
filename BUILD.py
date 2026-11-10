@@ -562,14 +562,23 @@ class PlatformBuilder:
         return "/src" if self.container_engine == "podman" else str(self.config.source_dir)
 
     def container_command(self, command: List[str]) -> List[str]:
-        """Rewrite host paths in a command for the container's filesystem."""
+        """Rewrite host paths in a command for the container's filesystem.
+
+        The container is Linux, so the result has to be a POSIX path even when
+        the build runs on a host whose separator is a backslash: replacing the
+        prefix alone would leave `/src\\rust\\Cargo.toml` behind.
+        """
         if self.container_engine != "podman":
             return command
         prefix = str(self.config.source_dir)
-        return [
-            argument.replace(prefix, "/src") if isinstance(argument, str) else argument
-            for argument in command
-        ]
+        return [self.container_path(argument, prefix) for argument in command]
+
+    @staticmethod
+    def container_path(argument: object, prefix: str) -> object:
+        if not isinstance(argument, str) or prefix not in argument:
+            return argument
+        relative = argument.replace(prefix, "", 1).lstrip("\\/").replace("\\", "/")
+        return "/src" + (f"/{relative}" if relative else "")
 
     def container_invocation(self, inner: str) -> str:
         """Command that runs `inner` inside the build container.

@@ -56,6 +56,12 @@ on:
 permissions:
   contents: read
 
+# Packaging is the expensive workflow, and a pull request that receives several
+# pushes in a row only needs the newest one verified.
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test Rust + Slint
