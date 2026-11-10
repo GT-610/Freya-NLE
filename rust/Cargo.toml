@@ -5,7 +5,7 @@ members = ["freya-nle-app", "freya-nle-audio", "freya-nle-carla", "freya-nle-cor
 [workspace.package]
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.99.1"
 publish = false
 
 [profile.dev]

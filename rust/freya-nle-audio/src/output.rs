@@ -31,7 +31,7 @@ impl QueueStatus {
 
     fn enqueue(&self, generation: u32) -> bool {
         self.state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
                 if (state >> QUEUE_GENERATION_SHIFT) as u32 != generation {
                     return None;
                 }
@@ -45,7 +45,7 @@ impl QueueStatus {
 
     fn dequeue(&self, generation: u32) -> bool {
         self.state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
                 if (state >> QUEUE_GENERATION_SHIFT) as u32 != generation
                     || state & QUEUED_FRAMES_MASK == 0
                 {
@@ -60,7 +60,7 @@ impl QueueStatus {
     fn clear(&self) {
         let _ = self
             .state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
                 let generation = ((state >> QUEUE_GENERATION_SHIFT) as u32).wrapping_add(1);
                 Some(u64::from(generation) << QUEUE_GENERATION_SHIFT)
             });
@@ -246,7 +246,10 @@ fn enqueue_stereo_frames(
         return;
     }
     let generation = queue_status.generation();
-    for frame in samples.chunks_exact(2) {
+    // `as_chunks` hands out fixed-size pairs, which is what the interleaved
+    // stereo layout is; the length was already checked to be even.
+    let (frames, _remainder) = samples.as_chunks::<2>();
+    for frame in frames {
         if producer.is_full() || !queue_status.enqueue(generation) {
             break;
         }

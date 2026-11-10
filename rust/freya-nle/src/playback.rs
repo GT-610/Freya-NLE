@@ -648,7 +648,7 @@ pub(super) fn stereo_levels(samples: &[f32]) -> [f32; 4] {
     let mut square_left = 0.0_f64;
     let mut square_right = 0.0_f64;
     let mut frames = 0_usize;
-    for frame in samples.chunks_exact(2) {
+    for frame in samples.as_chunks::<2>().0 {
         peak_left = peak_left.max(frame[0].abs());
         peak_right = peak_right.max(frame[1].abs());
         square_left += f64::from(frame[0]) * f64::from(frame[0]);

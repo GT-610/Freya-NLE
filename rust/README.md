@@ -54,7 +54,7 @@ retired module by module.
 
 ## Toolchain and validation
 
-The workspace uses Rust edition 2024. `rust-toolchain.toml` pins Rust 1.97.1, and the crates'
+The workspace uses Rust edition 2024. `rust-toolchain.toml` pins Rust 1.99.1, and the crates'
 minimum supported Rust version matches that toolchain. Changes must pass:
 
 ```sh

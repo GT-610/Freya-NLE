@@ -20,6 +20,11 @@ All notable changes to Freya NLE are documented in this file.
   with the third-party notices it owes its recipients
 
 ### Changed
+- The Rust toolchain is pinned to 1.99.1 (`rust-toolchain.toml`, the workspace
+  `rust-version`, and every CI job), up from 1.97.1. Mixing the pinned
+  toolchain's compiler with a newer system `cargo` produced builds that failed
+  to resolve `proc-macro` crates, so the pin and the toolchain that compiles the
+  workspace are now one version everywhere
 - The macOS bundle declares the minimum macOS its contents really need.
   `Info.plist` used to promise 12.0 while the bundled Homebrew libraries had
   been built for 15.0, so the application refused to start on the systems it
