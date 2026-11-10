@@ -109,6 +109,9 @@ class BuildConfig:
     # built for a newer system. CI sets this so a bottle that outruns the
     # deployment target breaks the build rather than the promise.
     strict_deployment_target: bool = False
+    # The Rust target triple when it differs from the host, which is how one
+    # arm64 CI runner produces the Intel macOS build as well.
+    target_triple: str = ""
 
     @property
     def build_type(self) -> str:
@@ -116,7 +119,11 @@ class BuildConfig:
 
     @property
     def work_dir(self) -> Path:
-        return self.temp_base / self.target / self.build_type
+        baseline = self.temp_base / self.target / self.build_type
+        # Two architectures share one checkout, so their intermediate trees must
+        # not be the same directory: the second build would reuse the first's
+        # objects and report success while producing nothing new.
+        return baseline / self.target_triple if self.target_triple else baseline
 
     @property
     def cargo_target_dir(self) -> Path:
@@ -217,6 +224,8 @@ class PlatformBuilder:
             command.append("--release")
         if self.config.is_offline:
             command.append("--offline")
+        if self.config.target_triple:
+            command.extend(["--target", self.config.target_triple])
         return command
 
     def cargo_environment(self) -> dict:
@@ -232,7 +241,11 @@ class PlatformBuilder:
 
     def cargo_binary(self, windows: bool = False) -> Path:
         suffix = ".exe" if windows else ""
-        return self.config.cargo_target_dir / self.config.cargo_profile / f"freya-nle{suffix}"
+        # A cross build puts its output under a per-target directory.
+        directory = self.config.cargo_target_dir
+        if self.config.target_triple:
+            directory = directory / self.config.target_triple
+        return directory / self.config.cargo_profile / f"freya-nle{suffix}"
 
     def packaged_executable_name(self, windows: bool = False) -> str:
         """Name the staged executable takes inside the archive.
@@ -306,6 +319,15 @@ class PlatformBuilder:
 
     PLATFORM_OS: ClassVar[str] = "unknown"
     PLATFORM_ARCH: ClassVar[str] = "unknown"
+
+    def platform_architecture(self) -> str:
+        """The architecture this build produces.
+
+        Constant for the builders whose architecture is fixed by their toolchain;
+        macOS overrides it because one runner produces both Apple architectures.
+        """
+        return self.PLATFORM_ARCH
+
     # A variant marks a build that is compatible only with a narrower host than
     # its OS and architecture imply, such as the Arch-current sysroot.
     artifact_variant: ClassVar[str] = ""
@@ -316,7 +338,7 @@ class PlatformBuilder:
             "Freya-NLE",
             self.config.version_string,
             self.PLATFORM_OS,
-            self.PLATFORM_ARCH,
+            self.platform_architecture(),
         ]
         if self.artifact_variant:
             parts.append(self.artifact_variant)
@@ -1307,7 +1329,6 @@ class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
 
 class XcodeBuilder(PlatformBuilder):
     PLATFORM_OS = "macos"
-    PLATFORM_ARCH = normalize_macos_architecture(platform.machine())
 
     # The oldest macOS the application requires. The value in Info.plist is not
     # taken on trust: packaging measures every Mach-O it is about to ship and
@@ -1317,6 +1338,16 @@ class XcodeBuilder(PlatformBuilder):
     # App icon in the bundle. `tools/gen_app_icon.py` writes it from the same
     # SVG that produces the Windows ICO.
     APP_ICON_NAME = "icon.icns"
+
+    def platform_architecture(self) -> str:
+        """The architecture being built, which a cross build overrides.
+
+        The host machine answers this for a native build, but an arm64 runner
+        producing the Intel bundle must not name that bundle after itself.
+        """
+        if self.config.target_triple:
+            return normalize_macos_architecture(self.config.target_triple.split("-")[0])
+        return normalize_macos_architecture(platform.machine())
 
     def install_dependencies(self):
         if self.config.is_offline:
@@ -1331,6 +1362,8 @@ class XcodeBuilder(PlatformBuilder):
         self.build_ffmpeg()
 
     def ffmpeg_target(self) -> str:
+        if self.config.target_triple:
+            return self.config.target_triple
         return self.build_target() or f"{platform.machine()}-apple-darwin"
 
     def build_ffmpeg(self):
@@ -1674,6 +1707,8 @@ def parse_args() -> argparse.Namespace:
                         help="Validate the release version against rust/Cargo.toml")
     parser.add_argument("--strict-deployment-target", action="store_true",
                         help="Fail when a macOS dependency needs a newer system than targeted")
+    parser.add_argument("--target", type=str, default="",
+                        help="Rust target triple, for a cross build (e.g. x86_64-apple-darwin)")
     return parser.parse_args()
 
 
@@ -1720,6 +1755,7 @@ def main():
         version_major=version_parts[0], version_minor=version_parts[1],
         version_patch=version_parts[2], version_string=version_string,
         strict_deployment_target=args.strict_deployment_target,
+        target_triple=args.target,
     )
     worker = BuildWorker(config)
     cancelled = False
@@ -1734,8 +1770,9 @@ def main():
 
     signal.signal(signal.SIGINT, lambda _signum, _frame: cancel_build())
     mode = "Container" if config.use_container else "Host"
+    triple = f" | triple={config.target_triple}" if config.target_triple else ""
     print(f"Build started | frontend=Slint | target={target} | {config.build_type} | "
-          f"{mode} | offline={config.is_offline}")
+          f"{mode} | offline={config.is_offline}{triple}")
     worker.start()
     while not worker.finished_event.is_set():
         try:

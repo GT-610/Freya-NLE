@@ -13,6 +13,8 @@ on:
       - "vcpkg.json"
       - "vcpkg-configuration.json"
       - "ports/**"
+      - "assets/icon.ico"
+      - "third-party-licenses.md"
   pull_request:
     branches: ["main"]
     paths:
@@ -24,6 +26,8 @@ on:
       - "vcpkg.json"
       - "vcpkg-configuration.json"
       - "ports/**"
+      - "assets/icon.ico"
+      - "third-party-licenses.md"
 
 permissions:
   contents: read

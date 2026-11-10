@@ -1,0 +1,46 @@
+name: Resolve version
+description: Read the project version and reject a mismatch with the requested one
+
+# The workspace version is the single source of the project version: BUILD.py
+# reads it, the tag has to equal it, and every artifact name is derived from it.
+# Resolving it in one place keeps the jobs from each parsing the file their own
+# way and disagreeing.
+inputs:
+  version:
+    description: Version the caller believes it is building; empty skips the check
+    required: false
+    default: ""
+  tag:
+    description: Release tag to cross-check (v<version>); empty skips the check
+    required: false
+    default: ""
+outputs:
+  version:
+    description: The workspace version
+    value: ${{ steps.read.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - name: Read and check the version
+      id: read
+      shell: bash
+      env:
+        REQUESTED: ${{ inputs.version }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' rust/Cargo.toml | head -1)"
+        if [ -z "$version" ]; then
+          echo "Could not determine the version from rust/Cargo.toml" >&2
+          exit 1
+        fi
+        if [ -n "${REQUESTED:-}" ] && [ "$REQUESTED" != "$version" ]; then
+          echo "Requested version $REQUESTED does not match rust/Cargo.toml ($version)" >&2
+          exit 1
+        fi
+        if [ -n "${TAG:-}" ] && [ "$TAG" != "v$version" ]; then
+          echo "Tag $TAG does not match the workspace version v$version" >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Building Freya NLE $version"

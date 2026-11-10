@@ -1,0 +1,200 @@
+name: Release
+
+# Publishing is a separate workflow from packaging so that a tag publishes
+# exactly what the packaging workflow produced, without each platform job
+# repeating the release decisions (prerelease, checksums, latest).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish (must already exist)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve the tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A tag build must read the tree the tag points at, not the branch tip.
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Determine the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          if [ -z "$tag" ]; then
+            echo "Could not determine the tag to publish" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # A candidate tag such as v0.8.0-rc.1 is a prerelease: it must not
+          # displace the last stable release as the repository's latest.
+          case "$tag" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+      - name: Determine version
+        id: read
+        uses: ./.github/actions/resolve-version
+        with:
+          # The tag and the workspace version must agree; that is what makes the
+          # artifact names trustworthy.
+          tag: ${{ steps.tag.outputs.tag }}
+
+  package:
+    name: Package
+    needs: [resolve]
+    uses: ./.github/workflows/package.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+
+  publish:
+    name: Publish
+    needs: [resolve, package, smoke]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - name: Collect artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check the artifact set
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          ls -l dist
+          # One artifact per target, all carrying the same version. A missing
+          # platform is a broken release, not a smaller one.
+          for expected in \
+            "Freya-NLE-$version-linux-x86_64.AppImage" \
+            "Freya-NLE-$version-linux-x86_64-archlinux.tar.zst" \
+            "Freya-NLE-$version-macos-arm64.zip" \
+            "Freya-NLE-$version-macos-x86_64.zip" \
+            "Freya-NLE-$version-windows-x86_64.zip"; do
+            if [ ! -f "dist/$expected" ]; then
+              echo "Missing release artifact: $expected" >&2
+              exit 1
+            fi
+          done
+          # Nothing outside the scheme may reach a release page.
+          for file in dist/*; do
+            case "$(basename "$file")" in
+              "Freya-NLE-$version-linux-x86_64.AppImage"|\
+              "Freya-NLE-$version-linux-x86_64-archlinux.tar.zst"|\
+              "Freya-NLE-$version-macos-arm64.zip"|\
+              "Freya-NLE-$version-macos-x86_64.zip"|\
+              "Freya-NLE-$version-windows-x86_64.zip") ;;
+              *) echo "Unexpected file in the release: $file" >&2; exit 1 ;;
+            esac
+          done
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          # Every download can be verified, and the list is what the release
+          # notes point at.
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+      # The tag already triggered this run, so the release is attached to it
+      # rather than created here.
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          name: Freya NLE ${{ needs.resolve.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/*
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # A download is only worth publishing if the file starts. The packaging
+  # workflow verified each artifact where it was built; this job re-checks what
+  # is about to be uploaded, on a machine that did not build it.
+  smoke:
+    name: Smoke-test the artifacts
+    needs: [resolve, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Run the AppImage
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          image="dist/Freya-NLE-$version-linux-x86_64.AppImage"
+          chmod +x "$image"
+          # --appimage-extract-and-run is the FUSE-free path, which is also what
+          # a containerised or WSL host needs.
+          reported="$("$image" --appimage-extract-and-run --version)"
+          echo "$reported"
+          case "$reported" in
+            *"$version"*) ;;
+            *) echo "The AppImage reports the wrong version" >&2; exit 1 ;;
+          esac
+      - name: Unpack the Arch archive
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          archive="dist/Freya-NLE-$version-linux-x86_64-archlinux.tar.zst"
+          mkdir -p unpacked
+          tar --zstd -xf "$archive" -C unpacked
+          # The executable bit is why this is a tar: a user must be able to run
+          # it without a chmod step the documentation would have to explain.
+          test -x unpacked/freya-nle
+          ls unpacked
+
+  smoke-arch:
+    name: Smoke-test the Arch archive on Arch
+    needs: [resolve, package]
+    runs-on: ubuntu-24.04
+    # The archive is linked against Arch's glibc and FFmpeg sonames, so it is run
+    # inside the same pinned image it was built in. Running it on the runner's
+    # Ubuntu would only prove that an Arch binary does not start on Ubuntu.
+    container:
+      image: docker.io/library/archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
+    steps:
+      - name: Install the runtime
+        run: pacman -Syu --noconfirm --needed alsa-lib ffmpeg mesa zstd
+      - name: Download the archive
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Run the packaged executable
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          archive="dist/Freya-NLE-$version-linux-x86_64-archlinux.tar.zst"
+          mkdir -p unpacked
+          tar --zstd -xf "$archive" -C unpacked
+          test -x unpacked/freya-nle
+          # `--version` exercises the dynamic linker and the bundled resources
+          # before any window or GPU is touched.
+          unpacked/freya-nle --version
