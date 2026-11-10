@@ -13,7 +13,11 @@ freya-nle-core = { path = "../freya-nle-core" }
 freya-nle-export = { path = "../freya-nle-export" }
 freya-nle-preview = { path = "../freya-nle-preview" }
 freya-nle-render = { path = "../freya-nle-render" }
-fontdb = "0.23.0"
+# `default-features` pulls in `fontconfig`, which links `libfontconfig.so.1`
+# into the Linux binary and ties the AppImage to one distribution's copy. The
+# `fs` feature still searches the standard font directories, and `freya-nle-render`
+# already selects exactly that set.
+fontdb = { version = "0.23.0", default-features = false, features = ["fs"] }
 pollster = "0.4"
 rfd = "0.15.4"
 serde_json = "1.0"
@@ -24,3 +28,9 @@ webbrowser = "1.2.4"
 [build-dependencies]
 serde_json = "1.0"
 slint-build = "1.17.1"
+
+# Embeds the application icon and a VERSIONINFO block into the Windows PE, so
+# Explorer shows a real name and version instead of a bare `freya-nle.exe`.
+# Windows-only: the crate shells out to `windres`/`rc`, which no other host has.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.34"

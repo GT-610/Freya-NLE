@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import re
 import tempfile
@@ -81,7 +82,7 @@ class TestBuildScript(unittest.TestCase):
             config = config_for(source, target="xcode")
             config.version_string = "0.7.0-rc.1"
             builder = XcodeBuilder(config, Logger(lambda _message: None, lambda *_args: None))
-            builder.write_info_plist(contents)
+            builder.write_info_plist(contents, "12.0")
             plist = (contents / "Info.plist").read_text(encoding="utf-8")
             # macOS accepts only period-separated integers in both version keys, so
             # a release candidate must not leak its suffix into the bundle metadata.
@@ -261,7 +262,7 @@ class TestBuildScript(unittest.TestCase):
             source = Path(temporary)
             github_env = source / "github-env"
             github_path = source / "github-path"
-            builder = MsvcBuilder(
+            builder = WindowsTestBuilder(
                 config_for(source, target="msvc"),
                 Logger(lambda _message: None, lambda *_args: None),
             )
@@ -298,11 +299,224 @@ class TestBuildScript(unittest.TestCase):
             builder = XcodeBuilder(
                 config_for(source, target="xcode"), Logger(lambda _message: None, lambda *_args: None)
             )
-            builder.write_info_plist(contents)
+            builder.write_info_plist(contents, "12.0")
             plist = (contents / "Info.plist").read_text(encoding="utf-8")
             self.assertIn("<string>Freya NLE</string>", plist)
             self.assertIn("<string>freya-nle</string>", plist)
             self.assertIn("<string>io.github.gt610.freya-nle</string>", plist)
+
+
+class WindowsTestBuilder(MsvcBuilder):
+    """An MSVC builder usable off Windows.
+
+    The real constructor refuses to run anywhere but Windows, which is the right
+    guard for a build tool. Naming, provenance, and runtime bundling are pure
+    logic though, so they are exercised here without that guard rather than
+    leaving the Windows path untested on the hosts that do most of the work.
+    """
+
+    def __init__(self, config, logger):
+        PlatformBuilder.__init__(self, config, logger)
+        self.vcpkg_root = None
+        self.vcpkg_triplet = "x64-windows"
+
+
+class TestArtifactNaming(unittest.TestCase):
+    """One file-name scheme for every platform.
+
+    A user picks "the Windows build for x86_64"; the toolchain that produced it
+    is metadata, not part of the name. The Arch archive keeps a variant because
+    it is compatible with a narrower host than "linux-x86_64" implies.
+    """
+
+    def builder(self, source, target):
+        return {
+            "arch": ArchBuilder,
+            "msvc": WindowsTestBuilder,
+            "msys2": Msys2Builder,
+            "xcode": XcodeBuilder,
+        }[target](
+            config_for(source, target=target),
+            Logger(lambda _message: None, lambda *_args: None),
+        )
+
+    def test_every_platform_follows_the_scheme(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            names = {
+                target: self.builder(source, target).get_archive_name()
+                for target in ("arch", "msvc", "msys2", "xcode")
+            }
+            self.assertEqual(names["msvc"], "Freya-NLE-0.7.0-rc.1-windows-x86_64")
+            self.assertEqual(names["msys2"], "Freya-NLE-0.7.0-rc.1-windows-x86_64-msys2")
+            self.assertEqual(names["arch"], "Freya-NLE-0.7.0-rc.1-linux-x86_64-archlinux")
+            self.assertRegex(
+                names["xcode"], r"^Freya-NLE-0\.7\.0-rc\.1-macos-(arm64|x86_64)$"
+            )
+            for name in names.values():
+                # The toolchain that produced a build is metadata, not identity.
+                self.assertNotIn("Xcode", name)
+                self.assertNotIn("MSVC", name)
+                self.assertNotIn("Universal", name)
+
+    def test_arch_variant_goes_to_a_tar_zst(self):
+        # `shutil.make_archive` drops the executable bit, so the Linux archive is
+        # written with `tarfile`, which keeps it.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary), "arch")
+            self.assertEqual(builder.archive_extension, ".tar.zst")
+
+    def test_archive_path_uses_the_declared_extension(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source, "msvc")
+            created = []
+            builder.create_zip = lambda name: created.append(name)
+            path = builder.create_archive("Freya-NLE-1.2.3-windows-x86_64")
+            self.assertEqual(created, ["Freya-NLE-1.2.3-windows-x86_64"])
+            self.assertEqual(path.suffix, ".zip")
+            self.assertEqual(path.parent, source / "dist")
+
+
+class TestArchiveContents(unittest.TestCase):
+    def test_build_info_records_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            destination = source / "out"
+            builder = WindowsTestBuilder(
+                config_for(source, target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            builder.write_build_info(destination)
+            info = json.loads((destination / "build-info.json").read_text(encoding="utf-8"))
+            self.assertEqual(info["name"], "Freya NLE")
+            self.assertEqual(info["version"], "0.7.0-rc.1")
+            self.assertEqual(info["platform"], "windows")
+            self.assertEqual(info["architecture"], "x86_64")
+            self.assertIn("commit", info)
+            self.assertIn("ffmpeg", info)
+
+    def test_licences_are_staged_when_present(self):
+        # The application is AGPLv3 and bundles GPL FFmpeg, so an archive with no
+        # licence text is a compliance gap rather than a cosmetic omission.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "LICENSE.md").write_text("AGPL", encoding="utf-8")
+            destination = source / "out"
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.copy_licenses(destination)
+            self.assertEqual(
+                (destination / "licenses" / "LICENSE.md").read_text(encoding="utf-8"), "AGPL"
+            )
+
+    def test_missing_licences_do_not_fail_a_fixture_tree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.copy_licenses(source / "out")
+            self.assertFalse((source / "out").exists())
+
+
+class TestMacosMinimumSystem(unittest.TestCase):
+    """`LSMinimumSystemVersion` must not promise more than the bundle supports.
+
+    Before this check the plist said 12.0 while every Homebrew dylib in the
+    shipped archive needed macOS 15.0, so the bundle refused to start on the
+    systems it claimed to support.
+    """
+
+    def builder(self, source):
+        return XcodeBuilder(
+            config_for(source, target="xcode"), Logger(lambda _message: None, lambda *_args: None)
+        )
+
+    def test_reads_the_highest_declared_minimum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            reported = {"path": ""}
+            builder.macho_minimum_system = lambda path: reported["path"]
+            app = Path(temporary) / "Freya NLE.app"
+            frameworks = app / "Contents" / "Frameworks"
+            frameworks.mkdir(parents=True)
+            (app / "Contents" / "MacOS").mkdir(parents=True)
+            (app / "Contents" / "MacOS" / "freya-nle").write_text("x", encoding="utf-8")
+            (frameworks / "libavcodec.63.dylib").write_text("x", encoding="utf-8")
+            reported["path"] = "15.0"
+            self.assertEqual(builder.effective_minimum_system(app), "15.0")
+
+    def test_declares_the_measured_floor_when_a_dependency_overshoots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.effective_minimum_system = lambda app: "15.0"
+            self.assertEqual(builder.declared_minimum_system(Path("app")), "15.0")
+
+    def test_strict_mode_refuses_the_overshoot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = config_for(Path(temporary), target="xcode")
+            config.strict_deployment_target = True
+            builder = XcodeBuilder(
+                config, Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.effective_minimum_system = lambda app: "15.0"
+            with self.assertRaises(RuntimeError):
+                builder.declared_minimum_system(Path("app"))
+
+    def test_a_bundle_inside_the_target_keeps_the_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.effective_minimum_system = lambda app: "11.0"
+            self.assertEqual(builder.declared_minimum_system(Path("app")), builder.DEPLOYMENT_TARGET)
+
+
+class TestWindowsPortability(unittest.TestCase):
+    def test_runtime_dlls_are_the_ones_the_binaries_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = WindowsTestBuilder(
+                config_for(Path(temporary), target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            # The shipped archive imported VCRUNTIME140.dll and never bundled it,
+            # so "portable" depended on an installed redistributable.
+            self.assertIn("vcruntime140.dll", builder.WINDOWS_RUNTIME_DLLS)
+            self.assertIn("vcruntime140_1.dll", builder.WINDOWS_RUNTIME_DLLS)
+
+    def test_a_missing_vcruntime_fails_the_packaging(self):
+        # The archive cannot start without the CRT, so silently omitting it would
+        # ship a "portable" build that only runs where VS happens to be installed.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "build").mkdir()
+            builder = WindowsTestBuilder(
+                config_for(source, target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            builder.windows_runtime_directories = lambda: []
+            with self.assertRaises(FileNotFoundError):
+                builder.copy_windows_runtime()
+
+    def test_a_missing_msvcp_is_tolerated(self):
+        # msvcp140 is only imported when something was compiled against the C++
+        # standard library, so its absence is legal and must not fail a build.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            output = source / "build"
+            output.mkdir()
+            builder = WindowsTestBuilder(
+                config_for(source, target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            available = source / "redist"
+            available.mkdir()
+            for name in ("vcruntime140.dll", "vcruntime140_1.dll"):
+                (available / name).write_text("dll", encoding="utf-8")
+            builder.windows_runtime_directories = lambda: [available]
+            builder.copy_windows_runtime()
+            self.assertTrue((output / "vcruntime140.dll").is_file())
+            self.assertFalse((output / "msvcp140.dll").exists())
 
 
 class TestReleaseVersionBaseline(unittest.TestCase):

@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+// A windowed application must not allocate a console. Without this the PE
+// subsystem is `CUI`, so double-clicking the executable on Windows opens a
+// black console window behind the editor.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod batch;
 mod callbacks;
