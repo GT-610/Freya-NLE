@@ -96,15 +96,28 @@ fn embed_windows_resources() {
             .to_owned();
         // A resource version is four independent integers, so a prerelease
         // suffix cannot be carried and is recorded as the trailing field.
-        let parts: Vec<u64> = numeric.split('.').filter_map(|part| part.parse().ok()).collect();
+        let parts: Vec<u64> = numeric
+            .split('.')
+            .filter_map(|part| part.parse().ok())
+            .collect();
         let mut fields = [0u64; 4];
         for (slot, value) in fields.iter_mut().zip(parts) {
             *slot = value;
         }
         resource.set_version_info(
             winresource::VersionInfo::default()
-                .set_file_version(fields[0] as u16, fields[1] as u16, fields[2] as u16, fields[3] as u16)
-                .set_product_version(fields[0] as u16, fields[1] as u16, fields[2] as u16, fields[3] as u16),
+                .set_file_version(
+                    fields[0] as u16,
+                    fields[1] as u16,
+                    fields[2] as u16,
+                    fields[3] as u16,
+                )
+                .set_product_version(
+                    fields[0] as u16,
+                    fields[1] as u16,
+                    fields[2] as u16,
+                    fields[3] as u16,
+                ),
         );
         resource.set("FileVersion", &version);
         resource.set("ProductVersion", &version);
