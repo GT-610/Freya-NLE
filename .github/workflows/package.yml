@@ -103,8 +103,11 @@ jobs:
             nasm libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev \
             libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin
       - uses: dtolnay/rust-toolchain@1.99.1
+      # Restore and save are separate steps so a later packaging failure cannot
+      # throw away a finished FFmpeg build.
       - name: Restore the pinned FFmpeg
-        uses: actions/cache@v4
+        id: ffmpeg
+        uses: actions/cache/restore@v4
         with:
           # No `restore-keys`: `build-ffmpeg.sh` reuses any prefix that holds a
           # pkg-config file, so a stale entry would silently link an FFmpeg this
@@ -117,6 +120,12 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
           echo "FFMPEG_DIR=$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+      - name: Save the pinned FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build_tmp/ffmpeg/x86_64-unknown-linux-gnu
+          key: linux-appimage-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
       - name: Build and package
         # Already inside the pinned container, so BUILD.py must not open another.
         run: python3 BUILD.py --appimage --no-container
@@ -217,8 +226,10 @@ jobs:
         uses: ./.github/actions/resolve-version
         with:
           version: ${{ inputs.version }}
+      # Restore and save are separate steps, as in the Linux job.
       - name: Restore the pinned FFmpeg
-        uses: actions/cache@v4
+        id: ffmpeg
+        uses: actions/cache/restore@v4
         with:
           # Both prefixes under one exact key, for the reason the Linux job
           # gives: the script reuses whatever install it finds.
@@ -232,6 +243,14 @@ jobs:
             bash scripts/build-ffmpeg.sh --target "$target" \
               --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/$target"
           done
+      - name: Save the pinned FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build_tmp/ffmpeg/aarch64-apple-darwin
+            .build_tmp/ffmpeg/x86_64-apple-darwin
+          key: macos-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
       - name: Build and package arm64
         env:
           FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/aarch64-apple-darwin

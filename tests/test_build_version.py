@@ -1265,21 +1265,31 @@ class TestReleasePipeline(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertIn(f"{job}:", package)
 
+    def step(self, block, name):
+        """The workflow text of one named step inside a job block."""
+        rest = block.split(name, 1)[1]
+        return rest.split("\n      - ", 1)[0]
+
     def test_the_ffmpeg_build_is_cached_by_the_pinned_script(self):
         # Building FFmpeg from source is the slowest step this workflow added, so
         # each job that needs it restores the install before running the script.
         key = "ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}"
         for job in ("linux-appimage", "macos"):
             block = self.job_block(job)
+            restore = self.step(block, "Restore the pinned FFmpeg")
+            save = self.step(block, "Save the pinned FFmpeg")
             with self.subTest(job=job):
-                self.assertIn("Restore the pinned FFmpeg", block)
-                step = block.split("Restore the pinned FFmpeg", 1)[1]
-                step = step.split("\n      - name:", 1)[0]
-                self.assertIn("actions/cache@v4", step)
-                self.assertIn(key, step)
+                self.assertIn("actions/cache/restore@v4", restore)
+                self.assertIn(key, restore)
                 # The script reuses any prefix that has a pkg-config file, so a
                 # fallback key would link an FFmpeg this commit did not pin.
-                self.assertNotRegex(step, r"(?m)^\s+restore-keys:")
+                self.assertNotRegex(restore, r"(?m)^\s+restore-keys:")
+                # Saved straight after the build: a packaging failure later in
+                # the job must not discard the finished FFmpeg.
+                self.assertIn("actions/cache/save@v4", save)
+                self.assertIn(key, save)
+                # Saving a key that already exists fails the step.
+                self.assertIn("cache-hit", save)
 
     def test_the_old_workflow_is_gone(self):
         # Two workflows that both react to a tag would race to publish, and one
