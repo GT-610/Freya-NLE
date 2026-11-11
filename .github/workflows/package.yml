@@ -211,13 +211,16 @@ jobs:
         env:
           FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/aarch64-apple-darwin
         run: |
-          python3 BUILD.py --xcode --strict-deployment-target --offline \
+          # Not `--offline`: that flag reaches `cargo --offline`, and a fresh
+          # runner has an empty registry. The FFmpeg prefix this build links was
+          # built in the step above, so BUILD.py reuses it instead of rebuilding.
+          python3 BUILD.py --xcode --strict-deployment-target \
             --target aarch64-apple-darwin
       - name: Build and package x86_64
         env:
           FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/x86_64-apple-darwin
         run: |
-          python3 BUILD.py --xcode --strict-deployment-target --offline \
+          python3 BUILD.py --xcode --strict-deployment-target \
             --target x86_64-apple-darwin
       - name: Verify both bundles
         id: name
