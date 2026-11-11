@@ -173,6 +173,11 @@ class PlatformBuilder:
             "CARGO_TARGET_DIR": str(config.cargo_target_dir),
         })
         self.container_name = ""
+        # The name the container was actually created under, and whether this
+        # process created it at all: removal is a `--force` on a name, so an
+        # unowned name is somebody else's container.
+        self.podman_container = ""
+        self.owns_container = False
         self.use_container = False
         self.cancelled = False
         self.current_proc: Optional[subprocess.Popen] = None
@@ -400,12 +405,17 @@ class PlatformBuilder:
             raise RuntimeError("zstd was not found; install it to build the Linux archive")
         tar_path = self.config.dist_dir / f"{archive_name}.tar"
         tar_path.unlink(missing_ok=True)
+        epoch = self.source_date_epoch()
         with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as tar:
             for entry in sorted(self.config.output_dir.rglob("*")):
                 relative = entry.relative_to(self.config.output_dir)
                 info = tar.gettarinfo(str(entry), arcname=str(relative))
                 info.uid = info.gid = 0
                 info.uname = info.gname = ""
+                if epoch is not None:
+                    # `gettarinfo` copies the filesystem time, which differs per
+                    # build; the archive is only reproducible if it does not.
+                    info.mtime = epoch
                 if info.isreg():
                     with entry.open("rb") as handle:
                         tar.addfile(info, handle)
@@ -457,6 +467,25 @@ class PlatformBuilder:
     def git_commit(self) -> str:
         output = self.command_output(["git", "rev-parse", "HEAD"])
         return output.splitlines()[0].strip() if output else ""
+
+    def source_date_epoch(self) -> Optional[int]:
+        """The time every archive entry is stamped with.
+
+        `SOURCE_DATE_EPOCH` wins because a repackager sets it and expects to be
+        obeyed; otherwise the commit time is used, so the same commit packed
+        twice gives the same bytes. A tree without git keeps the filesystem
+        time, since an archive still has to be produced.
+        """
+        if epoch := self.env.get("SOURCE_DATE_EPOCH"):
+            try:
+                return int(epoch)
+            except ValueError:
+                pass
+        output = self.command_output(["git", "log", "-1", "--format=%ct"])
+        try:
+            return int(output.strip())
+        except ValueError:
+            return None
 
     def ffmpeg_provenance(self) -> dict:
         """Report the FFmpeg the build actually linked, and where it came from.
@@ -661,7 +690,7 @@ class PlatformBuilder:
             return " ".join([
                 "podman", "exec",
                 "-w", "/src",
-                shlex.quote(self.container_name),
+                shlex.quote(self.podman_container or self.container_name),
                 "bash", "-lc", shlex.quote(inner),
             ])
         return f"distrobox enter {shlex.quote(self.container_name)} -- bash -lc {shlex.quote(inner)}"
@@ -673,13 +702,22 @@ class PlatformBuilder:
         `apt-get install` still be there for the compile that follows. The
         source tree is mounted whole -- the build directories live inside it --
         and the mount point has to exist before podman is asked for it.
+
+        The name is per process because removal is a `podman container rm
+        --force` on that name: a shared one would let a second build delete the
+        container a first build is still executing into. The pre-remove then
+        only clears a leftover from a crashed run that reused this PID.
         """
         self.config.temp_base.mkdir(parents=True, exist_ok=True)
-        self.run_cmd(["podman", "container", "rm", "--force", self.container_name],
+        self.podman_container = f"{self.container_name}-{os.getpid()}"
+        # Owned before `run`: a login or image failure can still leave the
+        # container behind, and removal by name is harmless when it did not.
+        self.owns_container = True
+        self.run_cmd(["podman", "container", "rm", "--force", self.podman_container],
                      force_host=True, allow_failure=True)
         self.run_cmd([
             "podman", "run", "--detach",
-            "--name", self.container_name,
+            "--name", self.podman_container,
             "--userns=keep-id",
             "--security-opt", "label=disable",
             "--platform", "linux/amd64",
@@ -691,13 +729,30 @@ class PlatformBuilder:
         ], force_host=True)
 
     def remove_podman_container(self):
-        """Drop the container once the build is done, if this build made one."""
-        if getattr(self, "container_engine", "") != "podman" or not self.container_name:
+        """Drop the container once the build is done, if this build made one.
+
+        Only a container this process created is removed. Host mode creates
+        none, and a name that was never created here may belong to another
+        build or to the user's own container, which `--force` would destroy.
+
+        The removal runs outside `run_cmd`, which refuses to start once
+        `cancel()` has fired -- exactly the case that would otherwise leave the
+        container running behind an interrupted build.
+        """
+        if not self.owns_container or not self.podman_container:
             return
         if not shutil.which("podman"):
             return
-        self.run_cmd(["podman", "container", "rm", "--force", self.container_name],
-                     force_host=True, allow_failure=True)
+        try:
+            subprocess.run(
+                ["podman", "container", "rm", "--force", self.podman_container],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=self.env, cwd=self.config.source_dir, check=False,
+            )
+        except OSError as error:
+            self.logger.log(f"Could not remove the build container: {error}")
+        finally:
+            self.owns_container = False
 
     def remove_tree(self, path: Path):
         def make_writable_and_retry(function, target, _exception):

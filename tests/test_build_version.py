@@ -1,9 +1,11 @@
 import argparse
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -962,6 +964,80 @@ class TestContainerBuild(unittest.TestCase):
             self.assertEqual(code, 3)
             with self.assertRaises(subprocess.CalledProcessError):
                 builder.run_cmd([sys.executable, "-c", "raise SystemExit(3)"])
+
+    def test_the_created_container_is_named_after_this_process(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.run_cmd = lambda *_args, **_kwargs: 0
+            builder.create_podman_container()
+            # A shared name is a name a second build can `rm --force`.
+            self.assertEqual(
+                builder.podman_container, f"{builder.container_name}-{os.getpid()}"
+            )
+            self.assertTrue(builder.owns_container)
+            self.assertIn(builder.podman_container, builder.container_invocation("true"))
+
+    def test_a_container_this_build_did_not_create_is_left_alone(self):
+        # `--appimage --no-container` on a host that has podman creates nothing,
+        # so cleanup must not remove a container it never made.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            with patch("BUILD.subprocess.run") as run, \
+                    patch("BUILD.shutil.which", return_value="/usr/bin/podman"):
+                builder.remove_podman_container()
+            run.assert_not_called()
+            builder.owns_container = True
+            builder.podman_container = "freya-nle-appimage-1"
+            with patch("BUILD.subprocess.run") as run, \
+                    patch("BUILD.shutil.which", return_value="/usr/bin/podman"):
+                builder.remove_podman_container()
+            self.assertEqual(
+                run.call_args.args[0],
+                ["podman", "container", "rm", "--force", "freya-nle-appimage-1"],
+            )
+            self.assertFalse(builder.owns_container)
+
+    def test_a_cancelled_build_still_removes_its_container(self):
+        # `run_cmd` refuses to start once `cancel()` has fired, which is exactly
+        # the state an interrupted build is in when the container has to go.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.cancelled = True
+            builder.owns_container = True
+            builder.podman_container = "freya-nle-appimage-2"
+            with patch("BUILD.subprocess.run") as run, \
+                    patch("BUILD.shutil.which", return_value="/usr/bin/podman"):
+                builder.cleanup()
+            run.assert_called_once()
+
+    def test_archive_entries_are_stamped_with_the_commit_time(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            staged = builder.config.output_dir
+            staged.mkdir(parents=True, exist_ok=True)
+            (source / "dist").mkdir(exist_ok=True)
+            executable = staged / "freya-nle"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            builder.env["SOURCE_DATE_EPOCH"] = "1700000000"
+            captured = []
+
+            def capture(command, **_kwargs):
+                # `create_tar_zst` deletes the tar after zstd; keep its bytes.
+                tar_argument = next(arg for arg in command if str(arg).endswith(".tar"))
+                captured.append(Path(tar_argument).read_bytes())
+                return 0
+
+            builder.run_cmd = capture
+            with patch("BUILD.shutil.which", return_value="/usr/bin/zstd"):
+                builder.create_tar_zst("Freya-NLE-0.7.0-linux-x86_64-archlinux")
+            with tarfile.open(fileobj=io.BytesIO(captured[0])) as tar:
+                members = {member.name: member for member in tar.getmembers()}
+            # Repacking one commit has to produce one archive, byte for byte.
+            self.assertEqual({member.mtime for member in members.values()}, {1700000000})
+            self.assertEqual(members["freya-nle"].mode & 0o777, 0o755)
+            self.assertEqual(members["freya-nle"].uid, 0)
 
 
 class TestReleasePipeline(unittest.TestCase):
