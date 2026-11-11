@@ -1160,10 +1160,14 @@ class WindowsDependencyMixin:
     # archive calls itself portable, so the runtime has to travel with it
     # instead of asking the user to install a redistributable first.
     WINDOWS_RUNTIME_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
+    # Only imported by binaries built against the C++ standard library.
+    OPTIONAL_WINDOWS_RUNTIME_DLLS = ("msvcp140.dll",)
 
     def windows_runtime_directories(self) -> list[Path]:
         directories: list[Path] = []
-        redist = self.env.get("VCToolsRedistDir")
+        # `setup_msvc_environment` upper-cases every key it parses out of
+        # vcvarsall, so the mixed-case spelling never matches.
+        redist = self.env.get("VCTOOLSREDISTDIR") or self.env.get("VCToolsRedistDir")
         if redist:
             root = Path(redist)
             # <VS>\VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT
@@ -1173,7 +1177,15 @@ class WindowsDependencyMixin:
         directories.append(system_root / "System32")
         return directories
 
-    def copy_windows_runtime(self):
+    def copy_windows_runtime(self, imports=None):
+        """Copy the MSVC runtime the packaged binaries import.
+
+        `msvcp140.dll` is only needed by a binary built against the C++ standard
+        library, so it may legitimately be absent. It is skipped only when no
+        packaged binary imports it; a missing file that something does import
+        fails packaging, because the archive would otherwise need a separately
+        installed redistributable.
+        """
         directories = self.windows_runtime_directories()
         for name in self.WINDOWS_RUNTIME_DLLS:
             destination = self.config.output_dir / name
@@ -1182,16 +1194,30 @@ class WindowsDependencyMixin:
             source = next((directory / name for directory in directories
                            if (directory / name).is_file()), None)
             if source is None:
-                # `msvcp140.dll` is only pulled in when something was compiled
-                # against the C++ standard library, so its absence is legal.
-                if name == "msvcp140.dll":
-                    self.logger.log("msvcp140.dll was not found; nothing imports it")
+                if name in self.OPTIONAL_WINDOWS_RUNTIME_DLLS and not self.any_binary_imports(
+                    imports, name
+                ):
+                    self.logger.log(f"{name} is not imported; leaving it out")
                     continue
                 raise FileNotFoundError(
-                    f"{name} was not found; a portable archive cannot start without it"
+                    f"{name} is not available, yet a packaged binary imports it"
                 )
             shutil.copy2(source, destination)
             self.logger.log(f"Bundled MSVC runtime: {name}")
+
+    def any_binary_imports(self, imports, name: str) -> bool:
+        """Whether any packaged binary imports `name`.
+
+        Without a reader the answer is unknown, so the file is treated as
+        required rather than silently dropped.
+        """
+        if imports is None:
+            return True
+        wanted = name.lower()
+        for binary in self.packaged_binaries():
+            if wanted in {entry.lower() for entry in imports(binary)}:
+                return True
+        return False
 
 
 class Msys2Builder(WindowsDependencyMixin, PlatformBuilder):
@@ -1528,7 +1554,7 @@ class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
         if discovery := self.find_carla_discovery_tool(windows=True):
             shutil.copy2(discovery, self.config.output_dir / discovery.name)
         self.copy_windows_dependencies(self.imported_dlls, self.find_runtime_dll)
-        self.copy_windows_runtime()
+        self.copy_windows_runtime(self.imported_dlls)
         self.copy_licenses(self.config.output_dir)
         self.write_build_info(self.config.output_dir)
         self.logger.log(f"Executable: {destination}")

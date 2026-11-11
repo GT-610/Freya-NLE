@@ -10,14 +10,16 @@ All notable changes to Freya NLE are documented in this file.
   that produced it. The Arch-compatible archive keeps a `-archlinux` variant
   because it only runs on Arch's current glibc
 - A portable Linux AppImage is the standard Linux download. It is built on
-  Ubuntu 22.04 against a pinned FFmpeg and carries its own libraries, so it does
-  not depend on the distribution's glibc or FFmpeg version
+  Ubuntu 22.04 against a pinned FFmpeg and carries that FFmpeg, so it does not
+  depend on the distribution's copy; it still needs glibc 2.35 or newer, the
+  version Ubuntu 22.04 ships
 - The macOS Intel bundle exists again. One arm64 runner cross-compiles both
   Apple architectures, so no paid Intel runner is involved
 - Each archive carries `build-info.json`, recording the commit, the Rust and
   FFmpeg versions it links, and the minimum system it actually requires
-- Each release publishes `SHA256SUMS`, and every archive carries the AGPL text
-  with the third-party notices it owes its recipients
+- Each release publishes `SHA256SUMS`, and every archive carries the AGPL text,
+  the GPL-2.0 and LGPL-2.1 texts, and the third-party notices it owes its
+  recipients
 
 ### Changed
 - The Rust toolchain is pinned to 1.99.1 (`rust-toolchain.toml`, the workspace

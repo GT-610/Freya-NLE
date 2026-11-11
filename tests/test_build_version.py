@@ -825,7 +825,7 @@ class TestWindowsPortability(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 builder.copy_windows_runtime()
 
-    def test_a_missing_msvcp_is_tolerated(self):
+    def test_a_missing_msvcp_is_tolerated_when_nothing_imports_it(self):
         # msvcp140 is only imported when something was compiled against the C++
         # standard library, so its absence is legal and must not fail a build.
         with tempfile.TemporaryDirectory() as temporary:
@@ -841,9 +841,44 @@ class TestWindowsPortability(unittest.TestCase):
             for name in ("vcruntime140.dll", "vcruntime140_1.dll"):
                 (available / name).write_text("dll", encoding="utf-8")
             builder.windows_runtime_directories = lambda: [available]
-            builder.copy_windows_runtime()
+            builder.copy_windows_runtime(lambda binary: [])
             self.assertTrue((output / "vcruntime140.dll").is_file())
             self.assertFalse((output / "msvcp140.dll").exists())
+
+    def test_a_missing_msvcp_fails_when_a_binary_imports_it(self):
+        # Shipping it missing would make the "portable" archive need a separately
+        # installed redistributable.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            output = source / "build"
+            output.mkdir()
+            (output / "freya-nle.exe").write_text("pe", encoding="utf-8")
+            builder = WindowsTestBuilder(
+                config_for(source, target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            available = source / "redist"
+            available.mkdir()
+            for name in ("vcruntime140.dll", "vcruntime140_1.dll"):
+                (available / name).write_text("dll", encoding="utf-8")
+            builder.windows_runtime_directories = lambda: [available]
+            with self.assertRaises(FileNotFoundError):
+                builder.copy_windows_runtime(lambda binary: ["MSVCP140.dll"])
+
+    def test_the_redistributable_directory_is_found_through_its_normalised_key(self):
+        # vcvarsall output is upper-cased, so the mixed-case name never matches.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = WindowsTestBuilder(
+                config_for(Path(temporary), target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            builder.env.pop("VCToolsRedistDir", None)
+            redist = Path(temporary) / "redist"
+            crt = redist / "14.44.35207" / "x64" / "Microsoft.VC143.CRT"
+            crt.mkdir(parents=True)
+            builder.env["VCTOOLSREDISTDIR"] = str(redist)
+            # The CRT directory the vcvarsall key points at is searched first.
+            self.assertEqual(builder.windows_runtime_directories()[0], crt)
 
 
 class TestContainerBuild(unittest.TestCase):
