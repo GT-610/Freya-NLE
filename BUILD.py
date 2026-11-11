@@ -401,7 +401,9 @@ class PlatformBuilder:
         pinned to the source's commit time so two builds of one commit differ
         only by their contents.
         """
-        if not shutil.which("zstd", path=self.env.get("PATH")):
+        # A containerised build has its own zstd, which is the copy that matters
+        # there; only a host build has to find one on the host.
+        if not self.use_container and not shutil.which("zstd", path=self.env.get("PATH")):
             raise RuntimeError("zstd was not found; install it to build the Linux archive")
         tar_path = self.config.dist_dir / f"{archive_name}.tar"
         tar_path.unlink(missing_ok=True)
@@ -426,7 +428,7 @@ class PlatformBuilder:
             self.run_cmd([
                 "zstd", "--quiet", "--force", "-19", "--long", "-T0",
                 str(tar_path), "-o", str(archive_path),
-            ], force_host=True)
+            ])
         finally:
             tar_path.unlink(missing_ok=True)
 
@@ -594,6 +596,29 @@ class PlatformBuilder:
             return ""
         return result.stdout if result.returncode == 0 else ""
 
+    def inspect_output(self, command: List[str]) -> str:
+        """Output of an inspection tool, run where that tool is installed.
+
+        `objdump` and `readelf` belong to the build container whenever there is
+        one: a macOS host has neither, and reading the archive from there would
+        record an empty glibc floor as though the binary required none.
+        """
+        if not self.use_container:
+            return self.command_output(command)
+        inner = " && ".join([
+            f"cd {shlex.quote(self.container_source_dir())}",
+            shlex.join(self.container_command(command)),
+        ])
+        try:
+            result = subprocess.run(
+                self.container_invocation(inner), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", env=self.env,
+                cwd=self.config.source_dir,
+            )
+        except OSError:
+            return ""
+        return result.stdout if result.returncode == 0 else ""
+
     def run_cmd(self, command: List[str], shell: bool = False, force_host: bool = False,
                 allow_failure: bool = False):
         self.check_cancelled()
@@ -658,6 +683,10 @@ class PlatformBuilder:
                     if self.container_engine == "podman"
                     else value
                 )
+        # Not a path: `appimagetool` is told which architecture to label the
+        # image with, and the variable has to cross into the container too.
+        if arch := self.env.get("ARCH"):
+            variables["ARCH"] = arch
         return variables
 
     def container_source_dir(self) -> str:
@@ -902,7 +931,7 @@ class ArchBuilder(LinuxBuilderBase):
         return requirements
 
     def maximum_glibc_version(self) -> str:
-        output = self.command_output(["objdump", "-T", str(self.cargo_binary())])
+        output = self.inspect_output(["objdump", "-T", str(self.cargo_binary())])
         versions = re.findall(r"GLIBC_([0-9]+\.[0-9]+)", output)
         if not versions:
             return ""
@@ -914,7 +943,7 @@ class ArchBuilder(LinuxBuilderBase):
             if not path.is_file():
                 continue
             for needed in re.findall(r"Shared library: \[(lib(?:av|sw)[a-z]+\.so\.[0-9]+)\]",
-                                     self.command_output(["readelf", "-d", str(path)])):
+                                     self.inspect_output(["readelf", "-d", str(path)])):
                 if needed not in libraries:
                     libraries.append(needed)
         return sorted(libraries)
@@ -1182,15 +1211,16 @@ class AppImageBuilder(LinuxBuilderBase):
         destination = self.config.dist_dir / f"{archive_name}.AppImage"
         # appimagetool refuses to run without an explicit architecture when it
         # cannot infer one from the host. `run_cmd` passes `self.env`, so this is
-        # where the value has to go to reach the tool.
+        # where the value has to go to reach the tool; `container_environment()`
+        # is what carries it the rest of the way into a container.
         self.env["ARCH"] = self.PLATFORM_ARCH
-        # The tool is itself an AppImage; extracting it avoids needing FUSE in
-        # the build container, which never has it.
-        self.run_cmd(
-            [str(tool), "--appimage-extract-and-run", "--no-appstream",
-             str(appdir), str(destination)],
-            force_host=True,
-        )
+        # The tool is itself a Linux AppImage; extracting it avoids needing FUSE.
+        # It runs wherever the build runs: a macOS host cannot execute it at all,
+        # and a Linux host with a container already has a Linux one.
+        self.run_cmd([
+            str(tool), "--appimage-extract-and-run", "--no-appstream",
+            str(appdir), str(destination),
+        ])
 
     def runtime_requirements(self) -> dict:
         requirements = super().runtime_requirements()
@@ -1200,7 +1230,7 @@ class AppImageBuilder(LinuxBuilderBase):
         return requirements
 
     def maximum_glibc_version(self) -> str:
-        output = self.command_output(["objdump", "-T", str(self.cargo_binary())])
+        output = self.inspect_output(["objdump", "-T", str(self.cargo_binary())])
         versions = re.findall(r"GLIBC_([0-9]+\.[0-9]+)", output)
         if not versions:
             return ""
@@ -1903,14 +1933,35 @@ class XcodeBuilder(PlatformBuilder):
         return self.config.output_dir / "Freya NLE.app"
 
     @staticmethod
-    def macho_minimum_system(path: Path) -> str:
-        """Read the minimum macOS version a Mach-O was actually built for."""
-        result = subprocess.run(["vtool", "-show-build", str(path)], capture_output=True,
-                                text=True, errors="replace")
-        versions = re.findall(r"^\s*minos ([0-9.]+)$", result.stdout, flags=re.MULTILINE)
+    def highest_version(versions) -> str:
         if not versions:
             return ""
         return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")))
+
+    def macho_minimum_system(self, path: Path) -> str:
+        """Read the minimum macOS version the slice this bundle loads was built for.
+
+        `vtool` reports one block per architecture, and a universal file can
+        carry a floor in a slice this bundle never executes. Measuring the whole
+        file would adopt that floor and narrow the declared minimum for no
+        reason, so only the slice for this build's architecture is read.
+        """
+        result = subprocess.run(["vtool", "-show-build", str(path)], capture_output=True,
+                                text=True, errors="replace")
+        blocks = re.split(r"^.*\(architecture ([^)]+)\):\s*$", result.stdout, flags=re.MULTILINE)
+        floors = {}
+        for index in range(1, len(blocks) - 1, 2):
+            versions = re.findall(r"^\s*minos ([0-9.]+)$", blocks[index + 1], flags=re.MULTILINE)
+            if versions:
+                floors[blocks[index].strip()] = self.highest_version(versions)
+        if not floors:
+            return ""
+        arch = self.platform_architecture()
+        if arch in floors:
+            return floors[arch]
+        # No slice for this architecture: the file is not part of the bundle the
+        # user installs, and its floor says nothing about this build.
+        return ""
 
     def effective_minimum_system(self, app: Path) -> str:
         """The oldest macOS this bundle can actually start on.
@@ -1932,10 +1983,7 @@ class XcodeBuilder(PlatformBuilder):
         frameworks = app / "Contents" / "Frameworks"
         if frameworks.is_dir():
             candidates.extend(self.macho_minimum_system(path) for path in sorted(frameworks.iterdir()))
-        measured = [value for value in candidates if value]
-        if not measured:
-            return self.DEPLOYMENT_TARGET
-        return max(measured, key=lambda value: tuple(int(part) for part in value.split(".")))
+        return self.highest_version([value for value in candidates if value]) or self.DEPLOYMENT_TARGET
 
     def verify_minimum_system(self, app: Path, declared: str):
         """Fail the build when the bundle needs a newer macOS than it claims."""

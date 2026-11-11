@@ -744,6 +744,23 @@ class TestMacosMinimumSystem(unittest.TestCase):
             builder.macho_minimum_system = lambda path: floors.get(Path(path).name, "")
             self.assertEqual(builder.effective_minimum_system(app), "14.1")
 
+    def test_only_the_slice_this_bundle_loads_is_measured(self):
+        # A universal file can carry a higher floor in a slice this bundle never
+        # executes; adopting it would narrow the declared minimum for nothing.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = config_for(Path(temporary), target="xcode")
+            config.target_triple = "aarch64-apple-darwin"
+            builder = XcodeBuilder(
+                config, Logger(lambda _message: None, lambda *_args: None)
+            )
+            report = (
+                "/x/frey (architecture arm64):\n   minos 12.0\n"
+                "/x/frey (architecture x86_64):\n   minos 15.0\n"
+            )
+            with patch("BUILD.subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, report, "")
+                self.assertEqual(builder.macho_minimum_system(Path("frey")), "12.0")
+
     def test_declares_the_measured_floor_when_a_dependency_overshoots(self):
         with tempfile.TemporaryDirectory() as temporary:
             builder = self.builder(Path(temporary))
@@ -1105,6 +1122,71 @@ class TestContainerBuild(unittest.TestCase):
             translated = builder.container_command(commands[0])
             self.assertEqual(translated[2], program)
             self.assertEqual(translated[4], "/src/assets/icon.svg")
+
+    def test_the_image_tool_runs_where_the_build_runs(self):
+        # `appimagetool` is a Linux AppImage: a macOS host cannot execute it, and
+        # the build container is the only place it can run there.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            config = config_for(source, target="appimage")
+            config.use_container = True
+            builder = AppImageBuilder(
+                config, Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.container_engine = "podman"
+            builder.podman_container = "freya-nle-appimage-1"
+            tool = source / ".build_tmp" / "appimagetool-x86_64.AppImage"
+            builder.appimagetool_path = lambda: tool
+            (builder.config.output_dir / "FreyaNLE.AppDir").mkdir(parents=True)
+            calls = []
+            builder.run_cmd = lambda command, **kwargs: calls.append((command, kwargs)) or 0
+            builder.create_appimage("Freya-NLE-0.7.0-linux-x86_64")
+            command, kwargs = calls[0]
+            self.assertFalse(kwargs.get("force_host", False))
+            translated = builder.container_command(command)
+            self.assertEqual(translated[0], "/src/.build_tmp/appimagetool-x86_64.AppImage")
+            # The architecture variable has to cross into the container too.
+            self.assertEqual(builder.container_environment()["ARCH"], "x86_64")
+
+    def test_a_container_build_compresses_with_the_container_zstd(self):
+        # A macOS host has no zstd; the container the archive was built in does.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            builder.use_container = True
+            builder.config.output_dir.mkdir(parents=True)
+            (source / "dist").mkdir()
+            calls = []
+            builder.run_cmd = lambda command, **kwargs: calls.append((command, kwargs)) or 0
+            with patch("BUILD.shutil.which", return_value=None):
+                builder.create_tar_zst("Freya-NLE-0.7.0-linux-x86_64-archlinux")
+            command, kwargs = calls[0]
+            self.assertEqual(command[0], "zstd")
+            self.assertFalse(kwargs.get("force_host", False))
+
+    def test_requirements_are_read_where_the_tools_are_installed(self):
+        # `objdump` and `readelf` exist in the container, not on a macOS host;
+        # reading from the host would record no glibc floor and no sonames.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            config = config_for(source, target="arch")
+            config.use_container = True
+            builder = ArchBuilder(
+                config, Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.container_engine = "podman"
+            builder.podman_container = "archlinux-aviqtl-1"
+            with patch("BUILD.subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess(
+                    [], 0, "GLIBC_2.35\n", ""
+                )
+                output = builder.inspect_output(
+                    ["objdump", "-T", str(builder.cargo_binary())]
+                )
+            self.assertIn("GLIBC_2.35", output)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:2], ["podman", "exec"])
+            self.assertIn("/src/", " ".join(command))
 
     def test_an_offline_appimage_build_refuses_the_container(self):
         # Every container is created for one build, so `--offline` has nothing
