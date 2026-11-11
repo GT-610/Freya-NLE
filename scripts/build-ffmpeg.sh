@@ -193,15 +193,26 @@ if [ ! -f "$X264_PREFIX/lib/libx264.a" ] && [ ! -f "$X264_PREFIX/lib/libx264.dyl
             X264_FLAGS=(--enable-static --enable-pic --host=x86_64-linux-gnu)
             ;;
     esac
-    ./configure --prefix="$X264_PREFIX" "${X264_FLAGS[@]}" >/dev/null
-    make -j"$JOBS" >/dev/null
-    make install >/dev/null
+    # Logged rather than discarded: silencing these hid a configure failure that
+    # took a CI run to notice, and the tail is what says why.
+    if ! ./configure --prefix="$X264_PREFIX" "${X264_FLAGS[@]}" >"$WORK/configure-x264-$TARGET.log" 2>&1; then
+        echo "x264 configure failed; see $WORK/configure-x264-$TARGET.log" >&2
+        tail -20 "$WORK/configure-x264-$TARGET.log" >&2
+        exit 1
+    fi
+    if ! make -j"$JOBS" >"$WORK/make-x264-$TARGET.log" 2>&1; then
+        echo "x264 build failed; see $WORK/make-x264-$TARGET.log" >&2
+        tail -20 "$WORK/make-x264-$TARGET.log" >&2
+        exit 1
+    fi
+    make install >"$WORK/install-x264-$TARGET.log" 2>&1
     popd >/dev/null
 else
     log "Reusing x264 in $X264_PREFIX"
 fi
 
 # -- FFmpeg ----------------------------------------------------------------
+fetch_at "$FFMPEG_REPO" "$FFMPEG_COMMIT" "$SRC/ffmpeg"
 # FFmpeg finds `libx264` through pkg-config, not through the include and library
 # flags alone, so the prefix this script just populated has to be discoverable.
 # Without it `configure` stops at "ERROR: x264 not found using pkg-config".
