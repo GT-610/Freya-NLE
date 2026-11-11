@@ -877,10 +877,46 @@ class AppImageBuilder(LinuxBuilderBase):
                 shutil.copytree(entry, target)
             else:
                 shutil.copy2(entry, target)
+        self.bundle_linux_libraries(appdir / "usr" / "lib")
         self.write_apprun(appdir)
         self.write_desktop_entry(appdir)
         self.write_appimage_icon(appdir)
         self.logger.log(f"AppDir: {appdir}")
+
+    def bundle_linux_libraries(self, destination: Path):
+        """Copy the pinned FFmpeg into the image, sonames and all.
+
+        The binary is linked against the FFmpeg this repository builds, so its
+        sonames (`libavcodec.so.63` and friends) exist on no distribution. A
+        portable image has to carry them; relying on the host's FFmpeg would
+        bring back exactly the dependency the pinned build removed.
+        """
+        ffmpeg_dir = self.env.get("FFMPEG_DIR")
+        if not ffmpeg_dir:
+            raise RuntimeError(
+                "FFMPEG_DIR is not set, so there is no FFmpeg to bundle; "
+                "build it with scripts/build-ffmpeg.sh first"
+            )
+        library_dir = Path(ffmpeg_dir) / "lib"
+        libraries = sorted(
+            path for path in library_dir.glob("lib*.so*")
+            if path.is_file() or path.is_symlink()
+        )
+        if not libraries:
+            raise FileNotFoundError(f"No shared libraries found in {library_dir}")
+        destination.mkdir(parents=True, exist_ok=True)
+        # The real files first, then the links that name them: a copy of a
+        # symlink would either duplicate megabytes or dangle.
+        for library in libraries:
+            if not library.is_symlink():
+                shutil.copy2(library, destination / library.name)
+        for library in libraries:
+            if library.is_symlink():
+                target = os.readlink(library)
+                link = destination / library.name
+                link.unlink(missing_ok=True)
+                link.symlink_to(target)
+        self.logger.log(f"Bundled {len(libraries)} FFmpeg libraries")
 
     def write_apprun(self, appdir: Path):
         """The entry point the AppImage runtime executes."""

@@ -462,7 +462,12 @@ class TestAppImage(unittest.TestCase):
             (output / "freya-nle").write_text("binary", encoding="utf-8")
             (output / "effects").mkdir()
             (output / "effects" / "blur.json").write_text("{}", encoding="utf-8")
+            # Staging copies the pinned FFmpeg into the image, so give it one.
+            library_dir = source / "ffmpeg" / "lib"
+            library_dir.mkdir(parents=True)
+            (library_dir / "libavutil.so.61").write_text("elf", encoding="utf-8")
             builder = self.builder(source)
+            builder.env["FFMPEG_DIR"] = str(source / "ffmpeg")
             # The icon conversion shells out to an image tool; stub it out so the
             # staging logic is what is under test.
             builder.write_appimage_icon = lambda appdir: None
@@ -500,6 +505,33 @@ class TestAppImage(unittest.TestCase):
             self.assertIn(f"Icon={builder.DESKTOP_ID}", text)
             self.assertIn("Categories=AudioVideo;Video;", text)
             self.assertIn("Exec=freya-nle %f", text)
+
+    def test_the_image_carries_the_ffmpeg_it_was_linked_against(self):
+        # The pinned FFmpeg's sonames exist on no distribution, so an image that
+        # does not carry them cannot start anywhere.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            library_dir = source / "ffmpeg" / "lib"
+            library_dir.mkdir(parents=True)
+            real = library_dir / "libavcodec.so.63.1.102"
+            real.write_text("elf", encoding="utf-8")
+            (library_dir / "libavcodec.so.63").symlink_to(real.name)
+            builder = self.builder(source)
+            builder.env["FFMPEG_DIR"] = str(source / "ffmpeg")
+            destination = source / "appdir" / "usr" / "lib"
+            builder.bundle_linux_libraries(destination)
+            self.assertEqual((destination / "libavcodec.so.63.1.102").read_text(encoding="utf-8"), "elf")
+            link = destination / "libavcodec.so.63"
+            self.assertTrue(link.is_symlink())
+            # The link has to name the file beside it, not the build tree.
+            self.assertEqual(os.readlink(link), "libavcodec.so.63.1.102")
+
+    def test_a_missing_ffmpeg_prefix_is_an_error_not_an_empty_image(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.env.pop("FFMPEG_DIR", None)
+            with self.assertRaises(RuntimeError):
+                builder.bundle_linux_libraries(Path(temporary) / "lib")
 
     def test_the_ffmpeg_prefix_is_left_alone_on_the_host(self):
         # CI builds the AppImage inside the pinned image without the container
