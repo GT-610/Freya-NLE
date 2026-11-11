@@ -1941,12 +1941,17 @@ class XcodeBuilder(PlatformBuilder):
     def macho_minimum_system(self, path: Path) -> str:
         """Read the minimum macOS version the slice this bundle loads was built for.
 
-        `vtool` reports one block per architecture, and a universal file can
-        carry a floor in a slice this bundle never executes. Measuring the whole
-        file would adopt that floor and narrow the declared minimum for no
-        reason, so only the slice for this build's architecture is read.
+        `-arch` restricts the report to that slice, so a universal file cannot
+        contribute the floor of an architecture this bundle never executes, and a
+        file without that slice is reported as carrying no floor instead of the
+        highest one it happens to have. `vtool` labels each block it prints, thin
+        or universal, so the label is what the parse keys on.
         """
-        result = subprocess.run(["vtool", "-show-build", str(path)], capture_output=True,
+        arch = self.platform_architecture()
+        command = ["vtool", "-show-build"]
+        if arch:
+            command += ["-arch", arch]
+        result = subprocess.run(command + [str(path)], capture_output=True,
                                 text=True, errors="replace")
         blocks = re.split(r"^.*\(architecture ([^)]+)\):\s*$", result.stdout, flags=re.MULTILINE)
         floors = {}
@@ -1954,14 +1959,9 @@ class XcodeBuilder(PlatformBuilder):
             versions = re.findall(r"^\s*minos ([0-9.]+)$", blocks[index + 1], flags=re.MULTILINE)
             if versions:
                 floors[blocks[index].strip()] = self.highest_version(versions)
-        if not floors:
-            return ""
-        arch = self.platform_architecture()
-        if arch in floors:
-            return floors[arch]
-        # No slice for this architecture: the file is not part of the bundle the
-        # user installs, and its floor says nothing about this build.
-        return ""
+        if arch:
+            return floors.get(arch, "")
+        return self.highest_version(list(floors.values()))
 
     def effective_minimum_system(self, app: Path) -> str:
         """The oldest macOS this bundle can actually start on.

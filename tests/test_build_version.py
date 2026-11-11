@@ -744,6 +744,22 @@ class TestMacosMinimumSystem(unittest.TestCase):
             builder.macho_minimum_system = lambda path: floors.get(Path(path).name, "")
             self.assertEqual(builder.effective_minimum_system(app), "14.1")
 
+    def test_a_thin_binary_contributes_its_floor(self):
+        # A thin file reports one labelled block too; an unlabelled parse used to
+        # drop it, which silently disabled the overshoot check for the archives.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = config_for(Path(temporary), target="xcode")
+            config.target_triple = "aarch64-apple-darwin"
+            builder = XcodeBuilder(
+                config, Logger(lambda _message: None, lambda *_args: None)
+            )
+            report = "/x/frey (architecture arm64):\n   minos 12.0\n"
+            with patch("BUILD.subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, report, "")
+                self.assertEqual(builder.macho_minimum_system(Path("frey")), "12.0")
+                self.assertIn("-arch", run.call_args.args[0])
+                self.assertIn("arm64", run.call_args.args[0])
+
     def test_only_the_slice_this_bundle_loads_is_measured(self):
         # A universal file can carry a higher floor in a slice this bundle never
         # executes; adopting it would narrow the declared minimum for nothing.
