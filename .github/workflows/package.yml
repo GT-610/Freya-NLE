@@ -213,10 +213,6 @@ jobs:
         run: |
           python3 BUILD.py --xcode --strict-deployment-target --offline \
             --target aarch64-apple-darwin
-          # Move the archive out of the way so the Intel build cannot overwrite
-          # it; both write into dist/.
-          mkdir -p dist/arm64
-          mv dist/*-macos-arm64.zip dist/arm64/
       - name: Build and package x86_64
         env:
           FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/x86_64-apple-darwin
@@ -227,7 +223,9 @@ jobs:
         id: name
         run: |
           set -euo pipefail
-          for archive in dist/arm64/*.zip dist/*.zip; do
+          # Both architectures land in dist/ under names that differ by
+          # architecture, so neither build can overwrite the other.
+          for archive in dist/*.zip; do
             [ -f "$archive" ] || continue
             echo "Checking $archive"
             work="$(mktemp -d)"
@@ -251,16 +249,16 @@ jobs:
             done
             rm -rf "$work"
           done
-          arm="$(basename "$(ls dist/arm64/*.zip | head -1)")"
-          x86="$(basename "$(ls dist/*.zip | head -1)")"
+          arm="$(basename "$(ls dist/*-macos-arm64.zip | head -1)")"
+          x86="$(basename "$(ls dist/*-macos-x86_64.zip | head -1)")"
           echo "arm64=$arm" >> "$GITHUB_OUTPUT"
           echo "x86_64=$x86" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: |
-            dist/arm64/*.zip
-            dist/*.zip
+          # Flattened on purpose: `download-artifact` preserves an artifact's
+          # internal paths, and the release job expects every file at the top.
+          path: dist/*.zip
           if-no-files-found: error
 
   windows:
