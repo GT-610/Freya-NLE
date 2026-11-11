@@ -616,7 +616,10 @@ class PlatformBuilder:
             )
             inner = f"cd {shlex.quote(workdir)} && {exports}{display_command}"
             actual_command = self.container_invocation(inner)
-            shell = True
+            # The list form is passed to Popen unchanged; `shell=True` would
+            # hand the client command to the host's shell, and on Windows that
+            # is `cmd.exe`, which has no idea what POSIX quoting means.
+            shell = False
         popen_options = {"start_new_session": True} if os.name != "nt" else {}
         process = subprocess.Popen(
             actual_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -695,23 +698,30 @@ class PlatformBuilder:
         relative = argument[len(root):].lstrip("\\/").replace("\\", "/")
         return "/src" + (f"/{relative}" if relative else "")
 
-    def container_invocation(self, inner: str) -> str:
-        """Command that runs `inner` inside the build container.
+    def container_invocation(self, inner: str) -> List[str]:
+        """Command that runs `inner` inside the build container, as an argument list.
 
         `distrobox` is the preferred host because it creates a persistent
         environment keyed to the image. It is not installed everywhere -- on
         macOS, in particular, only podman is -- and the fallback has to persist
         too: a `podman run --rm` per command would discard every package the
         previous command installed.
+
+        The result is a list because `inner` is a whole program: it carries
+        quotes, `&&` and paths with spaces. Quoting it for a host shell only
+        works on hosts whose shell understands that quoting.
         """
         if self.container_engine == "podman":
-            return " ".join([
+            return [
                 "podman", "exec",
                 "-w", "/src",
-                shlex.quote(self.podman_container or self.container_name),
-                "bash", "-lc", shlex.quote(inner),
-            ])
-        return f"distrobox enter {shlex.quote(self.container_name)} -- bash -lc {shlex.quote(inner)}"
+                self.podman_container or self.container_name,
+                "bash", "-lc", inner,
+            ]
+        return [
+            "distrobox", "enter", self.container_name,
+            "--", "bash", "-lc", inner,
+        ]
 
     def create_podman_container(self):
         """Create the long-lived container the podman path executes into.
@@ -858,8 +868,11 @@ class ArchBuilder(LinuxBuilderBase):
     def __init__(self, config: BuildConfig, logger: Logger):
         super().__init__(config, logger)
         self.container_name = "archlinux-aviqtl"
-        # Pinned so a rebuild months later links against the same glibc and
-        # FFmpeg soname instead of silently tracking Arch's rolling release.
+        # The digest pins the starting point, not the result: the `pacman -Syu`
+        # in `install_dependencies()` upgrades to whatever Arch ships when the
+        # build runs. That is the point of this variant -- an archive linked
+        # against current Arch -- and `runtime_requirements()` records the floor
+        # the build actually ended up with.
         self.image_name = ARCH_LINUX_IMAGE
 
     def install_dependencies(self):
@@ -939,6 +952,16 @@ class AppImageBuilder(LinuxBuilderBase):
         if not self.use_container:
             self.logger.log("Host mode: skipping system package installation")
             return
+        if self.config.is_offline:
+            # Every container is created for one build and removed after it, so
+            # there is nothing inside one to reuse: the toolchain, the packages
+            # and the FFmpeg would all have to be downloaded. Refusing is
+            # clearer than starting network work that `--offline` forbade.
+            raise RuntimeError(
+                "An offline AppImage build cannot use a container: it starts from "
+                "an empty container with no Rust toolchain and no FFmpeg. Run it "
+                "with --no-container on a host that already has both."
+            )
         # `apt-get install` only survives to the next command because the
         # container outlives this call; a fresh container per command would
         # discard it.
@@ -1114,8 +1137,10 @@ class AppImageBuilder(LinuxBuilderBase):
         shutil.copy2(target, appdir / f"{self.DESKTOP_ID}.png")
 
     IMAGE_TOOL = "appimagetool-x86_64.AppImage"
-    IMAGE_TOOL_URL = "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-    IMAGE_TOOL_SHA256 = "e8c1169c4af66c3184d7ee110713d4be04befe671fa358e2c1591ee840553b03"
+    # A tagged release, not `continuous`: a rolling asset can be replaced under
+    # the pinned checksum, which would fail every build until the constant moved.
+    IMAGE_TOOL_URL = "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+    IMAGE_TOOL_SHA256 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 
     def appimagetool_path(self) -> Path:
         tool = self.config.temp_base / self.IMAGE_TOOL
@@ -1890,12 +1915,20 @@ class XcodeBuilder(PlatformBuilder):
     def effective_minimum_system(self, app: Path) -> str:
         """The oldest macOS this bundle can actually start on.
 
-        The application binary and every framework it loads each carry their
-        own floor, and the bundle runs only on the strictest of them. Homebrew
-        builds its bottles for the OS it was installed on, so a bundle can claim
-        macOS 12 in `Info.plist` while shipping a library that needs macOS 15.
+        The application binary, any helper executable shipped beside it, and
+        every framework it loads each carry their own floor, and the bundle runs
+        only on the strictest of them. Homebrew builds its bottles for the OS it
+        was installed on, so a bundle can claim macOS 12 in `Info.plist` while
+        shipping a library that needs macOS 15.
         """
-        candidates = [self.macho_minimum_system(app / "Contents" / "MacOS" / "freya-nle")]
+        macos = app / "Contents" / "MacOS"
+        candidates = []
+        if macos.is_dir():
+            candidates.extend(
+                self.macho_minimum_system(path)
+                for path in sorted(macos.iterdir())
+                if path.is_file()
+            )
         frameworks = app / "Contents" / "Frameworks"
         if frameworks.is_dir():
             candidates.extend(self.macho_minimum_system(path) for path in sorted(frameworks.iterdir()))

@@ -261,7 +261,7 @@ jobs:
                 ;;
             esac
             plist_min="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
-            for binary in "$app/Contents/MacOS/freya-nle" "$app"/Contents/Frameworks/*.dylib; do
+            for binary in "$app"/Contents/MacOS/* "$app"/Contents/Frameworks/*.dylib; do
               [ -f "$binary" ] || continue
               binary_min="$(vtool -show-build "$binary" | awk '/minos/{print $2}' | sort -V | tail -1)"
               [ -z "$binary_min" ] && continue

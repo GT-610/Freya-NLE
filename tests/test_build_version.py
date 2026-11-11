@@ -675,6 +675,9 @@ class TestAppImage(unittest.TestCase):
             builder = self.builder(Path(temporary))
             self.assertRegex(builder.IMAGE_TOOL_SHA256, r"^[0-9a-f]{64}$")
             self.assertTrue(builder.IMAGE_TOOL_URL.startswith("https://"))
+            # A tagged release cannot be swapped under the pinned digest the way
+            # the rolling `continuous` asset can.
+            self.assertNotIn("/continuous/", builder.IMAGE_TOOL_URL)
 
     def test_a_corrupt_tool_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -726,6 +729,20 @@ class TestMacosMinimumSystem(unittest.TestCase):
             (frameworks / "libavcodec.63.dylib").write_text("x", encoding="utf-8")
             reported["path"] = "15.0"
             self.assertEqual(builder.effective_minimum_system(app), "15.0")
+
+    def test_a_helper_executable_is_measured_too(self):
+        # `carla-discovery-native` ships beside the application binary, so a
+        # floor only it declares would otherwise never reach the plist.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            app = Path(temporary) / "Freya NLE.app"
+            macos = app / "Contents" / "MacOS"
+            macos.mkdir(parents=True)
+            (macos / "freya-nle").write_text("x", encoding="utf-8")
+            (macos / "carla-discovery-native").write_text("x", encoding="utf-8")
+            floors = {"freya-nle": "12.0", "carla-discovery-native": "14.1"}
+            builder.macho_minimum_system = lambda path: floors.get(Path(path).name, "")
+            self.assertEqual(builder.effective_minimum_system(app), "14.1")
 
     def test_declares_the_measured_floor_when_a_dependency_overshoots(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -963,10 +980,14 @@ class TestContainerBuild(unittest.TestCase):
             second = builder.container_invocation("echo two")
             # `podman exec` into a named container, not a fresh `podman run`:
             # the latter would lose everything the previous command installed.
-            self.assertIn("podman exec", first)
+            self.assertEqual(first[:3], ["podman", "exec", "-w"])
             self.assertIn("freya-nle-test", first)
-            self.assertIn("podman exec", second)
+            self.assertEqual(second[:2], ["podman", "exec"])
             self.assertNotIn("--rm", first)
+            # An argument list, because the program it carries is whole: a host
+            # shell would have to re-parse it, and `cmd.exe` cannot.
+            self.assertIsInstance(first, list)
+            self.assertEqual(first[-1], "echo one")
 
     def test_a_failed_command_can_be_tolerated(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1084,6 +1105,21 @@ class TestContainerBuild(unittest.TestCase):
             translated = builder.container_command(commands[0])
             self.assertEqual(translated[2], program)
             self.assertEqual(translated[4], "/src/assets/icon.svg")
+
+    def test_an_offline_appimage_build_refuses_the_container(self):
+        # Every container is created for one build, so `--offline` has nothing
+        # to reuse inside it; the build has to say that instead of downloading.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = config_for(Path(temporary), target="appimage", offline=True)
+            config.use_container = True
+            builder = AppImageBuilder(
+                config, Logger(lambda _message: None, lambda *_args: None)
+            )
+            created = []
+            builder.create_podman_container = lambda: created.append(True)
+            with self.assertRaises(RuntimeError):
+                builder.install_dependencies()
+            self.assertEqual(created, [])
 
     def test_the_container_installs_what_the_ffmpeg_build_needs(self):
         # `build-ffmpeg.sh` exits when nasm is missing, and the CI host installs
