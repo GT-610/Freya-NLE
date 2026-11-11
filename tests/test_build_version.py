@@ -916,6 +916,14 @@ class TestReleasePipeline(unittest.TestCase):
         package = self.workflow("package.yml")
         self.assertIn("vcruntime140.dll", package)
 
+    def test_the_baseline_workflow_follows_the_naming_scheme(self):
+        # It asserted one fixed `Freya-NLE-MSVC-x86_64.zip` for a while after the
+        # names changed, so a green packaging run still left the PR red.
+        baseline = self.workflow("msvc.yml")
+        self.assertIn("-windows-x86_64.zip", baseline)
+        self.assertNotIn("Freya-NLE-MSVC", baseline)
+        self.assertIn("vcruntime140.dll", baseline)
+
 
 class TestCrossBuildTargets(unittest.TestCase):
     """One runner produces both Apple architectures."""
