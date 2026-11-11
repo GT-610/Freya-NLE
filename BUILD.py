@@ -459,21 +459,55 @@ class PlatformBuilder:
         return output.splitlines()[0].strip() if output else ""
 
     def ffmpeg_provenance(self) -> dict:
-        """Report where FFmpeg came from, because it decides the runtime floor.
+        """Report the FFmpeg the build actually linked, and where it came from.
 
-        A build linked against a distribution's FFmpeg is tied to that
-        distribution's soname. `FFMPEG_DIR` marks a locally built one, and
-        anything else is the host's own package manager.
+        `ffmpeg` on `PATH` is a different binary from the one shipping inside the
+        archive, and can be a different version or missing entirely, so it is only
+        consulted when the build did not name a prefix. `third-party-licenses.md`
+        promises the source can be identified by version and commit; the comment
+        is recorded for that reason.
         """
         ffmpeg_dir = self.env.get("FFMPEG_DIR")
-        source = "ffmpeg-dir" if ffmpeg_dir else "system"
-        version = ""
-        for probe in (["ffmpeg", "-version"],):
-            output = self.command_output(probe)
-            if output:
-                version = output.splitlines()[0].strip()
-                break
-        return {"source": source, "path": ffmpeg_dir or None, "version": version}
+        if ffmpeg_dir:
+            info = {
+                "source": "ffmpeg-dir",
+                "path": ffmpeg_dir,
+                "version": self.ffmpeg_version_from_prefix(Path(ffmpeg_dir)),
+            }
+            if revision := self.pinned_ffmpeg_revision():
+                info["revision"] = revision
+            return info
+        output = self.command_output(["ffmpeg", "-version"])
+        return {
+            "source": "system",
+            "path": None,
+            "version": output.splitlines()[0].strip() if output else "",
+        }
+
+    def ffmpeg_version_from_prefix(self, prefix: Path) -> str:
+        """The version recorded by the installed FFmpeg, not by an installed tool.
+
+        A release built from the pinned tag reports its git revision here, and a
+        packaged distribution build reports its release number; either way it is
+        the version of the libraries in this build.
+        """
+        header = prefix / "include" / "libavutil" / "ffversion.h"
+        try:
+            text = header.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        match = re.search(r'#define\s+FFMPEG_VERSION\s+"([^"]+)"', text)
+        return match.group(1) if match else ""
+
+    def pinned_ffmpeg_revision(self) -> str:
+        """The commit `scripts/build-ffmpeg.sh` pins, for the source obligation."""
+        script = self.config.source_dir / "scripts" / "build-ffmpeg.sh"
+        try:
+            text = script.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        match = re.search(r'^FFMPEG_COMMIT="([0-9a-f]{40})"', text, flags=re.MULTILINE)
+        return match.group(1) if match else ""
 
     def runtime_requirements(self) -> dict:
         return {}
@@ -495,10 +529,17 @@ class PlatformBuilder:
         """
         legal = destination / "licenses"
         copied = False
-        for source in (
+        sources = [
             self.config.source_dir / "LICENSE.md",
             self.config.source_dir / "third-party-licenses.md",
-        ):
+        ]
+        # `third-party-licenses.md` says the archive carries the texts it names.
+        # The GPL and LGPL copies live in the repository so every platform ships
+        # them, including the Windows build, which has no FFmpeg source tree.
+        vendored = self.config.source_dir / "licenses"
+        if vendored.is_dir():
+            sources.extend(sorted(path for path in vendored.iterdir() if path.is_file()))
+        for source in sources:
             if source.is_file():
                 legal.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, legal / source.name)
@@ -724,7 +765,10 @@ class ArchBuilder(LinuxBuilderBase):
             "mesa", "vulkan-devel", "libx11", "libxcursor", "libxi", "libxrandr",
             "libxkbcommon", "wayland", "wayland-protocols",
         ]
-        self.run_cmd(["sudo", "pacman", "-Syu", "--needed", "--noconfirm", *dependencies])
+        # distrobox runs an ordinary user and needs sudo; the podman fallback
+        # executes as the container's root, where sudo may not even be installed.
+        prefix = ["sudo"] if self.container_engine != "podman" else []
+        self.run_cmd([*prefix, "pacman", "-Syu", "--needed", "--noconfirm", *dependencies])
 
     def runtime_requirements(self) -> dict:
         """Report the glibc and FFmpeg the archive was linked against.
@@ -806,6 +850,10 @@ class AppImageBuilder(LinuxBuilderBase):
             "libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin",
         ])
         self.install_rust()
+        # Ubuntu's own FFmpeg is far older than the crate accepts, so the container
+        # has to build the pinned one; without this `FFMPEG_DIR` stays unset and
+        # `ffmpeg-sys` has nothing to link.
+        self.build_ffmpeg()
 
     def install_rust(self):
         """Install the pinned Rust toolchain inside the build container."""
@@ -1009,10 +1057,10 @@ class AppImageBuilder(LinuxBuilderBase):
             raise FileNotFoundError(f"AppDir was not staged: {appdir}")
         tool = self.appimagetool_path()
         destination = self.config.dist_dir / f"{archive_name}.AppImage"
-        environment = self.env.copy()
         # appimagetool refuses to run without an explicit architecture when it
-        # cannot infer one from the host.
-        environment["ARCH"] = "x86_64"
+        # cannot infer one from the host. `run_cmd` passes `self.env`, so this is
+        # where the value has to go to reach the tool.
+        self.env["ARCH"] = self.PLATFORM_ARCH
         # The tool is itself an AppImage; extracting it avoids needing FUSE in
         # the build container, which never has it.
         self.run_cmd(
@@ -1762,16 +1810,17 @@ class XcodeBuilder(PlatformBuilder):
         self.copy_resources(resources)
         self.copy_app_icon(resources)
         self.copy_licenses(resources)
-        self.write_build_info(resources)
         discovery = self.find_carla_discovery_tool()
         if discovery:
             shutil.copy2(discovery, macos / discovery.name)
         self.bundle_macos_dependencies(executable, frameworks)
         if discovery:
             self.bundle_macos_dependencies(macos / discovery.name, frameworks)
-        # `Info.plist` is written after the frameworks are in place, because the
-        # floor the bundle really has is only knowable once they are measurable.
+        # Both metadata files are written once the frameworks are in place: the
+        # floor the bundle really has is only knowable then, and `build-info.json`
+        # reporting a different floor than `Info.plist` would be a contradiction.
         self.write_info_plist(contents, self.declared_minimum_system(app))
+        self.write_build_info(resources)
         self.sign_bundle(app)
         self.logger.log(f"App bundle: {app}")
 

@@ -10,7 +10,7 @@
 # floor a property of this repository instead of of the build host.
 #
 # Usage:
-#   scripts/build-ffmpeg.sh --target <triple> [--prefix <dir>] [--arch <arch>]
+#   scripts/build-ffmpeg.sh --target <triple> [--prefix <dir>] [--jobs <n>]
 #
 #   --target   Rust target triple: x86_64-unknown-linux-gnu,
 #              aarch64-apple-darwin, x86_64-apple-darwin
@@ -38,7 +38,8 @@ JOBS=""
 X264_PREFIX=""
 
 usage() {
-    sed -n '11,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Lines 11-18 are the usage block; the paragraph after it is not help text.
+    sed -n '11,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 

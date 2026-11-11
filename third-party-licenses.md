@@ -2,9 +2,9 @@
 
 Freya NLE is released under the GNU Affero General Public License version 3
 (see `LICENSE.md`). A packaged build also contains the components below, each
-under its own licence. Every release archive ships this file and the texts it
-references under `licenses/`, because an archive that redistributes these
-binaries without their notices is not compliant.
+under its own licence. Every release archive ships this file, `LICENSE.md`, and
+the GPL-2.0 and LGPL-2.1 texts under `licenses/`, because an archive that
+redistributes these binaries without their notices is not compliant.
 
 ## Shipped as binaries
 
@@ -21,10 +21,11 @@ a release is identified by version and commit in `build-info.json`.
 
 ## Windows runtime
 
-The Windows archive bundles `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, and
-`MSVCP140.dll` so the build runs without a separately installed
-redistributable. These files are redistributed under the Microsoft Visual
-Studio licence terms; the archive does not modify them.
+The Windows archive bundles `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`, and
+`MSVCP140.dll` when a binary in the archive imports it, so the build runs
+without a separately installed redistributable. These files are redistributed
+under the Microsoft Visual Studio licence terms; the archive does not modify
+them.
 
 ## Linked at build time
 

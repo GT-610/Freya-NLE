@@ -24,6 +24,14 @@ on:
         description: Version to stamp into the artifacts; must match rust/Cargo.toml
         required: true
         type: string
+      platform:
+        description: Platform subset to build
+        required: false
+        type: string
+        # The release calls this with only a version, and a missing input would
+        # make every platform's `inputs.platform == ...` false, so a manual
+        # release would publish nothing and block on the smoke test.
+        default: all
     outputs:
       linux_appimage:
         description: File name of the portable Linux artifact
@@ -359,7 +367,13 @@ jobs:
               throw "Packaged directory is missing: $required"
             }
           }
-          & (Join-Path $work "freya-nle.exe") --version
+          # The executable is a GUI-subsystem program, so `&` returns immediately
+          # and `$LASTEXITCODE` would describe whatever ran before it.
+          $run = Start-Process -FilePath (Join-Path $work "freya-nle.exe") `
+            -ArgumentList "--version" -NoNewWindow -Wait -PassThru
+          if ($run.ExitCode -ne 0) {
+            throw "The packaged executable exited with $($run.ExitCode)"
+          }
           "artifact=$($archive.Name)" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:

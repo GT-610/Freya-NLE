@@ -405,6 +405,42 @@ class TestArchiveContents(unittest.TestCase):
             self.assertIn("commit", info)
             self.assertIn("ffmpeg", info)
 
+    def test_the_recorded_ffmpeg_comes_from_the_linked_prefix(self):
+        # `ffmpeg` on PATH is a different binary; describing it would misreport
+        # what the archive actually contains.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            prefix = source / "ffmpeg"
+            header = prefix / "include" / "libavutil" / "ffversion.h"
+            header.parent.mkdir(parents=True)
+            header.write_text('#define FFMPEG_VERSION "946fcce"\n', encoding="utf-8")
+            (source / "scripts").mkdir()
+            (source / "scripts" / "build-ffmpeg.sh").write_text(
+                'FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"\n', encoding="utf-8")
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.env["FFMPEG_DIR"] = str(prefix)
+            # A PATH ffmpeg would answer differently; make it answer at all and
+            # the assertion below proves it was not consulted.
+            builder.command_output = lambda command: (
+                "ffmpeg version 4.4-ubuntu" if command[0] == "ffmpeg" else ""
+            )
+            provenance = builder.ffmpeg_provenance()
+            self.assertEqual(provenance["source"], "ffmpeg-dir")
+            self.assertEqual(provenance["version"], "946fcce")
+            self.assertEqual(provenance["revision"], "946fcce07b6dcd0331c8cc609192aeff5e1924f8")
+
+    def test_a_system_ffmpeg_is_recorded_when_no_prefix_was_used(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = PlatformBuilder(
+                config_for(Path(temporary)), Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.command_output = lambda command: "ffmpeg version 7.1.5 Copyright (c)"
+            provenance = builder.ffmpeg_provenance()
+            self.assertEqual(provenance["source"], "system")
+            self.assertEqual(provenance["version"], "ffmpeg version 7.1.5 Copyright (c)")
+
     def test_licences_are_staged_when_present(self):
         # The application is AGPLv3 and bundles GPL FFmpeg, so an archive with no
         # licence text is a compliance gap rather than a cosmetic omission.
@@ -418,6 +454,24 @@ class TestArchiveContents(unittest.TestCase):
             builder.copy_licenses(destination)
             self.assertEqual(
                 (destination / "licenses" / "LICENSE.md").read_text(encoding="utf-8"), "AGPL"
+            )
+
+    def test_the_vendored_copyleft_texts_are_staged(self):
+        # The notice says the archive carries the texts it names, and the Windows
+        # build has no FFmpeg source tree to copy them from.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "LICENSE.md").write_text("AGPL", encoding="utf-8")
+            vendored = source / "licenses"
+            vendored.mkdir()
+            (vendored / "GPL-2.0.txt").write_text("GPL", encoding="utf-8")
+            destination = source / "out"
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.copy_licenses(destination)
+            self.assertEqual(
+                (destination / "licenses" / "GPL-2.0.txt").read_text(encoding="utf-8"), "GPL"
             )
 
     def test_missing_licences_do_not_fail_a_fixture_tree(self):
@@ -525,6 +579,21 @@ class TestAppImage(unittest.TestCase):
             self.assertTrue(link.is_symlink())
             # The link has to name the file beside it, not the build tree.
             self.assertEqual(os.readlink(link), "libavcodec.so.63.1.102")
+
+    def test_the_container_builds_the_ffmpeg_it_links(self):
+        # Ubuntu's FFmpeg is far too old for the crate, so the container path has
+        # to build the pinned one or `ffmpeg-sys` has nothing to link.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = config_for(Path(temporary), target="appimage")
+            config.use_container = True
+            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
+            builder.create_podman_container = lambda: None
+            builder.run_cmd = lambda *args, **kwargs: 0
+            builder.install_rust = lambda: None
+            built = []
+            builder.build_ffmpeg = lambda: built.append(True)
+            builder.install_dependencies()
+            self.assertEqual(built, [True])
 
     def test_a_missing_ffmpeg_prefix_is_an_error_not_an_empty_image(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -897,10 +966,66 @@ class TestReleasePipeline(unittest.TestCase):
         # only reintroduce a second place for the toolchain to disagree.
         self.assertNotIn("container:", job)
 
+    def test_pacman_runs_without_sudo_in_the_podman_container(self):
+        # The pinned Arch image has no sudo, and the podman fallback executes as
+        # the container's root already.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = ArchBuilder(
+                config_for(Path(temporary), target="arch"),
+                Logger(lambda _m: None, lambda *_a: None),
+            )
+            builder.use_container = True
+            builder.container_engine = "podman"
+            builder.create_container = lambda: None
+            commands = []
+            builder.run_cmd = lambda command, **kwargs: commands.append(command) or 0
+            builder.install_dependencies()
+            self.assertTrue(commands)
+            self.assertNotIn("sudo", commands[0])
+            self.assertEqual(commands[0][0], "pacman")
+
+    def test_pacman_uses_sudo_under_distrobox(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = ArchBuilder(
+                config_for(Path(temporary), target="arch"),
+                Logger(lambda _m: None, lambda *_a: None),
+            )
+            builder.use_container = True
+            builder.container_engine = "distrobox"
+            builder.create_container = lambda: None
+            commands = []
+            builder.run_cmd = lambda command, **kwargs: commands.append(command) or 0
+            builder.install_dependencies()
+            self.assertEqual(commands[0][0], "sudo")
+
     def test_the_arch_archive_is_built_in_its_pinned_image(self):
         job = self.job_block("linux-arch")
         self.assertIn(ARCH_LINUX_IMAGE, job)
         self.assertNotIn("archlinux:latest", job)
+
+    def test_a_reusable_call_defaults_to_building_every_platform(self):
+        # A `workflow_call` leaves an undeclared input empty, which would make
+        # every `inputs.platform == ...` false and a release publish nothing.
+        package = self.workflow("package.yml")
+        start = package.index("  workflow_call:")
+        call = package[start:package.index("  workflow_dispatch:")]
+        self.assertIn("platform:", call)
+        self.assertIn("default: all", call)
+
+    def test_the_arch_smoke_test_gates_publishing(self):
+        # It is the only job that runs the Arch archive on Arch, so publishing
+        # must wait for it like it waits for the other smoke test.
+        release = self.workflow("release.yml")
+        publish = release[release.index("  publish:"):]
+        needs = publish[publish.index("needs:"):publish.index("runs-on:")]
+        self.assertIn("smoke-arch", needs)
+
+    def test_the_windows_check_waits_for_the_process(self):
+        # A GUI-subsystem executable returns immediately from `&`, so the exit
+        # code would describe the previous command.
+        package = self.workflow("package.yml")
+        self.assertIn("Start-Process", package)
+        self.assertIn("-PassThru", package)
 
     def test_checksums_are_published(self):
         self.assertIn("SHA256SUMS", self.workflow("release.yml"))

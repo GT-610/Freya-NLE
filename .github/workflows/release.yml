@@ -68,7 +68,9 @@ jobs:
 
   publish:
     name: Publish
-    needs: [resolve, package, smoke]
+    # `smoke-arch` is the only job that runs the Arch archive on Arch, so it is a
+    # gate like the other smoke test rather than an advisory check.
+    needs: [resolve, package, smoke, smoke-arch]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
