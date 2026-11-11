@@ -202,7 +202,10 @@ else
 fi
 
 # -- FFmpeg ----------------------------------------------------------------
-fetch_at "$FFMPEG_REPO" "$FFMPEG_COMMIT" "$SRC/ffmpeg"
+# FFmpeg finds `libx264` through pkg-config, not through the include and library
+# flags alone, so the prefix this script just populated has to be discoverable.
+# Without it `configure` stops at "ERROR: x264 not found using pkg-config".
+export PKG_CONFIG_PATH="$X264_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 log "Configuring FFmpeg for $TARGET"
 pushd "$SRC/ffmpeg" >/dev/null
 

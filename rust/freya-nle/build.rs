@@ -85,44 +85,10 @@ fn embed_windows_resources() {
     resource.set("FileDescription", "Freya NLE");
     resource.set("ProductName", "Freya NLE");
     resource.set("LegalCopyright", "Copyright (C) Freya NLE contributors");
-    // The workspace version is the single source of the project version, so it
-    // is read from the crate version cargo already resolved rather than parsed
-    // out of a second file.
-    if let Ok(version) = env::var("CARGO_PKG_VERSION") {
-        let numeric = version
-            .split(['-', '+'])
-            .next()
-            .unwrap_or("0.0.0")
-            .to_owned();
-        // A resource version is four independent integers, so a prerelease
-        // suffix cannot be carried and is recorded as the trailing field.
-        let parts: Vec<u64> = numeric
-            .split('.')
-            .filter_map(|part| part.parse().ok())
-            .collect();
-        let mut fields = [0u64; 4];
-        for (slot, value) in fields.iter_mut().zip(parts) {
-            *slot = value;
-        }
-        resource.set_version_info(
-            winresource::VersionInfo::default()
-                .set_file_version(
-                    fields[0] as u16,
-                    fields[1] as u16,
-                    fields[2] as u16,
-                    fields[3] as u16,
-                )
-                .set_product_version(
-                    fields[0] as u16,
-                    fields[1] as u16,
-                    fields[2] as u16,
-                    fields[3] as u16,
-                ),
-        );
-        resource.set("FileVersion", &version);
-        resource.set("ProductVersion", &version);
-        println!("cargo:rustc-env=FREYA_NLE_DISPLAY_VERSION={version}");
-    }
+    // `winresource` derives the numeric FileVersion and ProductVersion from the
+    // crate version cargo resolved, which is the workspace version. Writing them
+    // again here would only duplicate that, and a resource version is four
+    // integers, so a prerelease suffix has to stay in the string fields anyway.
     if let Err(error) = resource.compile() {
         // A missing resource compiler must not turn a working Windows build into
         // a failure; the application is usable without an icon.

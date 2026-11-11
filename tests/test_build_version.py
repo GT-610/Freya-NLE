@@ -836,17 +836,39 @@ class TestReleasePipeline(unittest.TestCase):
         # of them would publish the unverified set this change replaced.
         self.assertFalse((SOURCE_DIR / ".github" / "workflows" / "build.yml").exists())
 
-    def test_the_appimage_is_built_against_its_pinned_image(self):
-        package = self.workflow("package.yml")
-        # Building the portable track on the runner's own Ubuntu would link that
-        # Ubuntu's glibc and defeat the reason the track exists.
-        self.assertIn(APPIMAGE_BASE_IMAGE, package)
+    def job_block(self, name):
+        """The workflow text for one job, so an assertion cannot match another.
 
-    def test_the_arch_image_is_pinned_to_a_digest(self):
-        package = self.workflow("package.yml")
-        self.assertIn(ARCH_LINUX_IMAGE, package)
-        # A floating tag is what let the glibc requirement drift between builds.
-        self.assertNotIn("archlinux:latest", package)
+        Jobs sit at two spaces of indentation, so the block ends at the next line
+        that looks like a job header rather than at the next indented line.
+        """
+        lines = self.workflow("package.yml").splitlines()
+        header = f"  {name}:"
+        try:
+            start = lines.index(header)
+        except ValueError:
+            raise AssertionError(f"no job named {name}") from None
+        block = []
+        for line in lines[start + 1:]:
+            if re.match(r"^  [a-z][a-z0-9-]*:$", line):
+                break
+            block.append(line)
+        return "\n".join(block)
+
+    def test_the_appimage_is_built_against_the_oldest_ubuntu(self):
+        # glibc is fixed when the ELF is linked, so the portable track has to be
+        # built on the oldest Ubuntu the CI still hosts. Building it on the
+        # default 24.04 runner would ask for glibc 2.39.
+        job = self.job_block("linux-appimage")
+        self.assertIn("runs-on: ubuntu-22.04", job)
+        # The job installs its own dependencies on the runner; a container would
+        # only reintroduce a second place for the toolchain to disagree.
+        self.assertNotIn("container:", job)
+
+    def test_the_arch_archive_is_built_in_its_pinned_image(self):
+        job = self.job_block("linux-arch")
+        self.assertIn(ARCH_LINUX_IMAGE, job)
+        self.assertNotIn("archlinux:latest", job)
 
     def test_checksums_are_published(self):
         self.assertIn("SHA256SUMS", self.workflow("release.yml"))
