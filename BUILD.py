@@ -459,6 +459,14 @@ class PlatformBuilder:
         )
 
     def build_target(self) -> str:
+        """The triple the binaries were built for, not the machine that built them.
+
+        One arm64 runner cross-compiles the Intel bundle, and `rustc -vV`'s
+        `host:` describes that runner; `build-info.json` has to record the
+        triple Cargo was given instead.
+        """
+        if self.config.target_triple:
+            return self.config.target_triple
         for line in self.command_output(["rustc", "-vV"]).splitlines():
             if line.startswith("host: "):
                 return line[len("host: "):].strip()
@@ -672,9 +680,19 @@ class PlatformBuilder:
 
     @staticmethod
     def container_path(argument: object, prefix: str) -> object:
-        if not isinstance(argument, str) or prefix not in argument:
+        """Translate a host path inside the mounted tree to the mount's path.
+
+        Only an argument that *is* such a path is translated. An argument that
+        merely mentions one -- a `bash -c` program with an absolute path baked
+        into its text -- has to be left alone: prefixing it would turn the
+        program's first word into a path and the command would not run.
+        """
+        if not isinstance(argument, str):
             return argument
-        relative = argument.replace(prefix, "", 1).lstrip("\\/").replace("\\", "/")
+        root = prefix.rstrip("\\/")
+        if argument != root and not argument.startswith((root + "/", root + "\\")):
+            return argument
+        relative = argument[len(root):].lstrip("\\/").replace("\\", "/")
         return "/src" + (f"/{relative}" if relative else "")
 
     def container_invocation(self, inner: str) -> str:
@@ -707,6 +725,13 @@ class PlatformBuilder:
         --force` on that name: a shared one would let a second build delete the
         container a first build is still executing into. The pre-remove then
         only clears a leftover from a crashed run that reused this PID.
+
+        There is deliberately no `--userns=keep-id`: it sets the container user
+        to the user running podman, so `apt-get install` would run unprivileged
+        and rustup would see a `HOME` (`/root`, from the image) that is not the
+        mapped user's. Running as the image's root is what rootless podman maps
+        to the invoking user anyway, so the mount stays writable and files keep
+        the user's ownership on the host.
         """
         self.config.temp_base.mkdir(parents=True, exist_ok=True)
         self.podman_container = f"{self.container_name}-{os.getpid()}"
@@ -718,7 +743,6 @@ class PlatformBuilder:
         self.run_cmd([
             "podman", "run", "--detach",
             "--name", self.podman_container,
-            "--userns=keep-id",
             "--security-opt", "label=disable",
             "--platform", "linux/amd64",
             "-v", f"{self.config.source_dir}:/src:Z",
@@ -927,7 +951,7 @@ class AppImageBuilder(LinuxBuilderBase):
             "export DEBIAN_FRONTEND=noninteractive && "
             "apt-get update -qq && "
             "apt-get install -y -qq --no-install-recommends "
-            "build-essential curl ca-certificates git pkg-config zstd xz-utils "
+            "build-essential nasm curl ca-certificates git pkg-config zstd xz-utils "
             "libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev "
             "libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin",
         ])
@@ -1077,12 +1101,15 @@ class AppImageBuilder(LinuxBuilderBase):
         self.run_cmd([
             "bash", "-c",
             # `rsvg-convert` or ImageMagick may be absent; the ICO already holds
-            # a 256x256 frame, which is an acceptable AppImage icon.
-            f"if command -v rsvg-convert >/dev/null && [ -f {shlex.quote(str(source_svg))} ]; then "
-            f"rsvg-convert -w 512 -h 512 {shlex.quote(str(source_svg))} -o {shlex.quote(str(target))}; "
-            f"elif command -v convert >/dev/null && [ -f {shlex.quote(str(ico))} ]; then "
-            f"convert {shlex.quote(str(ico))} -resize 512x512 {shlex.quote(str(target))}; "
+            # a 256x256 frame, which is an acceptable AppImage icon. The paths
+            # are operands rather than text so that the container rewrite sees
+            # them as paths and leaves the program alone.
+            'if command -v rsvg-convert >/dev/null && [ -f "$1" ]; then '
+            'rsvg-convert -w 512 -h 512 "$1" -o "$3"; '
+            'elif command -v convert >/dev/null && [ -f "$2" ]; then '
+            'convert "$2" -resize 512x512 "$3"; '
             "else exit 1; fi",
+            "_", str(source_svg), str(ico), str(target),
         ])
         shutil.copy2(target, appdir / f"{self.DESKTOP_ID}.png")
 

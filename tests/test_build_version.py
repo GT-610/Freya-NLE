@@ -407,6 +407,19 @@ class TestArchiveContents(unittest.TestCase):
             self.assertIn("commit", info)
             self.assertIn("ffmpeg", info)
 
+    def test_a_cross_build_records_the_target_cargo_was_given(self):
+        # One arm64 runner builds the Intel bundle; `rustc -vV` would describe
+        # the runner, not the archive.
+        config = config_for(SOURCE_DIR, target="xcode")
+        config.target_triple = "x86_64-apple-darwin"
+        builder = PlatformBuilder(
+            config, Logger(lambda _message: None, lambda *_args: None)
+        )
+        builder.command_output = (
+            lambda command: "host: aarch64-apple-darwin\n" if command[0] == "rustc" else ""
+        )
+        self.assertEqual(builder.build_target(), "x86_64-apple-darwin")
+
     def test_the_recorded_ffmpeg_comes_from_the_linked_prefix(self):
         # `ffmpeg` on PATH is a different binary; describing it would misreport
         # what the archive actually contains.
@@ -1010,36 +1023,82 @@ class TestContainerBuild(unittest.TestCase):
                 builder.cleanup()
             run.assert_called_once()
 
-    def test_archive_entries_are_stamped_with_the_commit_time(self):
+    def packed_members(self, builder):
+        """Pack the staged tree and return the tar entries, keyed by name."""
+        source = builder.config.source_dir
+        staged = builder.config.output_dir
+        staged.mkdir(parents=True, exist_ok=True)
+        (source / "dist").mkdir(exist_ok=True)
+        executable = staged / "freya-nle"
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        captured = []
+
+        def capture(command, **_kwargs):
+            # `create_tar_zst` deletes the tar after zstd; keep its bytes.
+            tar_argument = next(arg for arg in command if str(arg).endswith(".tar"))
+            captured.append(Path(tar_argument).read_bytes())
+            return 0
+
+        builder.run_cmd = capture
+        with patch("BUILD.shutil.which", return_value="/usr/bin/zstd"):
+            builder.create_tar_zst("Freya-NLE-0.7.0-linux-x86_64-archlinux")
+        with tarfile.open(fileobj=io.BytesIO(captured[0])) as tar:
+            return {member.name: member for member in tar.getmembers()}
+
+    def test_archive_entries_are_stamped_with_the_pinned_time(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary)
-            builder = self.builder(source)
-            staged = builder.config.output_dir
-            staged.mkdir(parents=True, exist_ok=True)
-            (source / "dist").mkdir(exist_ok=True)
-            executable = staged / "freya-nle"
-            executable.write_text("#!/bin/sh\n", encoding="utf-8")
-            executable.chmod(0o755)
+            builder = self.builder(Path(temporary))
             builder.env["SOURCE_DATE_EPOCH"] = "1700000000"
-            captured = []
-
-            def capture(command, **_kwargs):
-                # `create_tar_zst` deletes the tar after zstd; keep its bytes.
-                tar_argument = next(arg for arg in command if str(arg).endswith(".tar"))
-                captured.append(Path(tar_argument).read_bytes())
-                return 0
-
-            builder.run_cmd = capture
-            with patch("BUILD.shutil.which", return_value="/usr/bin/zstd"):
-                builder.create_tar_zst("Freya-NLE-0.7.0-linux-x86_64-archlinux")
-            with tarfile.open(fileobj=io.BytesIO(captured[0])) as tar:
-                members = {member.name: member for member in tar.getmembers()}
+            members = self.packed_members(builder)
             # Repacking one commit has to produce one archive, byte for byte.
             self.assertEqual({member.mtime for member in members.values()}, {1700000000})
             self.assertEqual(members["freya-nle"].uid, 0)
             # The executable bit is a POSIX fact; Windows cannot express it.
             if os.name != "nt":
                 self.assertEqual(members["freya-nle"].mode & 0o777, 0o755)
+
+    def test_the_commit_time_is_used_when_nothing_pins_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.env.pop("SOURCE_DATE_EPOCH", None)
+            builder.command_output = (
+                lambda command: "1700000123\n" if command[1] == "log" else ""
+            )
+            members = self.packed_members(builder)
+            self.assertEqual({member.mtime for member in members.values()}, {1700000123})
+
+    def test_the_icon_conversion_keeps_host_paths_out_of_the_program(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            builder = self.builder(source)
+            builder.container_engine = "podman"
+            commands = []
+            builder.run_cmd = lambda command, **_kwargs: commands.append(command) or 0
+            with patch("BUILD.shutil.copy2"):
+                builder.write_appimage_icon(source / "appdir")
+            program = commands[0][2]
+            # The container rewrite only maps arguments that are paths; a
+            # program with one baked into its text came back as `/srcif ...`.
+            self.assertNotIn(str(source), program)
+            translated = builder.container_command(commands[0])
+            self.assertEqual(translated[2], program)
+            self.assertEqual(translated[4], "/src/assets/icon.svg")
+
+    def test_the_container_installs_what_the_ffmpeg_build_needs(self):
+        # `build-ffmpeg.sh` exits when nasm is missing, and the CI host installs
+        # it separately, so the container package list is the only source of it.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.use_container = True
+            builder.create_podman_container = lambda: None
+            builder.install_rust = lambda: None
+            builder.build_ffmpeg = lambda: None
+            commands = []
+            builder.run_cmd = lambda command, **_kwargs: commands.append(command) or 0
+            builder.install_dependencies()
+            apt = next(command for command in commands if "apt-get install" in command[-1])
+            self.assertIn("nasm", apt[-1].split())
 
 
 class TestReleasePipeline(unittest.TestCase):
