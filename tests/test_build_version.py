@@ -1265,6 +1265,22 @@ class TestReleasePipeline(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertIn(f"{job}:", package)
 
+    def test_the_ffmpeg_build_is_cached_by_the_pinned_script(self):
+        # Building FFmpeg from source is the slowest step this workflow added, so
+        # each job that needs it restores the install before running the script.
+        key = "ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}"
+        for job in ("linux-appimage", "macos"):
+            block = self.job_block(job)
+            with self.subTest(job=job):
+                self.assertIn("Restore the pinned FFmpeg", block)
+                step = block.split("Restore the pinned FFmpeg", 1)[1]
+                step = step.split("\n      - name:", 1)[0]
+                self.assertIn("actions/cache@v4", step)
+                self.assertIn(key, step)
+                # The script reuses any prefix that has a pkg-config file, so a
+                # fallback key would link an FFmpeg this commit did not pin.
+                self.assertNotRegex(step, r"(?m)^\s+restore-keys:")
+
     def test_the_old_workflow_is_gone(self):
         # Two workflows that both react to a tag would race to publish, and one
         # of them would publish the unverified set this change replaced.
