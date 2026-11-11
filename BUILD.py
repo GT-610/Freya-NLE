@@ -570,7 +570,14 @@ class PlatformBuilder:
         actual_command = command
         if in_container:
             workdir = self.container_source_dir()
-            inner = f"cd {shlex.quote(workdir)} && {display_command}"
+            # Neither `podman exec` nor `distrobox enter` inherits this process's
+            # environment, so the variables a build needs are exported in the
+            # command itself instead of being handed to the container client.
+            exports = "".join(
+                f"export {name}={shlex.quote(str(value))}; "
+                for name, value in self.container_environment().items()
+            )
+            inner = f"cd {shlex.quote(workdir)} && {exports}{display_command}"
             actual_command = self.container_invocation(inner)
             shell = True
         popen_options = {"start_new_session": True} if os.name != "nt" else {}
@@ -592,6 +599,26 @@ class PlatformBuilder:
         if process.returncode != 0 and not allow_failure:
             raise subprocess.CalledProcessError(process.returncode, actual_command)
         return process.returncode
+
+    def container_environment(self) -> dict:
+        """Variables the containerised command needs, in the container's paths.
+
+        Cargo's output directory and the FFmpeg prefix are the two the build
+        cannot infer: without them the compiler writes where packaging does not
+        look, and `ffmpeg-sys` links whatever the container happens to have.
+        """
+        variables = {}
+        source = str(self.config.source_dir)
+        for name in ("CARGO_TARGET_DIR", "FFMPEG_DIR"):
+            if value := self.env.get(name):
+                # distrobox shares the host filesystem, so its paths stay as they
+                # are; only the podman mount renames the tree to /src.
+                variables[name] = str(
+                    self.container_path(value, source)
+                    if self.container_engine == "podman"
+                    else value
+                )
+        return variables
 
     def container_source_dir(self) -> str:
         """Where the source tree appears inside the build container.
@@ -889,17 +916,6 @@ class AppImageBuilder(LinuxBuilderBase):
         ])
         self.env["FFMPEG_DIR"] = str(self.config.temp_base / "ffmpeg"
                                      / "x86_64-unknown-linux-gnu")
-
-    def cargo_environment(self) -> dict:
-        if not self.env.get("FFMPEG_DIR"):
-            return {}
-        # Inside the container the tree is mounted at /src, so the FFmpeg prefix
-        # has to be named the way the container sees it. Building on the host --
-        # which is what CI does, inside the pinned image -- the path the caller
-        # exported is already correct and must not be rewritten.
-        if not self.use_container or self.container_engine != "podman":
-            return {}
-        return {"FFMPEG_DIR": "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"}
 
     def package(self):
         super().package()

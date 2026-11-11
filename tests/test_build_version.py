@@ -602,28 +602,55 @@ class TestAppImage(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 builder.bundle_linux_libraries(Path(temporary) / "lib")
 
-    def test_the_ffmpeg_prefix_is_left_alone_on_the_host(self):
-        # CI builds the AppImage inside the pinned image without the container
-        # wrapper, so the exported path is already the one cargo must use.
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary)
-            config = config_for(source, target="appimage")
-            config.use_container = False
-            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
-            builder.env["FFMPEG_DIR"] = str(source / ".build_tmp" / "ffmpeg" / "x")
-            self.assertEqual(builder.cargo_environment(), {})
-
-    def test_the_ffmpeg_prefix_is_translated_for_the_container(self):
+    def test_the_container_is_told_where_cargo_writes_and_what_it_links(self):
+        # `podman exec` starts from the container's own environment, so both have
+        # to be exported into the command: otherwise cargo writes to its default
+        # target directory, which packaging never reads, and `ffmpeg-sys` links
+        # whatever FFmpeg the image happens to carry.
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
             config = config_for(source, target="appimage")
             config.use_container = True
             builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
             builder.container_engine = "podman"
+            builder.env["FFMPEG_DIR"] = str(source / ".build_tmp" / "ffmpeg" / "custom")
+            builder.env["CARGO_TARGET_DIR"] = str(source / ".build_tmp" / "arch" / "cargo-target")
+            environment = builder.container_environment()
+            self.assertEqual(
+                environment["FFMPEG_DIR"], "/src/.build_tmp/ffmpeg/custom"
+            )
+            self.assertEqual(
+                environment["CARGO_TARGET_DIR"], "/src/.build_tmp/arch/cargo-target"
+            )
+
+    def test_a_configured_prefix_is_not_replaced_by_a_default(self):
+        # The prefix the caller exported is the one to translate; substituting a
+        # default would silently link a different FFmpeg.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            config = config_for(source, target="appimage")
+            config.use_container = True
+            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
+            builder.container_engine = "podman"
+            custom = source / "vendor" / "ffmpeg"
+            builder.env["FFMPEG_DIR"] = str(custom)
+            self.assertEqual(
+                builder.container_environment()["FFMPEG_DIR"], "/src/vendor/ffmpeg"
+            )
+            # The host-side value packaging uses is untouched.
+            self.assertEqual(builder.env["FFMPEG_DIR"], str(custom))
+
+    def test_distrobox_keeps_host_paths_for_the_build_variables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            config = config_for(source, target="appimage")
+            config.use_container = True
+            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
+            builder.container_engine = "distrobox"
             builder.env["FFMPEG_DIR"] = str(source / ".build_tmp" / "ffmpeg" / "x")
             self.assertEqual(
-                builder.cargo_environment()["FFMPEG_DIR"],
-                "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu",
+                builder.container_environment()["FFMPEG_DIR"],
+                str(source / ".build_tmp" / "ffmpeg" / "x"),
             )
 
     def test_the_tool_is_pinned_by_checksum(self):
