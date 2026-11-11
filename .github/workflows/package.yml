@@ -235,11 +235,23 @@ jobs:
             ditto -x -k "$archive" "$work"
             app="$(find "$work" -maxdepth 1 -name '*.app' | head -1)"
             test -n "$app"
-            # The bundle must run, and its declared floor must cover every
-            # Mach-O inside it -- the defect this check exists to catch was a
-            # plist promising macOS 12 over libraries built for 15.
-            "$app/Contents/MacOS/freya-nle" --version
+            # The declared floor has to cover every Mach-O inside the bundle --
+            # the defect this check exists to catch was a plist promising macOS
+            # 12 over libraries built for 15.
             codesign --verify --deep --strict "$app"
+            binary="$app/Contents/MacOS/freya-nle"
+            bundle_arch="$(lipo -archs "$binary")"
+            case "$bundle_arch" in
+              *"$(uname -m)"*)
+                # Only the architecture this runner is can be started here; the
+                # other one would need Rosetta, which the image does not promise.
+                "$binary" --version
+                ;;
+              *)
+                echo "Skipping execution: $bundle_arch bundle on a $(uname -m) host"
+                lipo -info "$binary"
+                ;;
+            esac
             plist_min="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
             for binary in "$app/Contents/MacOS/freya-nle" "$app"/Contents/Frameworks/*.dylib; do
               [ -f "$binary" ] || continue
