@@ -21,6 +21,19 @@ All notable changes to Freya NLE are documented in this file.
   the GPL-2.0 and LGPL-2.1 texts, and the third-party notices it owes its
   recipients
 
+- A log window (Tools → Log) shows the session's recent diagnostics coloured
+  by level, filters them, copies them, and saves them for a bug report. Records also go
+  to stderr with timestamps, module targets, and `RUST_LOG` filtering (default
+  `info`), panics are recorded before the process aborts, and FFmpeg's own log
+  output joins the same records instead of writing to stderr directly
+- Diagnostics can be written to a rotating `logs/freya-nle.log` under the
+  application data directory. The file is off by default; the log window's
+  `Write log to file` switch turns it on, and `FREYA_NLE_LOG_DIR` does for
+  scripted runs
+- A launch that cannot start, for example on a host with no GPU-backed adapter,
+  explains why in a native error dialog instead of only on a console that a
+  windowed launch does not have
+
 ### Changed
 - The Rust toolchain is pinned to 1.99.1 (`rust-toolchain.toml`, the workspace
   `rust-version`, and every CI job), up from 1.97.1. Mixing the pinned

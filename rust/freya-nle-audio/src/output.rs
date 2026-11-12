@@ -291,7 +291,7 @@ where
                     &queue_status,
                 )
             },
-            |error| eprintln!("Audio output error: {error}"),
+            |error| log::error!(target: "audio", "Audio output error: {error}"),
             None,
         )
         .map_err(|error| format!("Could not open the default audio output: {error}"))

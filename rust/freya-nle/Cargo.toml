@@ -11,8 +11,19 @@ freya-nle-app = { path = "../freya-nle-app" }
 freya-nle-audio = { path = "../freya-nle-audio" }
 freya-nle-core = { path = "../freya-nle-core" }
 freya-nle-export = { path = "../freya-nle-export" }
+freya-nle-media = { path = "../freya-nle-media" }
 freya-nle-preview = { path = "../freya-nle-preview" }
 freya-nle-render = { path = "../freya-nle-render" }
+# Timestamps for the log file. `i-slint-core` already compiles `chrono`, so
+# declaring it directly adds no package to the build.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Disables colours and the `humantime`/`regex` extras; the format is ours and
+# filter directives stay plain `target=level` strings.
+env_logger = { version = "0.11", default-features = false }
+log = "0.4"
+# Routes winit's `tracing` events into `log` when no tracing subscriber exists,
+# so one filter governs the windowing stack too.
+tracing = { version = "0.1", features = ["log"] }
 # `default-features` pulls in `fontconfig`, which links `libfontconfig.so.1`
 # into the Linux binary and ties the AppImage to one distribution's copy. The
 # `fs` feature still searches the standard font directories, and `freya-nle-render`
@@ -21,7 +32,7 @@ fontdb = { version = "0.23.0", default-features = false, features = ["fs"] }
 pollster = "0.4"
 rfd = "0.15.4"
 serde_json = "1.0"
-slint = { version = "1.17.1", default-features = false, features = ["accessibility", "backend-winit", "compat-1-2", "renderer-femtovg-wgpu", "unstable-wgpu-29", "unstable-winit-030"] }
+slint = { version = "1.17.1", default-features = false, features = ["accessibility", "backend-winit", "compat-1-2", "log", "renderer-femtovg-wgpu", "unstable-wgpu-29", "unstable-winit-030"] }
 sys-locale = "0.3.2"
 webbrowser = "1.2.4"
 

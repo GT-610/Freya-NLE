@@ -12,6 +12,8 @@ mod export;
 mod gpu;
 mod lifecycle;
 mod localization;
+mod log_window;
+mod logging;
 mod object_settings;
 mod packages;
 mod playback;
@@ -80,10 +82,36 @@ fn export_batch_setting(settings: &SettingsStore) -> serde_json::Value {
 }
 
 fn main() {
+    let logging_ready = logging::init();
+    freya_nle_media::log_bridge::install();
     if let Err(error) = run() {
-        eprintln!("Freya NLE failed: {error}");
+        log::error!(target: "app", "Freya NLE failed: {error}");
+        if !logging_ready {
+            // With no logger there is no sink at all, so keep the failure on
+            // stderr. `eprintln!` would panic when stderr is closed.
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stderr(), "Freya NLE failed: {error}");
+        }
+        // A double-clicked launch has no terminal to read the failure from, so
+        // the reason has to reach the screen. `--validate-gpu` runs are driven
+        // by scripts and must never wait for a click.
+        if interactive_launch() {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Freya NLE")
+                .set_description(format!("Freya NLE could not start.\n\n{error}"))
+                .show();
+        }
         std::process::exit(1);
     }
+}
+
+/// Whether a failure should be reported in a dialog. Scripted runs
+/// (`--validate-gpu`, `--frames`) only use the exit status and stderr.
+fn interactive_launch() -> bool {
+    !std::env::args()
+        .skip(1)
+        .any(|argument| argument == "--validate-gpu" || argument == "--frames")
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -122,13 +150,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     migrate_legacy_application_data();
     let (settings_store, settings_status) = SettingsStore::load();
-    eprintln!("{settings_status}");
+    log::info!(target: "settings", "{settings_status}");
     let settings = Rc::new(RefCell::new(settings_store));
+    // `init` already turned the file on for `FREYA_NLE_LOG_DIR`; the saved
+    // preference is the only other reason to open it.
+    if settings.borrow().bool_value("logFile", false) && !logging::file_enabled() {
+        logging::set_file_enabled(true);
+    }
     let package_manager_model =
         Rc::new(RefCell::new(PackageManagerModel::load(&settings.borrow())));
     let package_operation = Rc::new(RefCell::new(None::<PackageOperationRuntime>));
     let (effect_catalog, effect_catalog_status) = EffectCatalog::load();
-    eprintln!("{effect_catalog_status}");
+    log::info!(target: "catalog", "{effect_catalog_status}");
     let effect_catalog = Rc::new(RefCell::new(effect_catalog));
     let audio_plugin_catalog = Rc::new(RefCell::new(AudioPluginCatalog::default()));
     let (audio_plugin_discovery, audio_plugin_status) =
@@ -143,7 +176,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     apply_runtime_settings(&mut application_model, &settings.borrow());
     let model = Rc::new(RefCell::new(application_model));
     let mod_host = Rc::new(RefCell::new(ModHost::load(&settings.borrow())));
-    eprintln!(
+    log::info!(
+        target: "plugin",
         "Script plugins · {} loaded",
         mod_host.borrow().plugin_count()
     );
@@ -207,6 +241,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let package_manager = PackageManagerWindow::new()?;
     let plugin_permissions = PluginPermissionWindow::new()?;
     let about = AboutWindow::new()?;
+    let log_window = LogWindow::new()?;
     for (window, id, fallback) in [
         (
             export.window(),
@@ -261,6 +296,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             package_manager.window(),
             "packageManager",
             WindowGeometry::new(500, 300, 650, 450),
+        ),
+        (
+            log_window.window(),
+            "logWindow",
+            WindowGeometry::new(380, 240, 860, 520),
         ),
     ] {
         restore_window_geometry(window, &settings.borrow(), id, fallback);
@@ -383,6 +423,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         package_manager: package_manager.as_weak(),
         plugin_permissions: plugin_permissions.as_weak(),
         about: about.as_weak(),
+        log_window: log_window.as_weak(),
         preview: preview.clone(),
         model: model.clone(),
         settings: settings.clone(),
@@ -410,6 +451,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             layer_settings: &layer_settings,
             system_settings: &system_settings,
             package_manager: &package_manager,
+            log_window: &log_window,
             plugin_permissions: &plugin_permissions,
             about: &about,
         },
@@ -468,6 +510,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "packageManager",
     );
     install_window_geometry_close_handler(about.as_weak(), settings.clone(), "about");
+    install_window_geometry_close_handler(log_window.as_weak(), settings.clone(), "logWindow");
     install_timeline_file_drop(
         &main,
         &timeline,
@@ -513,7 +556,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             default_duration,
         );
         for diagnostic in outcome.diagnostics {
-            eprintln!("MOD: {diagnostic}");
+            log::warn!(target: "plugin", "MOD: {diagnostic}");
         }
         if outcome.model_changed {
             sync_windows(&main, &timeline, &model.borrow());
@@ -618,7 +661,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     *animation_package_operation.borrow_mut() = None;
                     if outcome.reload_effect_catalog {
                         let (catalog, status) = EffectCatalog::load();
-                        eprintln!("{status}");
+                        log::info!(target: "catalog", "{status}");
                         *animation_effect_catalog.borrow_mut() = catalog;
                         animation_preview.borrow_mut().invalidate_native_catalog();
                         animation_export_planner.borrow_mut().reset();
@@ -655,7 +698,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             default_duration,
                         );
                         for diagnostic in reload.diagnostics {
-                            eprintln!("MOD: {diagnostic}");
+                            log::warn!(target: "plugin", "MOD: {diagnostic}");
                         }
                         if reload.model_changed
                             && let (Some(main), Some(timeline)) =
@@ -681,7 +724,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
             Some(Err(error)) => {
-                eprintln!("Package operation failed: {error}");
+                log::error!(target: "package", "Package operation failed: {error}");
                 *animation_package_operation.borrow_mut() = None;
                 if let Some(window) = animation_package_manager.upgrade() {
                     window.set_busy(false);
@@ -698,7 +741,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(Ok(Some(outcome))) => {
                 let mut status = outcome.status();
                 for diagnostic in &outcome.diagnostics {
-                    eprintln!("Audio plugin discovery warning: {diagnostic}");
+                    log::warn!(target: "plugin", "Audio plugin discovery warning: {diagnostic}");
                 }
                 *animation_audio_catalog.borrow_mut() = outcome.catalog;
                 let hydration = {
@@ -723,7 +766,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         hydration.errors.len()
                     ));
                     for error in &hydration.errors {
-                        eprintln!("Audio plugin restore warning: {error}");
+                        log::warn!(target: "plugin", "Audio plugin restore warning: {error}");
                     }
                 }
                 *animation_audio_discovery.borrow_mut() = None;
@@ -742,7 +785,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Some(Err(error)) => {
-                eprintln!("Audio plugin discovery failed: {error}");
+                log::error!(target: "plugin", "Audio plugin discovery failed: {error}");
                 *animation_audio_discovery.borrow_mut() = None;
                 if let Some(window) = animation_settings.upgrade() {
                     window.set_plugin_scan_status(SharedString::from(error));
@@ -766,7 +809,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 default_duration,
             );
             for diagnostic in tick.diagnostics {
-                eprintln!("MOD: {diagnostic}");
+                log::warn!(target: "plugin", "MOD: {diagnostic}");
             }
             if tick.model_changed
                 && let (Some(main), Some(timeline)) =
@@ -913,7 +956,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
         let status = recovery_failure_status(&errors);
-        eprintln!("{status}");
+        log::warn!(target: "recovery", "{status}");
         if let Some(window) = recovery_window.upgrade() {
             sync_recovery_window(&window, &recovery_model.borrow());
             window.set_error_message(SharedString::from(errors.join("\n")));

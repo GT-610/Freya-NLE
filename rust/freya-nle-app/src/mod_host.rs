@@ -750,7 +750,7 @@ fn apply_command(
     };
     match command {
         ScriptHostCommand::Log(message) => {
-            eprintln!("[{plugin_id}] {message}");
+            log::info!(target: "plugin", "[{plugin_id}] {message}");
         }
         ScriptHostCommand::TransportPlay => {
             if let Some(workspace) = model.current_workspace_mut()

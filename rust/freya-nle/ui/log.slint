@@ -1,0 +1,159 @@
+// AviUtl2's ログ window: the diagnostics the application produced this session.
+//
+// The ring keeps the recent records; this window only presents them. The
+// newest record sits at the top, so a fresh one is visible without scrolling.
+// Rows are plain `Text` painted from `AppTheme` rather than a platform
+// `TextEdit`, whose own palette drew dark text on the dark panel; copying goes
+// through the toolbar instead of a text selection.
+import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
+import { AppTheme } from "theme.slint";
+
+// `level` follows `log::Level` ordering: 1 error, 2 warn, 3 info, 4 debug, 5 trace.
+export struct LogRowData {
+    text: string,
+    level: int,
+}
+
+export component LogWindow inherits Window {
+    title: @tr("Log");
+    preferred-width: 860px;
+    preferred-height: 560px;
+    min-width: 520px;
+    min-height: 320px;
+    background: AppTheme.dialog-background;
+
+    in-out property <int> filter-index: 0;
+    in-out property <bool> file-enabled: false;
+    in property <string> file-path: "";
+    // Empty while the file is working; names the reason when it is not.
+    in property <string> file-problem: "";
+    in property <[LogRowData]> log-rows: [];
+    private property <[string]> filter-choices: [
+        @tr("All levels"),
+        @tr("Info and above"),
+        @tr("Warnings and above"),
+        @tr("Errors"),
+    ];
+
+    callback filter-changed(int);
+    callback file-enabled-changed(bool);
+    callback copy-log();
+    callback save-log();
+    callback clear-log();
+    callback open-log-folder();
+
+    Rectangle {
+        background: AppTheme.dialog-background;
+        VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: @tr("Log");
+                    color: AppTheme.dialog-foreground;
+                    font-size: 1.1rem;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: @tr("Newest first");
+                    color: AppTheme.dialog-muted;
+                    font-size: 0.9rem;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                ComboBox {
+                    model: root.filter-choices;
+                    current-index <=> root.filter-index;
+                    min-width: 180px;
+                    selected(value) => {
+                        root.filter-changed(self.current-index);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                CheckBox {
+                    text: @tr("Write log to file");
+                    checked <=> root.file-enabled;
+                    toggled => {
+                        root.file-enabled-changed(root.file-enabled);
+                    }
+                }
+                Text {
+                    text: root.file-path;
+                    color: AppTheme.dialog-muted;
+                    font-size: 0.9rem;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: @tr("Copy");
+                    clicked => {
+                        root.copy-log();
+                    }
+                }
+                Button {
+                    text: @tr("Open Log Folder");
+                    clicked => {
+                        root.open-log-folder();
+                    }
+                }
+                Button {
+                    text: @tr("Save Log...");
+                    clicked => {
+                        root.save-log();
+                    }
+                }
+                Button {
+                    text: @tr("Clear");
+                    clicked => {
+                        root.clear-log();
+                    }
+                }
+            }
+
+            Text {
+                visible: root.file-problem != "";
+                text: root.file-problem;
+                color: AppTheme.danger;
+                font-size: 0.9rem;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: AppTheme.panel-background;
+                border-width: 1px;
+                border-color: AppTheme.subtle-border;
+                border-radius: 4px;
+                ScrollView {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        alignment: start;
+                        for row in root.log-rows: Text {
+                            text: row.text;
+                            wrap: word-wrap;
+                            font-size: 12px;
+                            color: row.level <= 1
+                                ? AppTheme.danger
+                                : row.level == 2
+                                    ? AppTheme.warning
+                                    : row.level >= 4 ? AppTheme.dialog-muted : AppTheme.dialog-foreground;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

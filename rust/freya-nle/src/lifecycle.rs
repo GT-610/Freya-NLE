@@ -20,7 +20,7 @@ use crate::settings::{
 };
 use crate::{
     AboutWindow, AppTheme, BackupEntryData, BackupHistoryWindow, BackupProjectData,
-    EasingConfigWindow, ExportWindow, LayerSettingsWindow, MainWindow, MarkNoteWindow,
+    EasingConfigWindow, ExportWindow, LayerSettingsWindow, LogWindow, MainWindow, MarkNoteWindow,
     ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow,
     ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData, RecoveryEntryData,
     SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
@@ -64,6 +64,7 @@ pub(super) struct LifecycleUi {
     pub(super) package_manager: slint::Weak<PackageManagerWindow>,
     pub(super) plugin_permissions: slint::Weak<PluginPermissionWindow>,
     pub(super) about: slint::Weak<AboutWindow>,
+    pub(super) log_window: slint::Weak<LogWindow>,
     pub(super) preview: Rc<RefCell<PreviewRuntime>>,
     pub(super) model: Rc<RefCell<ApplicationModel>>,
     pub(super) settings: Rc<RefCell<SettingsStore>>,
@@ -129,6 +130,7 @@ pub(super) struct WindowRefs<'a> {
     pub(super) layer_settings: &'a LayerSettingsWindow,
     pub(super) system_settings: &'a SystemSettingsWindow,
     pub(super) package_manager: &'a PackageManagerWindow,
+    pub(super) log_window: &'a LogWindow,
     pub(super) plugin_permissions: &'a PluginPermissionWindow,
     pub(super) about: &'a AboutWindow,
 }
@@ -876,7 +878,7 @@ impl LifecycleUi {
             .workspace(project_index)
             .map(|workspace| add_recent_project(&mut self.settings.borrow_mut(), workspace));
         if let Some(Err(error)) = result {
-            eprintln!("Failed to update recent projects: {error}");
+            log::warn!(target: "project", "Failed to update recent projects: {error}");
         }
         if let Some(launcher) = self.launcher.upgrade() {
             sync_launcher(&launcher, &self.settings.borrow());
@@ -911,7 +913,7 @@ impl LifecycleUi {
         let language_changed = match select_bundled_ui_translation(&settings) {
             Ok(language) => language != previous_language,
             Err(error) => {
-                eprintln!("UI translation unavailable: {error}");
+                log::warn!(target: "ui", "UI translation unavailable: {error}");
                 false
             }
         };
@@ -1067,6 +1069,12 @@ impl LifecycleUi {
                 .set_preference_index(theme_index);
             crate::dialogs::apply_native_window_appearance(window.window(), dark);
         }
+        if let Some(window) = self.log_window.upgrade() {
+            window
+                .global::<AppTheme>()
+                .set_preference_index(theme_index);
+            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        }
     }
 
     pub(super) fn hydrate_audio_plugins(&self) {
@@ -1075,13 +1083,14 @@ impl LifecycleUi {
             self.model.borrow_mut().hydrate_audio_plugins(&catalog)
         };
         if result.deferred > 0 {
-            eprintln!(
+            log::info!(
+                target: "plugin",
                 "Audio plugin restore deferred for {} plugin(s) to preserve undo history",
                 result.deferred
             );
         }
         for error in result.errors {
-            eprintln!("Audio plugin restore warning: {error}");
+            log::warn!(target: "plugin", "Audio plugin restore warning: {error}");
         }
     }
 
@@ -1129,6 +1138,9 @@ impl LifecycleUi {
         if let Some(window) = self.about.upgrade() {
             let _ = window.hide();
         }
+        if let Some(window) = self.log_window.upgrade() {
+            let _ = window.hide();
+        }
         if let Some(window) = self.launcher.upgrade() {
             let _ = window.hide();
         }
@@ -1164,6 +1176,7 @@ impl LifecycleUi {
             &self.system_settings,
         );
         changed |= insert_visible_window_geometry(&mut replacement, "about", &self.about);
+        changed |= insert_visible_window_geometry(&mut replacement, "logWindow", &self.log_window);
         changed |=
             insert_visible_window_geometry(&mut replacement, "sceneSettings", &self.scene_settings);
         changed |= insert_visible_window_geometry(&mut replacement, "easingConfig", &self.easing);
@@ -1173,7 +1186,7 @@ impl LifecycleUi {
             &self.package_manager,
         );
         if changed && let Err(error) = self.settings.borrow_mut().apply(replacement) {
-            eprintln!("Failed to save window geometries: {error}");
+            log::warn!(target: "ui", "Failed to save window geometries: {error}");
         }
     }
 }

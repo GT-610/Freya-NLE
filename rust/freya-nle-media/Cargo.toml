@@ -8,6 +8,10 @@ publish.workspace = true
 [dependencies]
 ffmpeg = { package = "ffmpeg-the-third", version = "6.0.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "tiff", "webp"] }
+log = "0.4"
 
+# `forbid` would also reject the single `#[allow(unsafe_code)]` module that
+# installs FFmpeg's `av_log` callback, which the safe wrapper does not expose.
+# The rest of the crate stays unsafe-free.
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"

@@ -350,6 +350,7 @@ export component TimelineWindow inherits Window {
     callback show-project-settings();
     callback show-system-settings();
     callback show-package-manager();
+    callback show-log();
     callback show-about();
     callback workspace-action(string);
     callback manage-missing-media();
@@ -516,6 +517,7 @@ export component TimelineWindow inherits Window {
         }
         Menu {
             title: @tr("Tools");
+            MenuItem { title: @tr("Log"); enabled: !root.save-confirmation-visible; activated => { root.show-log(); } }
             MenuItem { title: @tr("Package Manager"); enabled: !root.save-confirmation-visible; activated => { root.show-package-manager(); } }
             MenuSeparator { }
             MenuItem { title: @tr("About"); enabled: !root.save-confirmation-visible; activated => { root.show-about(); } }

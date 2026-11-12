@@ -442,6 +442,7 @@ pub(super) fn install_callbacks(
         scene_settings,
         system_settings,
         package_manager,
+        log_window,
         plugin_permissions,
         about,
     } = windows;
@@ -1801,6 +1802,14 @@ pub(super) fn install_callbacks(
         if let Some(window) = system_settings_window.upgrade() {
             sync_system_settings(&window, &system_settings_store.borrow());
             let _ = show_and_redraw(&window);
+        }
+    });
+
+    crate::log_window::install(log_window, settings.clone());
+    let log_show_window = log_window.as_weak();
+    main.on_show_log(move || {
+        if let Some(window) = log_show_window.upgrade() {
+            crate::log_window::show(&window);
         }
     });
 
@@ -3441,7 +3450,7 @@ pub(super) fn install_callbacks(
         if let Err(error) =
             save_timeline_preview_settings(&adjust_preview_settings, None, Some(next))
         {
-            eprintln!("Could not save the preview height: {error}");
+            log::warn!(target: "ui", "Could not save the preview height: {error}");
         }
     });
     let own_preview_target = main.as_weak();
@@ -3449,7 +3458,7 @@ pub(super) fn install_callbacks(
         if let Some(main) = own_preview_target.upgrade()
             && let Err(error) = main.show()
         {
-            eprintln!("Could not show the preview window: {error}");
+            log::warn!(target: "ui", "Could not show the preview window: {error}");
         }
     });
     let preview_window_target = main.as_weak();
@@ -3458,7 +3467,7 @@ pub(super) fn install_callbacks(
             // The merged layout lets the preview window be closed; this is the
             // way back from the timeline's View menu.
             if let Err(error) = main.show() {
-                eprintln!("Could not show the preview window: {error}");
+                log::warn!(target: "ui", "Could not show the preview window: {error}");
             }
         }
     });
@@ -3480,7 +3489,7 @@ pub(super) fn install_callbacks(
         if let Err(error) =
             save_timeline_preview_settings(&preview_height_settings, None, Some(height))
         {
-            eprintln!("Could not save the preview height: {error}");
+            log::warn!(target: "ui", "Could not save the preview height: {error}");
         }
     });
 
@@ -3503,7 +3512,7 @@ pub(super) fn install_callbacks(
         if let Err(error) =
             save_timeline_preview_settings(&preview_toggle_settings, Some(visible), None)
         {
-            eprintln!("Could not save the timeline preview preference: {error}");
+            log::warn!(target: "ui", "Could not save the timeline preview preference: {error}");
         }
     });
 
@@ -3537,6 +3546,7 @@ pub(super) fn install_callbacks(
     forward_menu_item!(on_redo => invoke_redo);
     forward_menu_item!(on_show_project_settings => invoke_show_project_settings);
     forward_menu_item!(on_show_system_settings => invoke_show_system_settings);
+    forward_menu_item!(on_show_log => invoke_show_log);
     forward_menu_item!(on_show_package_manager => invoke_show_package_manager);
     forward_menu_item!(on_show_about => invoke_show_about);
     // A layout command taken from the timeline menu acts on the timeline's own

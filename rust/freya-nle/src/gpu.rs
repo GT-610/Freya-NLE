@@ -214,7 +214,7 @@ impl AppGpu {
             }
         }));
         let info = adapter.get_info();
-        eprintln!("Freya NLE GPU: {} ({:?})", info.name, info.backend);
+        log::info!(target: "gpu", "Freya NLE GPU: {} ({:?})", info.name, info.backend);
         Ok(Self {
             instance,
             adapter,

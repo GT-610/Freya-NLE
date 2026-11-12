@@ -384,7 +384,7 @@ pub(super) fn persist_window_geometry(
         WindowGeometry::capture(window).json(),
     );
     if let Err(error) = settings.borrow_mut().apply(replacement) {
-        eprintln!("Failed to save {id} window geometry: {error}");
+        log::warn!(target: "ui", "Failed to save {id} window geometry: {error}");
     }
 }
 

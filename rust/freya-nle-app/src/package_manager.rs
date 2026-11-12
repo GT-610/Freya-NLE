@@ -989,7 +989,8 @@ where
         };
     }
     if had_existing && let Err(error) = remove_path(&backup) {
-        eprintln!(
+        log::warn!(
+            target: "package",
             "Package deployment succeeded but backup cleanup failed ({}): {error}",
             backup.display()
         );
@@ -1049,7 +1050,8 @@ where
         };
     }
     if had_existing && let Err(error) = remove_path(&backup) {
-        eprintln!(
+        log::warn!(
+            target: "package",
             "Package removal succeeded but backup cleanup failed ({}): {error}",
             backup.display()
         );
