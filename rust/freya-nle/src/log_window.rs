@@ -95,7 +95,9 @@ pub(super) fn show(window: &LogWindow) {
 
 fn draw(window: &LogWindow) {
     let filter = VIEW.with(|view| view.borrow().filter);
-    let entries = logging::recent();
+    // The records and their generation come from one snapshot, so a record
+    // that arrives while the rows are painted is not marked as shown.
+    let (entries, generation) = logging::snapshot();
     let rows: Vec<LogRowData> = entries
         .iter()
         .rev()
@@ -108,7 +110,7 @@ fn draw(window: &LogWindow) {
         .collect();
     window.set_log_rows(ModelRc::new(VecModel::from(rows)));
     sync_file_state(window);
-    VIEW.with(|view| view.borrow_mut().generation = logging::generation());
+    VIEW.with(|view| view.borrow_mut().generation = generation);
 }
 
 fn sync_file_state(window: &LogWindow) {
@@ -117,6 +119,21 @@ fn sync_file_state(window: &LogWindow) {
         window.set_file_enabled(enabled);
     }
     window.set_file_path(logging::file_path().display().to_string().into());
+    window.set_file_problem(
+        logging::file_error()
+            .map(|error| {
+                format!(
+                    "{}: {error}",
+                    localized(
+                        "Could not write the log file",
+                        "无法写入日志文件",
+                        "ログファイルに書き込めません"
+                    )
+                )
+            })
+            .unwrap_or_default()
+            .into(),
+    );
 }
 
 fn passes(level: Level, filter: i32) -> bool {

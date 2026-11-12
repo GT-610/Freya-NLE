@@ -46,6 +46,11 @@ static RECENT: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Whether records are copied into the rotating file. See the module docs.
 static FILE_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Bumped whenever the switch changes. The writer treats a new epoch as a
+/// fresh attempt, so re-enabling retries an open that failed earlier.
+static SWITCH_EPOCH: AtomicU64 = AtomicU64::new(0);
+/// The last failure to open the log file, for the log window to report.
+static FILE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// One line as the log window and saved transcripts show it.
 #[derive(Clone)]
@@ -108,6 +113,9 @@ pub(super) fn init() -> bool {
 
 /// Turns the rotating file on or off at runtime and records the transition.
 pub(super) fn set_file_enabled(enabled: bool) {
+    // A toggle is a new attempt: the writer forgets the previous failure and
+    // retries, even when no record arrived while the file was off.
+    SWITCH_EPOCH.fetch_add(1, Ordering::Relaxed);
     if enabled {
         FILE_ENABLED.store(true, Ordering::Relaxed);
         announce_file();
@@ -119,13 +127,35 @@ pub(super) fn set_file_enabled(enabled: bool) {
     }
 }
 
-/// Names the file the current session is appending to, once it is open.
+/// Names the file the current session appends to, and reports a failure.
+///
+/// The record below is what opens the file: `TeeWriter` cannot log from its
+/// own write path, so the reason is reported here, once, where a terminal user
+/// sees it as well as the log window.
 fn announce_file() {
-    log::info!(target: "app", "log file: {}", file_path().display());
+    let path = file_path();
+    log::info!(target: "app", "log file: {}", path.display());
+    if let Some(error) = file_error() {
+        log::warn!(target: "app", "could not write the log file: {error}");
+    }
 }
 
 pub(super) fn file_enabled() -> bool {
     FILE_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Why the file could not be opened, or `None` while it is working.
+pub(super) fn file_error() -> Option<String> {
+    FILE_ERROR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn set_file_error(message: Option<String>) {
+    *FILE_ERROR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = message;
 }
 
 /// The directory logs are written to: `FREYA_NLE_LOG_DIR` for scripted runs,
@@ -141,12 +171,18 @@ pub(super) fn file_path() -> PathBuf {
     log_directory().join(LOG_FILE_NAME)
 }
 
-/// A snapshot of the recent records, oldest first.
-pub(super) fn recent() -> Vec<Entry> {
+/// The recent records, oldest first, with the generation they belong to.
+///
+/// Both come from one lock: reading them separately would let a record that
+/// arrived mid-draw be marked as painted without ever being shown.
+pub(super) fn snapshot() -> (Vec<Entry>, u64) {
     let recent = RECENT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    recent.iter().cloned().collect()
+    (
+        recent.iter().cloned().collect(),
+        GENERATION.load(Ordering::Relaxed),
+    )
 }
 
 pub(super) fn generation() -> u64 {
@@ -156,10 +192,10 @@ pub(super) fn generation() -> u64 {
 /// Forgets the in-memory records behind the log window; the file, if open,
 /// keeps its history.
 pub(super) fn clear_recent() {
-    RECENT
+    let mut recent = RECENT
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    recent.clear();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -181,7 +217,7 @@ fn opened_at() -> String {
 /// The recent records as one text document for a saved transcript.
 pub(super) fn transcript() -> String {
     let mut text = format!("{} log transcript at {}\n", build_stamp(), opened_at());
-    for entry in recent() {
+    for entry in snapshot().0 {
         text.push_str(&entry.line());
         text.push('\n');
     }
@@ -289,6 +325,8 @@ struct TeeWriter {
     /// Set when the file could not be opened, so an unwritable data directory
     /// is not retried on every record. Toggling the switch clears it.
     gave_up: bool,
+    /// The switch epoch this writer has already acted on.
+    epoch: u64,
 }
 
 impl TeeWriter {
@@ -298,20 +336,36 @@ impl TeeWriter {
             directory,
             file: None,
             gave_up: false,
+            epoch: SWITCH_EPOCH.load(Ordering::Relaxed),
         }
     }
 
     /// Opens or closes the file to match the current switch. Runs on every
     /// write so a Preferences toggle takes effect without a restart.
     fn sync(&mut self) {
-        if FILE_ENABLED.load(Ordering::Relaxed) {
-            if self.file.is_none() && !self.gave_up {
-                self.file = RotatingFile::open(self.directory.join(LOG_FILE_NAME));
-                self.gave_up = self.file.is_none();
-            }
-        } else if self.file.is_some() || self.gave_up {
+        let epoch = SWITCH_EPOCH.load(Ordering::Relaxed);
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            // The user asked again: reopen and report afresh.
             self.file = None;
             self.gave_up = false;
+        }
+        if !FILE_ENABLED.load(Ordering::Relaxed) {
+            self.file = None;
+            return;
+        }
+        if self.file.is_none() && !self.gave_up {
+            let path = self.directory.join(LOG_FILE_NAME);
+            match RotatingFile::open(path.clone()) {
+                Ok(file) => {
+                    self.file = Some(file);
+                    set_file_error(None);
+                }
+                Err(error) => {
+                    self.gave_up = true;
+                    set_file_error(Some(format!("{}: {error}", path.display())));
+                }
+            }
         }
     }
 }
@@ -348,18 +402,19 @@ struct RotatingFile {
 }
 
 impl RotatingFile {
-    fn open(path: PathBuf) -> Option<Self> {
+    fn open(path: PathBuf) -> io::Result<Self> {
         Self::open_with_limit(path, MAX_LOG_BYTES)
     }
 
-    fn open_with_limit(path: PathBuf, limit: u64) -> Option<Self> {
-        let directory = path.parent()?;
-        fs::create_dir_all(directory).ok()?;
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok()?;
+    fn open_with_limit(path: PathBuf, limit: u64) -> io::Result<Self> {
+        let directory = path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the log file has no parent directory",
+            )
+        })?;
+        fs::create_dir_all(directory)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let written = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
         let mut rotating = Self {
             path,
@@ -368,7 +423,7 @@ impl RotatingFile {
             limit,
         };
         rotating.write_session_header();
-        Some(rotating)
+        Ok(rotating)
     }
 
     /// A plain first line naming the build and host, so a pasted log is
@@ -487,7 +542,7 @@ mod tests {
                     .build(),
             );
         }
-        let entries = recent();
+        let (entries, _) = snapshot();
         assert_eq!(entries.len(), MAX_RECENT_ENTRIES);
         assert!(entries.first().unwrap().line().ends_with("record 25"));
         assert!(entries.last().unwrap().line().ends_with("record 524"));
@@ -506,7 +561,34 @@ mod tests {
         );
         assert!(generation() > before);
         clear_recent();
-        assert!(recent().is_empty());
+        assert!(snapshot().0.is_empty());
+    }
+
+    #[test]
+    fn a_failed_open_is_reported_and_retried_after_a_toggle() {
+        let _guard = reset();
+        let directory = scratch_dir("retry");
+        // A regular file where the log directory should be makes the open fail.
+        let blocked = directory.join("blocked");
+        fs::write(&blocked, b"").expect("blocking file");
+        let mut writer = TeeWriter::new(blocked.join("logs"));
+        set_file_enabled(true);
+        writer.sync();
+        assert!(writer.gave_up);
+        assert!(file_error().is_some(), "the failure must be reported");
+
+        // The directory becomes usable, and the switch is toggled again.
+        fs::remove_file(&blocked).expect("remove blocking file");
+        set_file_enabled(false);
+        set_file_enabled(true);
+        writer.sync();
+        assert!(!writer.gave_up);
+        assert!(
+            file_error().is_none(),
+            "a successful retry clears the report"
+        );
+        assert!(blocked.join("logs").join(LOG_FILE_NAME).exists());
+        set_file_enabled(false);
     }
 
     #[test]

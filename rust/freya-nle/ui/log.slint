@@ -25,6 +25,8 @@ export component LogWindow inherits Window {
     in-out property <int> filter-index: 0;
     in-out property <bool> file-enabled: false;
     in property <string> file-path: "";
+    // Empty while the file is working; names the reason when it is not.
+    in property <string> file-problem: "";
     in property <[LogRowData]> log-rows: [];
     private property <[string]> filter-choices: [
         @tr("All levels"),
@@ -114,6 +116,14 @@ export component LogWindow inherits Window {
                         root.clear-log();
                     }
                 }
+            }
+
+            Text {
+                visible: root.file-problem != "";
+                text: root.file-problem;
+                color: AppTheme.danger;
+                font-size: 0.9rem;
+                wrap: word-wrap;
             }
 
             Rectangle {

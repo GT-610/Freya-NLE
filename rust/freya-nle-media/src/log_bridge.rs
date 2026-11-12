@@ -67,7 +67,12 @@ unsafe extern "C" fn callback(avcl: *mut c_void, level: c_int, fmt: *const c_cha
 }
 
 fn log_line(avcl: *mut c_void, level: c_int, fmt: *const c_char, va: VaArgs) {
-    if fmt.is_null() {
+    // Decide the level first: FFmpeg hands over debug and trace messages that
+    // the facade drops at the default filter, and formatting one is work on a
+    // codec thread. Skipping the call also leaves the per-thread prefix flag
+    // alone, which only changes the prefix of a later line.
+    let record_level = map_level(level);
+    if fmt.is_null() || !log::log_enabled!(target: "ffmpeg", record_level) {
         return;
     }
     let mut line = [0 as c_char; LINE_BYTES];
@@ -101,7 +106,7 @@ fn log_line(avcl: *mut c_void, level: c_int, fmt: *const c_char, va: VaArgs) {
     if message.is_empty() {
         return;
     }
-    log::log!(target: "ffmpeg", map_level(level), "{message}");
+    log::log!(target: "ffmpeg", record_level, "{message}");
 }
 
 fn map_level(level: c_int) -> log::Level {

@@ -30,6 +30,10 @@ pub struct PreviewPlanner {
     /// package does not print a warning on every frame.
     warned_effects: BTreeSet<String>,
     warned_objects: BTreeSet<String>,
+    /// Scene-graph problems already reported, keyed by the message, so an
+    /// export that plans every frame does not repeat one broken reference
+    /// hundreds of times and push the earlier records out of the log window.
+    warned_scene_problems: BTreeSet<String>,
 }
 
 impl PreviewPlanner {
@@ -53,6 +57,7 @@ impl PreviewPlanner {
             known_objects: BTreeSet::new(),
             warned_effects: BTreeSet::new(),
             warned_objects: BTreeSet::new(),
+            warned_scene_problems: BTreeSet::new(),
         }
     }
 
@@ -110,6 +115,13 @@ impl PreviewPlanner {
             audio,
             warnings,
         })
+    }
+
+    /// Adds a diagnostic the first time this planner meets the problem.
+    fn warn_once(&mut self, warnings: &mut Vec<String>, message: String) {
+        if self.warned_scene_problems.insert(message.clone()) {
+            warnings.push(message);
+        }
     }
 
     fn build_scene(
@@ -239,17 +251,20 @@ impl PreviewPlanner {
                 )
             } else if let Some(nested) = layer.nested_scene {
                 if stack.contains(&nested.target_scene_id) {
-                    warnings.push(format!(
-                        "clip #{} recursively references scene #{}",
-                        layer.clip_id, nested.target_scene_id
-                    ));
+                    self.warn_once(
+                        warnings,
+                        format!(
+                            "clip #{} recursively references scene #{}",
+                            layer.clip_id, nested.target_scene_id
+                        ),
+                    );
                     continue;
                 }
                 if stack.len() >= 32 {
-                    warnings.push(format!(
-                        "clip #{} exceeds the 32-scene nesting limit",
-                        layer.clip_id
-                    ));
+                    self.warn_once(
+                        warnings,
+                        format!("clip #{} exceeds the 32-scene nesting limit", layer.clip_id),
+                    );
                     continue;
                 }
                 stack.push(nested.target_scene_id);
@@ -267,10 +282,13 @@ impl PreviewPlanner {
                     .map(|(scene, _)| scene);
                 stack.pop();
                 let Some(nested_scene) = nested_scene else {
-                    warnings.push(format!(
-                        "clip #{} targets missing scene #{}",
-                        layer.clip_id, nested.target_scene_id
-                    ));
+                    self.warn_once(
+                        warnings,
+                        format!(
+                            "clip #{} targets missing scene #{}",
+                            layer.clip_id, nested.target_scene_id
+                        ),
+                    );
                     continue;
                 };
                 (
@@ -294,7 +312,10 @@ impl PreviewPlanner {
                 (PreviewContent::NativeCanvas { width, height }, opacity)
             } else {
                 if layer.clip_type == "scene" {
-                    warnings.push(format!("clip #{} has no valid target scene", layer.clip_id));
+                    self.warn_once(
+                        warnings,
+                        format!("clip #{} has no valid target scene", layer.clip_id),
+                    );
                 }
                 continue;
             };
@@ -1673,5 +1694,10 @@ mod tests {
             panic!("outer scene reference should remain visible");
         };
         assert!(scene.layers.is_empty());
+
+        // The same planner plans every exported frame; a broken reference is
+        // worth one record, not one per frame.
+        let again = planner.build(&document, 1, 1).expect("scene plans");
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
     }
 }
