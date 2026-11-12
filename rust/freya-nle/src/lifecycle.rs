@@ -20,7 +20,7 @@ use crate::settings::{
 };
 use crate::{
     AboutWindow, AppTheme, BackupEntryData, BackupHistoryWindow, BackupProjectData,
-    EasingConfigWindow, ExportWindow, LayerSettingsWindow, MainWindow, MarkNoteWindow,
+    EasingConfigWindow, ExportWindow, LayerSettingsWindow, LogWindow, MainWindow, MarkNoteWindow,
     ObjectSettingsWindow, PackageManagerWindow, PluginPermissionWindow, ProjectLauncherWindow,
     ProjectRecoveryWindow, ProjectSettingsWindow, RecentProjectData, RecoveryEntryData,
     SaveConfirmationWindow, SceneSettingsWindow, SystemSettingsWindow, TimelineWindow,
@@ -129,6 +129,7 @@ pub(super) struct WindowRefs<'a> {
     pub(super) layer_settings: &'a LayerSettingsWindow,
     pub(super) system_settings: &'a SystemSettingsWindow,
     pub(super) package_manager: &'a PackageManagerWindow,
+    pub(super) log_window: &'a LogWindow,
     pub(super) plugin_permissions: &'a PluginPermissionWindow,
     pub(super) about: &'a AboutWindow,
 }

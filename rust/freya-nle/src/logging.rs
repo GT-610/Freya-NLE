@@ -1,67 +1,218 @@
-//! Process-wide logging: stderr plus a rotating file, `RUST_LOG` filtering,
-//! and a panic hook that leaves a record on disk for support.
+//! Process-wide logging: stderr, an optional rotating file, the in-memory ring
+//! the log window reads, `RUST_LOG` filtering, and a panic record.
 //!
 //! The binary installs this once, before anything else runs. Library crates
 //! only use the `log` facade and never install a logger, so tests stay quiet
 //! and the sinks remain a single decision made here.
 //!
+//! File logging is off by default: a launch should not leave a file behind
+//! unless the user asked for one (Preferences → Log) or `FREYA_NLE_LOG_DIR`
+//! names a directory for scripted runs. Recent records always live in memory
+//! for the log window, which is what AviUtl2's log window exposes.
+//!
 //! stdout is reserved for machine-readable protocols (`--validate-gpu`'s JSON,
 //! `--help`, `--version`). Everything diagnostic goes to stderr and the file.
 
+use log::Level;
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Directory under the application data root that holds session logs.
+/// Directory under the application data root that holds log files.
 const LOG_DIRECTORY: &str = "logs";
 const LOG_FILE_NAME: &str = "freya-nle.log";
 /// `freya-nle.log` is rotated to `.1` when it would exceed this size.
 const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 /// How many rotated files are kept beside the current one.
 const KEPT_LOG_FILES: u32 = 3;
+/// How far back the log window can scroll.
+const MAX_RECENT_ENTRIES: usize = 500;
 
 /// `RUST_LOG` wins when set. The default keeps the application at `info` and
 /// silences third-party stacks that log per-frame or per-widget at `debug`.
 const DEFAULT_FILTER: &str =
     "info,wgpu=warn,naga=warn,winit=warn,calloop=warn,softbuffer=warn,zbus=warn";
 
+/// Recent records, oldest first. Shared by every thread that logs.
+static RECENT: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
+/// Bumped for every recorded line so the log window can poll cheaply.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Whether records are copied into the rotating file. See the module docs.
+static FILE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// One line as the log window and saved transcripts show it.
+#[derive(Clone)]
+pub(super) struct Entry {
+    level: Level,
+    time: String,
+    thread: String,
+    target: String,
+    message: String,
+}
+
+impl Entry {
+    pub(super) fn level(&self) -> Level {
+        self.level
+    }
+
+    /// The single-line form shared by the window and a saved transcript.
+    pub(super) fn line(&self) -> String {
+        format!(
+            "{} {:<5} [{}] {}: {}",
+            self.time, self.level, self.thread, self.target, self.message
+        )
+    }
+}
+
 /// Installs the global logger, unless one is already installed.
 ///
-/// Returns whether this call installed it. The log file falls back to a
-/// stderr-only sink when the data directory cannot be created or written.
+/// Returns whether this call installed it. stderr is always written; the file
+/// appears only once `set_file_enabled` turns it on.
 pub(super) fn init() -> bool {
+    FILE_ENABLED.store(
+        std::env::var_os("FREYA_NLE_LOG_DIR").is_some(),
+        Ordering::Relaxed,
+    );
     let filter = std::env::var("RUST_LOG")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_FILTER.to_owned());
-    let path = log_file_path();
-    let target = env_logger::Target::Pipe(Box::new(TeeWriter::new(path.clone())));
+    let target = env_logger::Target::Pipe(Box::new(TeeWriter::new(log_directory())));
     let mut builder = env_logger::Builder::new();
     builder
         .parse_filters(&filter)
         .target(target)
         .format(format_record);
-    if builder.try_init().is_err() {
+    let logger = builder.build();
+    let level = logger.filter();
+    // One logger lives for the process; leaking it keeps `set_logger`'s
+    // `'static` requirement without an extra allocation every call.
+    let recorder = Box::leak(Box::new(RecordingLogger { inner: logger }));
+    if log::set_logger(recorder).is_err() {
         return false;
     }
+    log::set_max_level(level);
     install_panic_hook();
-    if let Some(path) = path.filter(|path| path.exists()) {
-        log::info!(target: "app", "logging to {}", path.display());
+    if FILE_ENABLED.load(Ordering::Relaxed)
+        && let Some(path) = file_path()
+    {
+        log::info!(target: "app", "log file: {}", path.display());
     }
     true
 }
 
-/// The log file location: `FREYA_NLE_LOG_DIR` when set, otherwise
-/// `<application data root>/logs/freya-nle.log`.
-fn log_file_path() -> Option<PathBuf> {
-    if let Some(directory) = std::env::var_os("FREYA_NLE_LOG_DIR") {
-        return Some(Path::new(&directory).join(LOG_FILE_NAME));
+/// Turns the rotating file on or off at runtime and records the transition.
+pub(super) fn set_file_enabled(enabled: bool) {
+    if enabled {
+        FILE_ENABLED.store(true, Ordering::Relaxed);
+        if let Some(path) = file_path() {
+            log::info!(target: "app", "log file: {}", path.display());
+        }
+    } else {
+        log::info!(target: "app", "log file disabled");
+        FILE_ENABLED.store(false, Ordering::Relaxed);
     }
-    Some(
-        freya_nle_app::settings::application_data_root()
-            .join(LOG_DIRECTORY)
-            .join(LOG_FILE_NAME),
-    )
+}
+
+pub(super) fn file_enabled() -> bool {
+    FILE_ENABLED.load(Ordering::Relaxed)
+}
+
+/// The directory logs are written to, or `None` when the data root is unknown.
+pub(super) fn log_directory() -> Option<PathBuf> {
+    if let Some(directory) = std::env::var_os("FREYA_NLE_LOG_DIR") {
+        return Some(PathBuf::from(directory));
+    }
+    Some(freya_nle_app::settings::application_data_root().join(LOG_DIRECTORY))
+}
+
+pub(super) fn file_path() -> Option<PathBuf> {
+    log_directory().map(|directory| directory.join(LOG_FILE_NAME))
+}
+
+/// A snapshot of the recent records, oldest first.
+pub(super) fn recent() -> Vec<Entry> {
+    let recent = RECENT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    recent.iter().cloned().collect()
+}
+
+pub(super) fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+/// Forgets the in-memory records behind the log window; the file, if open,
+/// keeps its history.
+pub(super) fn clear_recent() {
+    RECENT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The recent records as one text document for a saved transcript.
+pub(super) fn transcript() -> String {
+    let mut text = format!(
+        "Freya NLE {} log transcript ({}, {}) at {}\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
+    );
+    for entry in recent() {
+        text.push_str(&entry.line());
+        text.push('\n');
+    }
+    text
+}
+
+/// Wraps the filtered sink so every record it accepts also fills the ring.
+struct RecordingLogger {
+    inner: env_logger::Logger,
+}
+
+impl log::Log for RecordingLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        log::Log::enabled(&self.inner, metadata)
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !log::Log::enabled(&self.inner, record.metadata()) {
+            return;
+        }
+        log::Log::log(&self.inner, record);
+        push_entry(record);
+    }
+
+    fn flush(&self) {
+        log::Log::flush(&self.inner);
+    }
+}
+
+fn push_entry(record: &log::Record<'_>) {
+    let entry = Entry {
+        level: record.level(),
+        time: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+        thread: std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_owned(),
+        target: record.target().to_owned(),
+        message: record.args().to_string(),
+    };
+    let mut recent = RECENT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if recent.len() >= MAX_RECENT_ENTRIES {
+        recent.pop_front();
+    }
+    recent.push_back(entry);
+    GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
 fn format_record(buf: &mut env_logger::fmt::Formatter, record: &log::Record<'_>) -> io::Result<()> {
@@ -109,27 +260,44 @@ fn install_panic_hook() {
     }));
 }
 
-/// Writes every record to stderr and, when available, the rotating file.
+/// Writes every record to stderr and, while enabled, the rotating file.
 ///
 /// stderr failures are ignored on purpose: a Windows GUI launch has no console,
 /// so stderr writes fail there. `eprintln!` would panic in that situation and
 /// abort the application; this sink must never do that.
 struct TeeWriter {
     terminal: io::Stderr,
+    directory: Option<PathBuf>,
     file: Option<RotatingFile>,
 }
 
 impl TeeWriter {
-    fn new(path: Option<PathBuf>) -> Self {
+    fn new(directory: Option<PathBuf>) -> Self {
         Self {
             terminal: io::stderr(),
-            file: path.and_then(RotatingFile::open),
+            directory,
+            file: None,
+        }
+    }
+
+    /// Opens or closes the file to match the current switch. Runs on every
+    /// write so a Preferences toggle takes effect without a restart.
+    fn sync(&mut self) {
+        if FILE_ENABLED.load(Ordering::Relaxed) {
+            if self.file.is_none()
+                && let Some(directory) = &self.directory
+            {
+                self.file = RotatingFile::open(directory.join(LOG_FILE_NAME));
+            }
+        } else if self.file.is_some() {
+            self.file = None;
         }
     }
 }
 
 impl io::Write for TeeWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.sync();
         let _ = self.terminal.write_all(buf);
         if let Some(file) = &mut self.file {
             file.write(buf);
@@ -186,7 +354,7 @@ impl RotatingFile {
     /// self-describing even when the recorder was never reached.
     fn write_session_header(&mut self) {
         let header = format!(
-            "Freya NLE {} starting on {} ({}) at {}",
+            "Freya NLE {} log ({}, {}) opened at {}",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
             std::env::consts::ARCH,
@@ -259,6 +427,29 @@ fn rotated_path(path: &Path, index: u32) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::MutexGuard;
+
+    /// The ring and the file switches are process-wide, so tests that touch
+    /// them take turns.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset() -> MutexGuard<'static, ()> {
+        let guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_recent();
+        guard
+    }
+
+    fn entry(message: &str) -> Entry {
+        Entry {
+            level: Level::Info,
+            time: "12:00:00.000".to_owned(),
+            thread: "main".to_owned(),
+            target: "test".to_owned(),
+            message: message.to_owned(),
+        }
+    }
 
     fn scratch_dir(name: &str) -> PathBuf {
         let directory =
@@ -277,6 +468,56 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn the_ring_keeps_a_bounded_number_of_recent_records() {
+        let _guard = reset();
+        for index in 0..MAX_RECENT_ENTRIES + 25 {
+            push_entry(
+                &log::Record::builder()
+                    .args(format_args!("record {index}"))
+                    .level(Level::Info)
+                    .target("test")
+                    .build(),
+            );
+        }
+        let entries = recent();
+        assert_eq!(entries.len(), MAX_RECENT_ENTRIES);
+        assert!(entries.first().unwrap().line().ends_with("record 25"));
+        assert!(entries.last().unwrap().line().ends_with("record 524"));
+    }
+
+    #[test]
+    fn clearing_forgets_records_and_bumps_the_generation() {
+        let _guard = reset();
+        let before = generation();
+        push_entry(
+            &log::Record::builder()
+                .args(format_args!("hello"))
+                .level(Level::Warn)
+                .target("test")
+                .build(),
+        );
+        assert!(generation() > before);
+        clear_recent();
+        assert!(recent().is_empty());
+    }
+
+    #[test]
+    fn a_transcript_stamps_the_build_and_keeps_each_line() {
+        let _guard = reset();
+        push_entry(
+            &log::Record::builder()
+                .args(format_args!("first"))
+                .level(Level::Warn)
+                .target("preview")
+                .build(),
+        );
+        let text = transcript();
+        assert!(text.starts_with("Freya NLE "), "{text}");
+        assert!(text.contains("WARN"), "{text}");
+        assert!(text.contains("preview: first"), "{text}");
     }
 
     #[test]
@@ -309,5 +550,12 @@ mod tests {
             rotated_path(Path::new("/tmp/freya-nle.log"), 2),
             PathBuf::from("/tmp/freya-nle.log.2")
         );
+    }
+
+    #[test]
+    fn the_entry_keeps_its_unused_fields_reachable_after_construction() {
+        let built = entry("message");
+        assert_eq!(built.level(), Level::Info);
+        assert!(built.line().contains("[main] test: message"));
     }
 }

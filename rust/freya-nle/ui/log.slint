@@ -1,0 +1,127 @@
+// AviUtl2's ログ window: the diagnostics the application produced this session.
+//
+// The ring keeps the recent records; this window only presents them. The
+// newest line sits at the top because the view is read-only text rather than a
+// list, so a fresh record never needs a scroll to be seen. Text is selectable,
+// which is also how copying works (Ctrl/Cmd+C).
+import { Button, CheckBox, ComboBox, TextEdit } from "std-widgets.slint";
+import { AppTheme } from "theme.slint";
+
+export component LogWindow inherits Window {
+    title: @tr("Log");
+    preferred-width: 860px;
+    preferred-height: 560px;
+    min-width: 520px;
+    min-height: 320px;
+    background: AppTheme.dialog-background;
+
+    in-out property <int> filter-index: 0;
+    in-out property <bool> file-enabled: false;
+    in property <string> file-path: "";
+    in-out property <string> log-text: "";
+    private property <[string]> filter-choices: [
+        @tr("All levels"),
+        @tr("Info and above"),
+        @tr("Warnings and above"),
+        @tr("Errors"),
+    ];
+
+    callback filter-changed(int);
+    callback file-enabled-changed(bool);
+    callback copy-log();
+    callback save-log();
+    callback clear-log();
+    callback open-log-folder();
+
+    Rectangle {
+        background: AppTheme.dialog-background;
+        VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: @tr("Log");
+                    color: AppTheme.dialog-foreground;
+                    font-size: 1.1rem;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: @tr("Newest first");
+                    color: AppTheme.dialog-muted;
+                    font-size: 0.9rem;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                ComboBox {
+                    model: root.filter-choices;
+                    current-index <=> root.filter-index;
+                    min-width: 180px;
+                    selected(value) => {
+                        root.filter-changed(self.current-index);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                CheckBox {
+                    text: @tr("Write log to file");
+                    checked <=> root.file-enabled;
+                    toggled => {
+                        root.file-enabled-changed(root.file-enabled);
+                    }
+                }
+                Text {
+                    text: root.file-path;
+                    color: AppTheme.dialog-muted;
+                    font-size: 0.9rem;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: @tr("Copy");
+                    clicked => {
+                        root.copy-log();
+                    }
+                }
+                Button {
+                    text: @tr("Open Log Folder");
+                    clicked => {
+                        root.open-log-folder();
+                    }
+                }
+                Button {
+                    text: @tr("Save Log...");
+                    clicked => {
+                        root.save-log();
+                    }
+                }
+                Button {
+                    text: @tr("Clear");
+                    clicked => {
+                        root.clear-log();
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: AppTheme.panel-background;
+                border-width: 1px;
+                border-color: AppTheme.subtle-border;
+                border-radius: 4px;
+                TextEdit {
+                    text: root.log-text;
+                    read-only: true;
+                    wrap: word-wrap;
+                    font-size: 12px;
+                }
+            }
+        }
+    }
+}

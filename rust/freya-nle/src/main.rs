@@ -12,6 +12,7 @@ mod export;
 mod gpu;
 mod lifecycle;
 mod localization;
+mod log_window;
 mod logging;
 mod object_settings;
 mod packages;
@@ -151,6 +152,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (settings_store, settings_status) = SettingsStore::load();
     log::info!(target: "settings", "{settings_status}");
     let settings = Rc::new(RefCell::new(settings_store));
+    // File logging follows the saved preference; `FREYA_NLE_LOG_DIR` (dev and
+    // scripted runs) keeps it on regardless.
+    let file_logging = std::env::var_os("FREYA_NLE_LOG_DIR").is_some()
+        || settings.borrow().bool_value("logFile", false);
+    if file_logging != logging::file_enabled() {
+        logging::set_file_enabled(file_logging);
+    }
     let package_manager_model =
         Rc::new(RefCell::new(PackageManagerModel::load(&settings.borrow())));
     let package_operation = Rc::new(RefCell::new(None::<PackageOperationRuntime>));
@@ -235,6 +243,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let package_manager = PackageManagerWindow::new()?;
     let plugin_permissions = PluginPermissionWindow::new()?;
     let about = AboutWindow::new()?;
+    let log_window = LogWindow::new()?;
     for (window, id, fallback) in [
         (
             export.window(),
@@ -289,6 +298,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             package_manager.window(),
             "packageManager",
             WindowGeometry::new(500, 300, 650, 450),
+        ),
+        (
+            log_window.window(),
+            "logWindow",
+            WindowGeometry::new(380, 240, 860, 520),
         ),
     ] {
         restore_window_geometry(window, &settings.borrow(), id, fallback);
@@ -438,6 +452,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             layer_settings: &layer_settings,
             system_settings: &system_settings,
             package_manager: &package_manager,
+            log_window: &log_window,
             plugin_permissions: &plugin_permissions,
             about: &about,
         },
@@ -496,6 +511,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "packageManager",
     );
     install_window_geometry_close_handler(about.as_weak(), settings.clone(), "about");
+    install_window_geometry_close_handler(log_window.as_weak(), settings.clone(), "logWindow");
     install_timeline_file_drop(
         &main,
         &timeline,

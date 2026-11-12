@@ -442,6 +442,7 @@ pub(super) fn install_callbacks(
         scene_settings,
         system_settings,
         package_manager,
+        log_window,
         plugin_permissions,
         about,
     } = windows;
@@ -1801,6 +1802,14 @@ pub(super) fn install_callbacks(
         if let Some(window) = system_settings_window.upgrade() {
             sync_system_settings(&window, &system_settings_store.borrow());
             let _ = show_and_redraw(&window);
+        }
+    });
+
+    crate::log_window::install(log_window, settings.clone());
+    let log_show_window = log_window.as_weak();
+    main.on_show_log(move || {
+        if let Some(window) = log_show_window.upgrade() {
+            crate::log_window::show(&window);
         }
     });
 
@@ -3537,6 +3546,7 @@ pub(super) fn install_callbacks(
     forward_menu_item!(on_redo => invoke_redo);
     forward_menu_item!(on_show_project_settings => invoke_show_project_settings);
     forward_menu_item!(on_show_system_settings => invoke_show_system_settings);
+    forward_menu_item!(on_show_log => invoke_show_log);
     forward_menu_item!(on_show_package_manager => invoke_show_package_manager);
     forward_menu_item!(on_show_about => invoke_show_about);
     // A layout command taken from the timeline menu acts on the timeline's own

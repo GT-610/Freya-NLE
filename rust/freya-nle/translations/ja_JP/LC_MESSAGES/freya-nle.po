@@ -1685,3 +1685,30 @@ msgstr "参照式を設定..."
 
 msgid "Clear Expression"
 msgstr "参照式を解除"
+
+msgid "Log"
+msgstr "ログ"
+
+msgid "Newest first"
+msgstr "新しい順"
+
+msgid "All levels"
+msgstr "すべてのレベル"
+
+msgid "Info and above"
+msgstr "情報以上"
+
+msgid "Warnings and above"
+msgstr "警告以上"
+
+msgid "Errors"
+msgstr "エラー"
+
+msgid "Write log to file"
+msgstr "ログをファイルに保存"
+
+msgid "Open Log Folder"
+msgstr "ログフォルダを開く"
+
+msgid "Save Log..."
+msgstr "ログを保存..."

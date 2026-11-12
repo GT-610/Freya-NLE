@@ -1685,3 +1685,30 @@ msgstr "设置参照式..."
 
 msgid "Clear Expression"
 msgstr "清除参照式"
+
+msgid "Log"
+msgstr "日志"
+
+msgid "Newest first"
+msgstr "最新在前"
+
+msgid "All levels"
+msgstr "所有级别"
+
+msgid "Info and above"
+msgstr "信息及以上"
+
+msgid "Warnings and above"
+msgstr "警告及以上"
+
+msgid "Errors"
+msgstr "错误"
+
+msgid "Write log to file"
+msgstr "将日志写入文件"
+
+msgid "Open Log Folder"
+msgstr "打开日志文件夹"
+
+msgid "Save Log..."
+msgstr "保存日志..."
