@@ -132,17 +132,18 @@ pub(super) fn init() -> bool {
 
 /// Turns the rotating file on or off at runtime and records the transition.
 pub(super) fn set_file_enabled(enabled: bool) {
-    // A toggle is a new attempt: the writer forgets the previous failure and
-    // retries, even when no record arrived while the file was off.
-    SWITCH_EPOCH.fetch_add(1, Ordering::Relaxed);
     if enabled {
+        // A new epoch is a fresh attempt: the sink forgets the previous
+        // failure and retries, even when no record arrived while it was off.
+        SWITCH_EPOCH.fetch_add(1, Ordering::Relaxed);
         FILE_ENABLED.store(true, Ordering::Relaxed);
         announce_file();
     } else {
-        // Recorded before the switch flips, so this line is still in the file
-        // it closes and the file does not end mid-session without a reason.
+        // Recorded while the file is still open, so the file itself ends with
+        // the reason; the switch flips and closes it below.
         log::info!(target: "app", "log file disabled");
         FILE_ENABLED.store(false, Ordering::Relaxed);
+        sync_file();
     }
 }
 
@@ -160,17 +161,30 @@ fn announce_file() {
     }
 }
 
+fn lock_sink() -> std::sync::MutexGuard<'static, FileSink> {
+    FILE_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Opens or closes the file to match the current switch.
 fn sync_file() {
-    let mut sink = FILE_SINK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut sink = lock_sink();
+    sync_locked(&mut sink);
+}
+
+fn sync_locked(sink: &mut FileSink) {
     reconcile(
-        &mut sink,
+        sink,
         SWITCH_EPOCH.load(Ordering::Relaxed),
         FILE_ENABLED.load(Ordering::Relaxed),
         &log_directory(),
     );
+}
+
+/// Records a failure next to the switch state the window reads.
+fn note_file_error(sink: &mut FileSink, error: io::Error) {
+    sink.error = Some(format!("{}: {error}", file_path().display()));
 }
 
 /// Brings one sink in line with the switch. Split out so a test can drive the
@@ -184,6 +198,7 @@ fn reconcile(sink: &mut FileSink, epoch: u64, enabled: bool, directory: &Path) {
     }
     if !enabled {
         sink.file = None;
+        sink.error = None;
         return;
     }
     if sink.file.is_some() || sink.gave_up {
@@ -202,22 +217,26 @@ fn reconcile(sink: &mut FileSink, epoch: u64, enabled: bool, directory: &Path) {
     }
 }
 
+/// Appends one record. A failure is kept for the window, not logged from
+/// here: this path already holds the sink lock.
 fn write_file(buf: &[u8]) {
-    sync_file();
-    let mut sink = FILE_SINK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(file) = &mut sink.file {
-        file.write(buf);
+    let mut sink = lock_sink();
+    sync_locked(&mut sink);
+    let Some(file) = &mut sink.file else {
+        return;
+    };
+    match file.write(buf) {
+        Ok(()) => sink.error = None,
+        Err(error) => note_file_error(&mut sink, error),
     }
 }
 
 fn flush_file() {
-    let mut sink = FILE_SINK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(file) = &mut sink.file {
-        file.flush();
+    let mut sink = lock_sink();
+    if let Some(file) = &mut sink.file
+        && let Err(error) = file.flush()
+    {
+        note_file_error(&mut sink, error);
     }
 }
 
@@ -455,67 +474,87 @@ impl RotatingFile {
             written,
             limit,
         };
-        rotating.write_session_header();
+        rotating.write_session_header()?;
         Ok(rotating)
     }
 
     /// A plain first line naming the build and host, so a pasted log is
     /// self-describing even when the recorder was never reached.
-    fn write_session_header(&mut self) {
+    fn write_session_header(&mut self) -> io::Result<()> {
         let header = format!("{} log opened at {}", build_stamp(), opened_at());
         if let Some(file) = &mut self.file {
-            let _ = file.write_all(header.as_bytes());
-            let _ = file.write_all(b"\n");
-            let _ = file.flush();
+            file.write_all(header.as_bytes())?;
+            file.write_all(b"\n")?;
+            file.flush()?;
         }
         self.written = self.written.saturating_add(header.len() as u64 + 1);
+        Ok(())
     }
 
-    fn write(&mut self, buf: &[u8]) {
+    fn write(&mut self, buf: &[u8]) -> io::Result<()> {
         if self.written.saturating_add(buf.len() as u64) > self.limit {
-            self.rotate();
+            self.rotate()?;
         }
         if self.file.is_none() {
-            self.reopen();
+            self.reopen()?;
         }
-        if let Some(file) = &mut self.file {
-            if file.write_all(buf).is_ok() {
-                self.written = self.written.saturating_add(buf.len() as u64);
-            }
-            let _ = file.flush();
-        }
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("the log file is closed and could not be reopened"))?;
+        file.write_all(buf)?;
+        file.flush()?;
+        self.written = self.written.saturating_add(buf.len() as u64);
+        Ok(())
     }
 
-    fn flush(&mut self) {
-        if let Some(file) = &mut self.file {
-            let _ = file.flush();
+    fn flush(&mut self) -> io::Result<()> {
+        match &mut self.file {
+            Some(file) => file.flush(),
+            None => Ok(()),
         }
     }
 
     /// Closes the current file first: Windows cannot rename an open file.
-    fn rotate(&mut self) {
+    ///
+    /// A rotated file that a shorter history never created is not an error,
+    /// so a missing source is ignored; anything else is reported.
+    fn rotate(&mut self) -> io::Result<()> {
         self.file = None;
-        let _ = fs::remove_file(rotated_path(&self.path, KEPT_LOG_FILES));
+        remove_if_present(&rotated_path(&self.path, KEPT_LOG_FILES))?;
         for index in (1..KEPT_LOG_FILES).rev() {
-            let _ = fs::rename(
-                rotated_path(&self.path, index),
-                rotated_path(&self.path, index + 1),
-            );
+            rename_if_present(
+                &rotated_path(&self.path, index),
+                &rotated_path(&self.path, index + 1),
+            )?;
         }
-        let _ = fs::rename(&self.path, rotated_path(&self.path, 1));
+        rename_if_present(&self.path, &rotated_path(&self.path, 1))?;
         self.written = 0;
-        self.reopen();
+        self.reopen()
     }
 
-    fn reopen(&mut self) {
-        if let Ok(file) = OpenOptions::new()
+    fn reopen(&mut self) -> io::Result<()> {
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.path)
-        {
-            self.file = Some(file);
-            self.written = 0;
-        }
+            .open(&self.path)?;
+        self.file = Some(file);
+        self.written = 0;
+        Ok(())
+    }
+}
+
+fn remove_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+fn rename_if_present(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::rename(from, to) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
     }
 }
 
@@ -622,6 +661,12 @@ mod tests {
         assert!(!sink.gave_up);
         assert!(sink.error.is_none(), "a successful retry clears the report");
         assert!(logs.join(LOG_FILE_NAME).exists());
+
+        // Turning the switch off closes the file and stops reporting a
+        // failure: nothing is expected to be written while it is off.
+        reconcile(&mut sink, 2, false, &logs);
+        assert!(sink.file.is_none(), "disabling closes the file");
+        assert!(sink.error.is_none());
     }
 
     #[test]
@@ -656,7 +701,8 @@ mod tests {
         let path = directory.join("test.log");
         let mut file = RotatingFile::open_with_limit(path.clone(), 128).expect("open");
         for _ in 0..8 {
-            file.write(b"0123456789abcdef0123456789abcdef\n");
+            file.write(b"0123456789abcdef0123456789abcdef\n")
+                .expect("write");
         }
         let entries = rotated_entries(&directory, "test.log");
         // The current file plus exactly KEPT_LOG_FILES rotated ones, never more.
