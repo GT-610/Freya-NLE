@@ -60,6 +60,11 @@ All notable changes to Freya NLE are documented in this file.
   fragment types the application already opens from the command line
 - `BUILD.py --arch` no longer requires distrobox: where only podman is
   installed, it runs the build in a container of its own
+- A packaging pull request runs the workspace checks once instead of twice:
+  `analysis.yml` already calls the same reusable workflow, so `package.yml` only
+  keeps its `test` job for the release path. Markdown-only and probe-only pull
+  requests skip the 45-minute container, and `rust-checks.yml` pins the same
+  `archlinux` digest the packaging jobs build and smoke-test against
 
 ### Removed
 - Dead code that no build reached: `ApplicationModel::backup_total_bytes`, the
@@ -99,6 +104,16 @@ All notable changes to Freya NLE are documented in this file.
   adapter and were `#[ignore]`d, and no CI job ran them, so the compute-effect
   and MSAA paths they described have been unexecuted since they were written.
   `CONTRIBUTING.md` no longer offers a command for them
+- Thirteen of the fourteen no-GPU probe crates. Their conclusion (a GPU-backed
+  adapter is required) is already recorded in the probes README and cited from
+  five places, and no workflow ever built them. The six shader probes are now one
+  `shader-probe` crate with a mode per question, since four of them carried the
+  same 28-line shader assembly verbatim; `compositor-cpu-probe` stays as the
+  record's other half
+- The five `Package` workflow outputs and the steps that wrote them; no workflow,
+  release job, or script ever read them
+- `vendor/` from `.gitignore` and from `BUILD.py`'s Carla discovery. Nothing wrote
+  that directory, so the ignore rule promised a staging area the build did not use
 
 ## [0.8.0] - 2026-11-09
 

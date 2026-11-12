@@ -1,6 +1,3 @@
-# Build-time fetched dependencies (populated by BUILD.py)
-/vendor/
-
 # Builds
 /vcpkg/
 /vcpkg_installed/

@@ -313,7 +313,7 @@ class PlatformBuilder:
     def find_carla_discovery_tool(self, windows: bool = False) -> Path | None:
         name = "carla-discovery-native.exe" if windows else "carla-discovery-native"
         found = shutil.which(name, path=self.env.get("PATH"))
-        roots = [self.config.source_dir / "vendor" / "carla"]
+        roots: List[Path] = []
         if found:
             roots.append(Path(found).parent)
         if platform.system() == "Darwin" and shutil.which("brew"):
@@ -619,7 +619,7 @@ class PlatformBuilder:
             return ""
         return result.stdout if result.returncode == 0 else ""
 
-    def run_cmd(self, command: List[str], shell: bool = False, force_host: bool = False,
+    def run_cmd(self, command: List[str], force_host: bool = False,
                 allow_failure: bool = False):
         self.check_cancelled()
         in_container = self.use_container and not force_host
@@ -641,14 +641,10 @@ class PlatformBuilder:
             )
             inner = f"cd {shlex.quote(workdir)} && {exports}{display_command}"
             actual_command = self.container_invocation(inner)
-            # The list form is passed to Popen unchanged; `shell=True` would
-            # hand the client command to the host's shell, and on Windows that
-            # is `cmd.exe`, which has no idea what POSIX quoting means.
-            shell = False
         popen_options = {"start_new_session": True} if os.name != "nt" else {}
         process = subprocess.Popen(
             actual_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", shell=shell,
+            text=True, encoding="utf-8", errors="replace", shell=False,
             env=self.env, cwd=self.config.source_dir, **popen_options,
         )
         self.current_proc = process

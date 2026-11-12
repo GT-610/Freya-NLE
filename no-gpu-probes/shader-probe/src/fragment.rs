@@ -5,40 +5,12 @@
 //! with the `apply_visual_effects` body progressively truncated, so the number
 //! of switch cases and the byte size can be compared against the outcome.
 //!
-//! Usage: shader-fragment-probe <cases>
+//! Usage: shader-probe fragment <cases>
+
+use crate::shader::compositor_shader;
+
 
 use std::borrow::Cow;
-
-/// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
-/// needs no intermediate copy and runs from a clean checkout.
-fn compositor_shader() -> String {
-    fn repo_root() -> std::path::PathBuf {
-        let mut current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        loop {
-            if current.join("rust").join("Cargo.toml").is_file() {
-                return current;
-            }
-            current = current
-                .parent()
-                .expect("the probe lives inside the repository")
-                .to_path_buf();
-        }
-    }
-    let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    const OPEN: &str = "const SHADER: &str = r#\"";
-    const CLOSE: &str = "\"#;";
-    let start = source
-        .find(OPEN)
-        .unwrap_or_else(|| panic!("{} does not declare const SHADER", path.display()))
-        + OPEN.len();
-    let end = source[start..]
-        .find(CLOSE)
-        .unwrap_or_else(|| panic!("unterminated SHADER constant in {}", path.display()))
-        + start;
-    source[start..end].to_owned()
-}
 
 fn build_shader(cases_to_keep: usize) -> String {
     let source = compositor_shader();
@@ -108,11 +80,11 @@ fn build_shader(cases_to_keep: usize) -> String {
     output
 }
 
-fn main() {
+pub fn run() {
     let cases: usize = std::env::args()
-        .nth(1)
+        .nth(2)
         .and_then(|value| value.parse().ok())
-        .expect("usage: shader-fragment-probe <cases>");
+        .expect("usage: shader-probe fragment <cases>");
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,

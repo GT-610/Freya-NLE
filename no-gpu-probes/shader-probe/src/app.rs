@@ -1,51 +1,34 @@
-//! Determine whether the CPU/DX12-WARP crash depends on the application
-//! shader's size, by compiling the shader with progressively fewer switch cases
-//! in separate child processes (a hard access violation cannot be caught).
+//! Bisect the application's compositor WGSL against a CPU/DX12-WARP device.
 //!
-//! Each child is invoked with the number of switch cases to keep, rebuilds the
-//! shader from the extracted source, and reports whether the pipeline compiled.
+//! The full shader hard-crashes (0xC0000005) inside `create_render_pipeline`.
+//! This probe compiles progressively larger prefixes of the `apply_visual_effects`
+//! switch so the exact effect case that first triggers the compiler failure is
+//! identified by number.
+//!
+//! The shader is read straight out of `freya-nle-render/src/lib.rs` and every
+//! `textureSample` is rewritten to `textureSampleLevel(..., 0.0)` first, because
+//! the gradient instruction is what FXC cannot unroll in the dynamic loop.
+//! Without the rewrite the small prefixes still fail on X3511 briefly, which
+//! hides the size-driven crash this probe bisects.
+//!
+//! A hard access violation cannot be caught in-process, so each case count runs
+//! in its own child process. Usage: shader-probe app <cases>
+
+use crate::shader::compositor_shader;
+
 
 use std::borrow::Cow;
 
-/// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
-/// needs no intermediate copy and runs from a clean checkout.
-fn compositor_shader() -> String {
-    fn repo_root() -> std::path::PathBuf {
-        let mut current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        loop {
-            if current.join("rust").join("Cargo.toml").is_file() {
-                return current;
-            }
-            current = current
-                .parent()
-                .expect("the probe lives inside the repository")
-                .to_path_buf();
-        }
-    }
-    let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    const OPEN: &str = "const SHADER: &str = r#\"";
-    const CLOSE: &str = "\"#;";
-    let start = source
-        .find(OPEN)
-        .unwrap_or_else(|| panic!("{} does not declare const SHADER", path.display()))
-        + OPEN.len();
-    let end = source[start..]
-        .find(CLOSE)
-        .unwrap_or_else(|| panic!("unterminated SHADER constant in {}", path.display()))
-        + start;
-    source[start..end].to_owned()
-}
-
-/// Replace every `textureSample` with `textureSampleLevel(..., 0.0)` so no
-/// gradient instruction remains inside a loop with varying iteration, which
-/// FXC cannot unroll.
+/// Replaces every `textureSample(` call with `textureSampleLevel(<args>, 0.0)`,
+/// collapsing multi-line calls onto one line. This is the same rewrite the
+/// other compositor probes apply so each one measures the shader in the same
+/// form.
 fn rewrite_samples(source: &str) -> String {
     let marker = "textureSample(";
     let text: Vec<char> = source.chars().collect();
     let mut rewritten = String::with_capacity(source.len() + 512);
     let mut i = 0usize;
+    let mut rewrote = 0usize;
     while i < text.len() {
         if text[i..].starts_with(&marker.chars().collect::<Vec<_>>()[..]) {
             let body = i + marker.chars().count();
@@ -72,19 +55,21 @@ fn rewrite_samples(source: &str) -> String {
             let collapsed = arguments.split_whitespace().collect::<Vec<_>>().join(" ");
             let trimmed = collapsed.trim_end().trim_end_matches(',').to_string();
             rewritten.push_str(&format!("textureSampleLevel({trimmed}, 0.0)"));
+            rewrote += 1;
             i = end + 1;
         } else {
             rewritten.push(text[i]);
             i += 1;
         }
     }
+    println!("REWRITE_SAMPLES {rewrote}");
     rewritten
 }
 
 fn build_shader(cases_to_keep: usize) -> String {
-    let source = compositor_shader();
-    let source = rewrite_samples(&source);
+    let source = rewrite_samples(&compositor_shader());
     let lines: Vec<&str> = source.lines().collect();
+    // Find the region of the switch inside apply_visual_effects.
     let fn_start = lines
         .iter()
         .position(|line| line.contains("fn apply_visual_effects"))
@@ -106,6 +91,7 @@ fn build_shader(cases_to_keep: usize) -> String {
             break;
         }
     }
+    // Count the `case N:` lines inside the switch so they can be truncated.
     let mut case_positions: Vec<usize> = Vec::new();
     for (index, line) in lines.iter().enumerate().take(switch_end).skip(switch_start) {
         if line.trim_start().starts_with("case ") && line.trim_end().ends_with(": {") {
@@ -134,10 +120,9 @@ fn build_shader(cases_to_keep: usize) -> String {
             output.push('\n');
         }
     }
-    // The real shader's `default: {}` is the last statement inside the switch,
-    // immediately before its closing brace at `switch_end`. It is only part of
-    // the output when the last kept case reached the switch's end, so a
-    // synthesized default is safe whenever the loop broke out early.
+    // A synthetic `default` only needs to appear when the truncated switch no longer
+    // reaches its real end: once the kept cases run to `switch_end` the original
+    // closing brace has been copied out, and adding another default would be invalid.
     let kept_to_end = case_positions
         .get(cases_to_keep)
         .copied()
@@ -154,7 +139,12 @@ fn build_shader(cases_to_keep: usize) -> String {
     output
 }
 
-fn compile(shader_source: &str, vertex: &str, fragment: &str) {
+pub fn run() {
+    let cases: usize = std::env::args()
+        .nth(2)
+        .and_then(|value| value.parse().ok())
+        .expect("usage: shader-probe app <cases>");
+
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -162,6 +152,7 @@ fn compile(shader_source: &str, vertex: &str, fragment: &str) {
         compatible_surface: None,
     }))
     .expect("cpu adapter");
+    println!("ADAPTER {:?}", adapter.get_info());
     let (device, _queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
             .expect("device");
@@ -173,6 +164,16 @@ fn compile(shader_source: &str, vertex: &str, fragment: &str) {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
+        },
+        count: None,
+    };
+    let storage_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
         },
         count: None,
     };
@@ -197,16 +198,7 @@ fn compile(shader_source: &str, vertex: &str, fragment: &str) {
                 count: None,
             },
             texture_entry(3),
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
+            storage_entry(4),
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -215,22 +207,24 @@ fn compile(shader_source: &str, vertex: &str, fragment: &str) {
         immediate_size: 0,
     });
 
+    let shader_source = build_shader(cases);
+    println!("TRY cases={cases} shader_bytes={}", shader_source.len());
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("probe-shader"),
-        source: wgpu::ShaderSource::Wgsl(Cow::Owned(shader_source.to_owned())),
+        source: wgpu::ShaderSource::Wgsl(Cow::Owned(shader_source)),
     });
     let _ = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("probe-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some(vertex),
+            entry_point: Some("vertex"),
             buffers: &[],
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(fragment),
+            entry_point: Some("fragment"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -244,21 +238,5 @@ fn compile(shader_source: &str, vertex: &str, fragment: &str) {
         multiview_mask: None,
         cache: None,
     });
-}
-
-fn main() {
-    let mut args = std::env::args().skip(1);
-    let cases: usize = args
-        .next()
-        .and_then(|value| value.parse().ok())
-        .expect("usage: shader-size-probe <cases> [entry-point]");
-    let entry = args.next().unwrap_or_else(|| "vertex".to_owned());
-    let fragment = match entry.as_str() {
-        "vertex" => "fragment",
-        "effect_vertex" => "effect_fragment",
-        other => other,
-    };
-    let source = build_shader(cases);
-    compile(&source, &entry, fragment);
-    println!("OK cases={cases} entry={entry}");
+    println!("OK cases={cases}");
 }

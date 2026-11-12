@@ -68,7 +68,13 @@ def format_table_row(label: str, files: int, total: int, code: int, blank: int) 
 
 
 def main() -> None:
-    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).parent.resolve()
+    # Default to the repository root, so the script can live under tools/ and still
+    # count the whole tree when it is run from anywhere.
+    root = (
+        Path(sys.argv[1]).resolve()
+        if len(sys.argv) > 1
+        else Path(__file__).resolve().parent.parent
+    )
 
     print(f"\n{'=' * 70}")
     print(f"  Freya NLE Source Code Line Count Report")

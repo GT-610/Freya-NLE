@@ -6,6 +6,13 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+    # Markdown and the archived probes cannot break the workspace build, and the
+    # container this runs in costs 45 minutes. `catalog/` and `effect-packages/`
+    # stay out of this list on purpose: the workspace tests validate both.
+    paths-ignore:
+      - "docs"
+      - "**.md"
+      - "no-gpu-probes/**"
 
 permissions:
   contents: read

@@ -1,3 +1,6 @@
+# This port pins FFmpeg 9.0.1 for the Windows/MSVC build. The Linux and macOS
+# builds use scripts/build-ffmpeg.sh, which pins n9.0.2 from source; the two
+# pins are separate pipelines, so bump them together in one commit.
 # Reuse the vcpkg-maintained FFmpeg 9.0.1 port and add the small MSVC
 # Visual Studio's bundled vcpkg does not ship the builtin ports checkout. Keep
 # a copy of the exact vcpkg FFmpeg 9.0.1 port in this overlay so the build is
