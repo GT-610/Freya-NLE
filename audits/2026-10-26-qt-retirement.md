@@ -132,10 +132,11 @@ documented the behavior is in git history.
    `hw_frames_ctx` setup: hardware-frame decoding, and a hardware upload path for
    VAAPI/QSV instead of the software fallback.
 
-   Blocking constraint: `freya-nle-media/Cargo.toml` sets `unsafe_code = "forbid"`,
-   like the other application crates. `ffmpeg-the-third` does not expose device
+   Blocking constraint: `freya-nle-media/Cargo.toml` keeps `unsafe_code = "deny"`
+   rather than `forbid`, because it already carries one `#[allow(unsafe_code)]`
+   module for the FFmpeg bridge. `ffmpeg-the-third` does not expose device
    creation, `get_format` negotiation or `av_hwframe_transfer_data`, so a hardware
-   decoder needs a small unsafe FFI module in that crate. The design is understood
+   decoder needs a second such module in that crate. The design is understood
    (create a VideoToolbox/VAAPI device, prefer its pixel format during decode,
    transfer frames to system memory before the scaler), but relaxing a crate-level
    safety policy is a project decision rather than a missing implementation.
@@ -169,13 +170,12 @@ documented the behavior is in git history.
    had no SF2/SFZ case, so the browser offered plugins that could not load. The Rust
    catalog omits the formats (`freya-nle-carla/src/lib.rs:550-559`) instead of repeating
    that; a soundfont format needs a host path before it gets a scan path.
-5. **Documentation site.** `docs/` is a separate repository (submodule on its
-   `release/0.7.0-rc.1` branch) and its sources still describe the Qt build:
-   `developer/building.md` and `developer/release-checklist.md` name CMake, the
-   `--frontend qt` flag and `tests/check_rust_abi.py`; `developer/index.md` still lists
-   "C++23 / Qt 6 + Qt Quick" as the application UI; `guide/start-here/about.md` and
-   `guide/help-and-reference/faq.md` tell the pre-migration story. Those need a
-   docs-repository change and a submodule bump, not a change on this branch.
+5. **Documentation site.** `docs/` is a separate repository (a submodule of this
+   one). Its sources still described the Qt build when this audit was written; the
+   quality pass updated the brand, the Qt/QRhi/ECS/LuaJIT narrative, and the
+   fragment-format pages on the submodule's `main` branch and bumped the pointer.
+   Review that repository on its own schedule rather than assuming this record stays
+   current.
 
 ## C ABI retirement
 

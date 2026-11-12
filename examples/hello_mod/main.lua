@@ -33,7 +33,7 @@ function AviQtlOnProjectSave(path)
     aviqtl.log("[Hello Mod] Project saved to: " .. path)
 end
 
--- Custom commands (callable from the Lua console or other plugins)
+-- Custom commands, callable from other plugins
 
 function hello()
     aviqtl.log("[Hello Mod] Hello from the Lua plugin system!")

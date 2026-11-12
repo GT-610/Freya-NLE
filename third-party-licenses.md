@@ -31,10 +31,18 @@ them.
 
 | Component | Licence |
 | :--- | :--- |
-| Slint | GPL-3.0-only (used under the GPLv3 option) |
-| wgpu, winit | MIT OR Apache-2.0 |
-| Rust standard library | MIT OR Apache-2.0 |
+| Slint (and `slint-build`) | GPL-3.0-only (used under the GPLv3 option) |
+| wgpu, naga, serde, serde_json, log, env_logger, chrono, url, ureq, semver | MIT OR Apache-2.0 |
+| winit (through Slint's `backend-winit`) | Apache-2.0 |
+| tiny-skia | BSD-3-Clause |
+| cpal, pollster | Apache-2.0 |
+| rfd, fontdb, rustybuzz, tracing | MIT |
+| libloading | ISC |
+| crc32fast, flate2, sha2, rtrb, tempfile, unicode-casefold, webbrowser, sys-locale | MIT OR Apache-2.0 |
+| truce-rack | MIT OR Apache-2.0 |
 | luna-core | MIT OR Apache-2.0 |
+| ffmpeg-the-third (Rust bindings) | WTFPL |
+| Rust standard library | MIT OR Apache-2.0 |
 | Remix Icon | Remix Icon License |
 
 The full dependency list with versions is reproducible from `rust/Cargo.lock`

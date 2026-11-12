@@ -60,6 +60,17 @@ All notable changes to Freya NLE are documented in this file.
   fragment types the application already opens from the command line
 - `BUILD.py --arch` no longer requires distrobox: where only podman is
   installed, it runs the build in a container of its own
+### Fixed
+- Documentation that told readers to run commands that cannot work: the
+  `freya-nle-slint` package name in `rust/freya-nle/README.md`, the "open the Lua
+  console" step in the plugin examples (there is no console; use Tools -> Log),
+  the pre-0.8 artifact names in `CONTRIBUTING.md`, the `.aviqtlfrag` fragment
+  format, and a licence table that put winit under MIT and omitted tiny-skia,
+  cpal, rfd, libloading, fontdb, and rustybuzz
+- The Japanese README said the Qt Quick line was still being pursued in the
+  present tense, and both translations were missing the fragments feature and the
+  GPU requirement note
+
 - A packaging pull request runs the workspace checks once instead of twice:
   `analysis.yml` already calls the same reusable workflow, so `package.yml` only
   keeps its `test` job for the release path. Markdown-only and probe-only pull
@@ -114,6 +125,11 @@ All notable changes to Freya NLE are documented in this file.
   release job, or script ever read them
 - `vendor/` from `.gitignore` and from `BUILD.py`'s Carla discovery. Nothing wrote
   that directory, so the ignore rule promised a staging area the build did not use
+- Five audit records whose subject or conclusion a shipped change replaced
+  (the Qt-frontend code audit, the dependency-boundary proposal, the September
+  parity burn-down and its polish pass, and the authoritative-run note). What
+  each settled is one line in `audits/README.md`, which now indexes the records
+  that remain by status
 
 ## [0.8.0] - 2026-11-09
 

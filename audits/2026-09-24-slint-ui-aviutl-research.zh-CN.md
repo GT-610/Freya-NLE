@@ -38,7 +38,7 @@
 | 快捷键自定义 | `src/shortcuts.rs:236` 起共 34 项；系统设置为文本输入 | 有能力，但录入、发现和冲突反馈可提升 |
 | 窗口几何持久化 | `src/dialogs.rs:266` 起、`src/lifecycle.rs` | 已有保存恢复；布局预设/重置入口可另加 |
 
-旧文件 `audits/2026-09-slint-ui-parity.md` 的修复记录仍有参考价值，但其“MenuItem 没有 icon 和 shortcut，因此必须自绘菜单”的结论不适用于当前锁定版本，详见第 4 项。
+该轮修复的结论已并入 [2026-10-23-slint-ui-parity-gate.md](2026-10-23-slint-ui-parity-gate.md)（见 [README](README.md)）。其中“MenuItem 没有 icon 和 shortcut，因此必须自绘菜单”的结论不适用于当前锁定版本，详见第 4 项。
 
 **3. 优先优化的交互及代码依据。**
 

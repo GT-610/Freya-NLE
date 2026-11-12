@@ -30,11 +30,15 @@
 ### 主要特性
 
 - 与 AviUtl 极为相似的用户界面
+- **片段（.freyafrag）**可无损保存一段剪辑并在别处插入；`.aviqtlfrag` 文件仍可打开
 - 可以导入 **AviUtl 扩展编辑物件文件（.exo）**
 - 使用 GPU 实现的**高速强大特效**
 - 支持 VST3、LV2 等**音频特效**
 - **Lua 插件系统**，支持包管理、声明式参数和权限控制
 - 跨平台：**Linux**、**Windows**、**macOS**
+
+> [!NOTE]
+> Freya NLE 需要**由 GPU 提供的图形适配器**。没有 CPU 或软件渲染模式：预览合成、导出与硬件编解码加速全部在 GPU 上运行。只暴露 Microsoft Basic Render Driver（WARP）这类软件适配器的主机无法运行 Freya NLE，启动时会直接报告不支持，而不是稍后失败。
 
 ## 文档
 

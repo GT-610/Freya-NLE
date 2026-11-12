@@ -18,7 +18,7 @@ JSON + WGSL packages, the only package runtime the Slint edition supports.
 
 1. Copy `hello_mod/` to `<data>/plugins/hello_mod/`
 2. Restart Freya NLE
-3. Open the Lua console and type `hello()`
+3. Check Tools -> Log: the plugin's `Load` hook reports itself there.
 
 ## Extension Types
 

@@ -61,7 +61,9 @@ Freya NLE features a modular effect system. The `effect-packages/` directory con
 | [color-effects](effect-packages/color-effects/) | Effect | Color tint effect |
 | [compute-effects](effect-packages/compute-effects/) | Effect | Compute-shader desaturate and blur |
 
-These packages serve as both useful additions and developer references for creating custom effects. See [effect-packages/README.md](effect-packages/README.md) for details.
+These packages are useful additions and the developer reference for creating custom
+effects. [effect-packages/README.md](effect-packages/README.md) documents the layout,
+the metadata schema, and the shader contract.
 
 ## Related Links
 

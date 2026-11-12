@@ -125,8 +125,9 @@ To prepare a release:
    `## [<version>] - <YYYY-MM-DD>` section and leave `Unreleased` empty.
 3. Run the checks listed in [Adding Tests](#adding-tests), then build and smoke
    test a package with `python3 BUILD.py`. A release publishes five artifacts,
-   one per target — `linux-x86_64.AppImage`, `linux-x86_64-archlinux.tar.zst`,
-   `macos-arm64.zip`, `macos-x86_64.zip`, `windows-x86_64.zip` — plus
+   one per target, all named `Freya-NLE-<version>-<os>-<arch>`:
+   `…-linux-x86_64.AppImage`, `…-linux-x86_64-archlinux.tar.zst`,
+   `…-macos-arm64.zip`, `…-macos-x86_64.zip`, `…-windows-x86_64.zip` — plus
    `SHA256SUMS`, and the release job refuses to publish an incomplete set.
 4. Tag the validated commit `v<version>`. A tag containing `-` is published as a
    GitHub pre-release and does not replace the latest stable release.
