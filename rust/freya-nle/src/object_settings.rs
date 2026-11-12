@@ -19,6 +19,7 @@ use freya_nle_app::effect_catalog::EffectCatalog;
 use freya_nle_app::object_settings::{ObjectControl, ObjectControlKind, ObjectSettings};
 use freya_nle_app::preset_store::PresetStore;
 use freya_nle_app::{ApplicationModel, WorkspaceModel};
+use freya_nle_core::api::EffectMetadata;
 use slint::{Color, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -48,6 +49,16 @@ pub(super) struct ObjectSettingsUi {
 }
 
 impl ObjectSettingsUi {
+    /// Syncs everything the window shows, then raises it. Menu entries open the
+    /// window through this rather than through a bare `sync_object_settings`, so
+    /// a catalog, preset, or palette change cannot be missing on open.
+    pub(super) fn show(&self) {
+        self.sync();
+        if let Some(window) = self.window.upgrade() {
+            let _ = show_and_redraw(&window);
+        }
+    }
+
     pub(super) fn sync(&self) {
         sync_weak_windows(&self.main, &self.timeline, &self.model);
         if let Some(window) = self.window.upgrade() {
@@ -1174,6 +1185,36 @@ pub(super) fn sync_object_settings(
     update_vec_model(&current_rows, rows);
 }
 
+/// One picker row for a catalog entry, with the name and category line localized.
+fn catalog_item(metadata: &EffectMetadata) -> EffectCatalogItemData {
+    EffectCatalogItemData {
+        header: false,
+        id: SharedString::from(metadata.id.clone()),
+        name: SharedString::from(localized_effect_metadata(&metadata.name).into_owned()),
+        categories: SharedString::from(localized_effect_categories(&metadata.categories)),
+    }
+}
+
+/// Whether a catalog entry matches a search box query.
+///
+/// `query` is expected to be trimmed and lowercased already. The localized name
+/// and categories are searched too, so a user who typed what the picker shows
+/// still finds the entry.
+fn catalog_entry_matches(metadata: &EffectMetadata, query: &str) -> bool {
+    query.is_empty()
+        || metadata.id.to_lowercase().contains(query)
+        || metadata.name.to_lowercase().contains(query)
+        || localized_effect_metadata(&metadata.name)
+            .to_lowercase()
+            .contains(query)
+        || metadata.categories.iter().any(|category| {
+            category.to_lowercase().contains(query)
+                || localized_effect_metadata(category)
+                    .to_lowercase()
+                    .contains(query)
+        })
+}
+
 pub(super) fn sync_effect_catalog(
     window: &ObjectSettingsWindow,
     catalog: &EffectCatalog,
@@ -1183,26 +1224,8 @@ pub(super) fn sync_effect_catalog(
     let items = catalog
         .query("effect", "", "")
         .into_iter()
-        .filter(|metadata| {
-            query.is_empty()
-                || metadata.id.to_lowercase().contains(&query)
-                || metadata.name.to_lowercase().contains(&query)
-                || localized_effect_metadata(&metadata.name)
-                    .to_lowercase()
-                    .contains(&query)
-                || metadata.categories.iter().any(|category| {
-                    category.to_lowercase().contains(&query)
-                        || localized_effect_metadata(category)
-                            .to_lowercase()
-                            .contains(&query)
-                })
-        })
-        .map(|metadata| EffectCatalogItemData {
-            header: false,
-            id: SharedString::from(metadata.id.clone()),
-            name: SharedString::from(localized_effect_metadata(&metadata.name).into_owned()),
-            categories: SharedString::from(localized_effect_categories(&metadata.categories)),
-        })
+        .filter(|metadata| catalog_entry_matches(metadata, &query))
+        .map(catalog_item)
         .collect::<Vec<_>>();
     update_vec_model(&window.get_effect_catalog_items(), items);
 }
@@ -1224,12 +1247,7 @@ pub(super) fn initialize_timeline_object_catalog(window: &TimelineWindow, catalo
     let all_items = catalog
         .query("object", "", "")
         .into_iter()
-        .map(|metadata| EffectCatalogItemData {
-            header: false,
-            id: SharedString::from(metadata.id.clone()),
-            name: SharedString::from(localized_effect_metadata(&metadata.name).into_owned()),
-            categories: SharedString::from(localized_effect_categories(&metadata.categories)),
-        })
+        .map(catalog_item)
         .collect::<Vec<_>>();
     let mut menu_categories = vec![ObjectCatalogMenuCategoryData {
         name: SharedString::from(localized("All categories", "所有分类", "すべてのカテゴリ")),
@@ -1242,16 +1260,7 @@ pub(super) fn initialize_timeline_object_catalog(window: &TimelineWindow, catalo
                 catalog
                     .query("object", "", &category)
                     .into_iter()
-                    .map(|metadata| EffectCatalogItemData {
-                        header: false,
-                        id: SharedString::from(metadata.id.clone()),
-                        name: SharedString::from(
-                            localized_effect_metadata(&metadata.name).into_owned(),
-                        ),
-                        categories: SharedString::from(localized_effect_categories(
-                            &metadata.categories,
-                        )),
-                    })
+                    .map(catalog_item)
                     .collect::<Vec<_>>(),
             )),
         }
@@ -1279,26 +1288,8 @@ pub(super) fn sync_timeline_object_catalog(
     let items = catalog
         .query("object", "", category)
         .into_iter()
-        .filter(|metadata| {
-            query.is_empty()
-                || metadata.id.to_lowercase().contains(&query)
-                || metadata.name.to_lowercase().contains(&query)
-                || localized_effect_metadata(&metadata.name)
-                    .to_lowercase()
-                    .contains(&query)
-                || metadata.categories.iter().any(|category| {
-                    category.to_lowercase().contains(&query)
-                        || localized_effect_metadata(category)
-                            .to_lowercase()
-                            .contains(&query)
-                })
-        })
-        .map(|metadata| EffectCatalogItemData {
-            header: false,
-            id: SharedString::from(metadata.id.clone()),
-            name: SharedString::from(localized_effect_metadata(&metadata.name).into_owned()),
-            categories: SharedString::from(localized_effect_categories(&metadata.categories)),
-        })
+        .filter(|metadata| catalog_entry_matches(metadata, &query))
+        .map(catalog_item)
         .collect::<Vec<_>>();
     update_vec_model(&window.get_object_catalog_items(), items);
 }
@@ -1428,26 +1419,8 @@ pub(super) fn timeline_context_catalog_items(
         effect_catalog
             .query(kind, "", "")
             .into_iter()
-            .filter(|metadata| {
-                query.is_empty()
-                    || metadata.id.to_lowercase().contains(&query)
-                    || metadata.name.to_lowercase().contains(&query)
-                    || localized_effect_metadata(&metadata.name)
-                        .to_lowercase()
-                        .contains(&query)
-                    || metadata.categories.iter().any(|category| {
-                        category.to_lowercase().contains(&query)
-                            || localized_effect_metadata(category)
-                                .to_lowercase()
-                                .contains(&query)
-                    })
-            })
-            .map(|metadata| EffectCatalogItemData {
-                header: false,
-                id: SharedString::from(metadata.id.clone()),
-                name: SharedString::from(localized_effect_metadata(&metadata.name).into_owned()),
-                categories: SharedString::from(localized_effect_categories(&metadata.categories)),
-            })
+            .filter(|metadata| catalog_entry_matches(metadata, &query))
+            .map(catalog_item)
             .collect::<Vec<_>>()
     }
 }

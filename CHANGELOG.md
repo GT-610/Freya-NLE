@@ -54,13 +54,17 @@ All notable changes to Freya NLE are documented in this file.
   `.tar.zst` that preserves the executable bit instead of a zip that did not
 - Packaging runs in pinned container images, so a rebuild months later links the
   same glibc and FFmpeg sonames
+- A packaging pull request runs the workspace checks once instead of twice:
+  `analysis.yml` already calls the same reusable workflow, so `package.yml` only
+  keeps its `test` job for the release path. Markdown-only and probe-only pull
+  requests skip the 45-minute container, and `rust-checks.yml` pins the same
+  `archlinux` digest the packaging jobs build and smoke-test against
 
 ### Fixed
 - The macOS bundle gained the icon it never had, and registers the project and
   fragment types the application already opens from the command line
 - `BUILD.py --arch` no longer requires distrobox: where only podman is
   installed, it runs the build in a container of its own
-### Fixed
 - Documentation that told readers to run commands that cannot work: the
   `freya-nle-slint` package name in `rust/freya-nle/README.md`, the "open the Lua
   console" step in the plugin examples (there is no console; use Tools -> Log),
@@ -70,12 +74,6 @@ All notable changes to Freya NLE are documented in this file.
 - The Japanese README said the Qt Quick line was still being pursued in the
   present tense, and both translations were missing the fragments feature and the
   GPU requirement note
-
-- A packaging pull request runs the workspace checks once instead of twice:
-  `analysis.yml` already calls the same reusable workflow, so `package.yml` only
-  keeps its `test` job for the release path. Markdown-only and probe-only pull
-  requests skip the 45-minute container, and `rust-checks.yml` pins the same
-  `archlinux` digest the packaging jobs build and smoke-test against
 
 ### Removed
 - Dead code that no build reached: `ApplicationModel::backup_total_bytes`, the
@@ -130,6 +128,11 @@ All notable changes to Freya NLE are documented in this file.
   parity burn-down and its polish pass, and the authoritative-run note). What
   each settled is one line in `audits/README.md`, which now indexes the records
   that remain by status
+- Three copies of the effect-catalog row projection and three copies of its
+  search predicate in `object_settings.rs`, which had already drifted: the two
+  menu entries that open the object settings window ran `sync_object_settings`
+  alone, so the effect catalog, presets, and palette were stale on open until
+  something else refreshed them
 
 ## [0.8.0] - 2026-11-09
 
