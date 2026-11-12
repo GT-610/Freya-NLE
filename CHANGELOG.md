@@ -67,16 +67,24 @@ All notable changes to Freya NLE are documented in this file.
   segment maths behind them, `XcodeBuilder.verify_minimum_system`, an unused
   Slint settings row (`SystemSettingLineRow`), and the duplicated `#[cfg(test)]`
   on `EasingKind::from_abi`
+- Files nothing referenced: the `assets/aviutl.svg` placeholder, the `triplets/`
+  vcpkg triplet overlays (never selected), and the `.clang-format`/`.clang-tidy`
+  configuration left over from the retired C++ frontend
 - Application APIs only their own tests reached: the index-addressed backup trio
   (`backup_entries`, `remove_backup`, `open_backup_as_project`, superseded by the
   directory-key API the backup window uses), `save_effect_preset` and
   `save_audio_plugin_preset` (superseded by the `*_scoped` form the preset dialog
   calls), `plan_clip_slip_source_start` (the read half of `preview_slip`),
-  `MediaBin::reorder` and `SelectionProperty::present_objects`, neither of which
-  had a UI entry point
-- Files nothing referenced: the `assets/aviutl.svg` placeholder, the `triplets/`
-  vcpkg triplet overlays (never selected), and the `.clang-format`/`.clang-tidy`
-  configuration left over from the retired C++ frontend
+  `MediaBin::reorder`, and `SelectionProperty::present_objects`; the last two had
+  no callback, menu item, or status line, so wiring them meant inventing a
+  feature rather than connecting one
+- The test-only scaffold that sat in the middle of `bake_plan.rs`: the
+  `SceneInput`/`ClipInput`/`EffectInput`/`KeyframeInput` deserialisation model,
+  its eight `serde` default helpers, `keyframe_point`, and the four
+  `#[cfg(test)]` constructors on `ResolvedTrack`, `CachedEffect`, `CachedClip`,
+  and `BakePlan`. They now live in the module's own test block, so production
+  `bake_plan.rs` no longer carries a second, silently drifting copy of the
+  document schema
 
 ## [0.8.0] - 2026-11-09
 

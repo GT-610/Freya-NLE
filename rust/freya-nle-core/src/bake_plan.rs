@@ -419,129 +419,6 @@ pub struct EvaluatedAudioPlugin {
     pub extra: ExtraFields,
 }
 
-#[cfg(test)]
-use serde::Deserialize;
-#[cfg(test)]
-use serde_json::Map;
-
-#[cfg(test)]
-fn default_max_clip_id() -> i32 {
-    4096
-}
-
-#[cfg(test)]
-fn default_scene_width() -> i32 {
-    1920
-}
-
-#[cfg(test)]
-fn default_scene_height() -> i32 {
-    1080
-}
-
-#[cfg(test)]
-fn default_enabled() -> bool {
-    true
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg(test)]
-struct SceneInput {
-    fps: f64,
-    #[serde(default = "default_scene_width")]
-    width: i32,
-    #[serde(default = "default_scene_height")]
-    height: i32,
-    #[serde(default = "default_max_clip_id")]
-    max_clip_id: i32,
-    #[serde(default)]
-    clips: Vec<ClipInput>,
-    #[serde(default)]
-    layer_settings: Vec<LayerSettingDocument>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg(test)]
-struct ClipInput {
-    id: i32,
-    #[serde(default)]
-    layer: i32,
-    #[serde(default)]
-    start_frame: i32,
-    #[serde(default)]
-    duration_frames: i32,
-    #[serde(default)]
-    clip_by_upper_object: bool,
-    #[serde(default, rename = "type")]
-    clip_type: String,
-    #[serde(default)]
-    effects: Vec<EffectInput>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg(test)]
-struct EffectInput {
-    #[serde(default)]
-    id: String,
-    /// Display name, which `Effect.Param` references match.
-    #[serde(default)]
-    name: String,
-    /// Unknown fields ride along, including the `expressions` map.
-    #[serde(flatten)]
-    extra: ExtraFields,
-    #[serde(default = "default_enabled")]
-    enabled: bool,
-    #[serde(default)]
-    known: bool,
-    #[serde(default)]
-    params: BTreeMap<String, Value>,
-    #[serde(default)]
-    keyframes: BTreeMap<String, Vec<KeyframeInput>>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg(test)]
-struct KeyframeInput {
-    #[serde(default)]
-    frame: i32,
-    #[serde(default)]
-    value: Value,
-    #[serde(default = "default_interpolation", rename = "interp")]
-    interpolation: String,
-    #[serde(default = "default_bzx1")]
-    bzx1: f64,
-    #[serde(default)]
-    bzy1: f64,
-    #[serde(default = "default_bzx2")]
-    bzx2: f64,
-    #[serde(default = "default_bzy2")]
-    bzy2: f64,
-}
-
-#[cfg(test)]
-fn default_interpolation() -> String {
-    "linear".to_owned()
-}
-
-#[cfg(test)]
-fn default_bzx1() -> f64 {
-    0.33
-}
-
-#[cfg(test)]
-fn default_bzx2() -> f64 {
-    0.66
-}
-
-#[cfg(test)]
-fn default_bzy2() -> f64 {
-    1.0
-}
-
 fn payload(value: &Value) -> &Value {
     value
         .as_object()
@@ -588,34 +465,6 @@ fn point_value(point: &Value) -> Option<&Value> {
     point.as_object().and_then(|point| point.get("value"))
 }
 
-#[cfg(test)]
-fn keyframe_point(keyframe: KeyframeInput) -> Value {
-    let mut point = Map::new();
-    point.insert("frame".to_owned(), Value::from(keyframe.frame));
-    point.insert("value".to_owned(), keyframe.value);
-    let custom = keyframe.interpolation == "custom";
-    point.insert("interp".to_owned(), Value::String(keyframe.interpolation));
-    if custom {
-        point.insert(
-            "points".to_owned(),
-            Value::Array(
-                [
-                    keyframe.bzx1,
-                    keyframe.bzy1,
-                    keyframe.bzx2,
-                    keyframe.bzy2,
-                    1.0,
-                    1.0,
-                ]
-                .into_iter()
-                .map(Value::from)
-                .collect(),
-            ),
-        );
-    }
-    Value::Object(point)
-}
-
 struct ResolvedTrack {
     fallback: Value,
     points: Vec<Value>,
@@ -623,33 +472,6 @@ struct ResolvedTrack {
 }
 
 impl ResolvedTrack {
-    #[cfg(test)]
-    fn new(keyframes: Vec<KeyframeInput>, fallback: Value, duration: i32) -> Self {
-        let mut start = Map::new();
-        start.insert("frame".to_owned(), Value::from(0));
-        start.insert("value".to_owned(), fallback.clone());
-        start.insert("interp".to_owned(), Value::String("none".to_owned()));
-        let mut points = Vec::new();
-        for keyframe in keyframes {
-            let point = keyframe_point(keyframe);
-            if point
-                .as_object()
-                .and_then(|point| point.get("frame"))
-                .and_then(Value::as_i64)
-                .is_some_and(|frame| frame <= 0)
-            {
-                start = point.as_object().cloned().unwrap_or_default();
-            } else {
-                points.push(point);
-            }
-        }
-        let track = Value::Object(Map::from_iter([
-            ("start".to_owned(), Value::Object(start)),
-            ("points".to_owned(), Value::Array(points)),
-        ]));
-        Self::from_document_track(&track, fallback, duration)
-    }
-
     fn from_document_track(track: &Value, fallback: Value, duration: i32) -> Self {
         let points = resolve_track(track, &fallback, duration);
         let numeric = points
@@ -690,36 +512,6 @@ struct CachedEffect {
 }
 
 impl CachedEffect {
-    #[cfg(test)]
-    fn new(input: EffectInput, duration: i32, fps: f64) -> Self {
-        let mut all_keys: BTreeSet<String> = input.params.keys().cloned().collect();
-        all_keys.insert("time".to_owned());
-        let mut tracks = BTreeMap::new();
-        for (name, keyframes) in input.keyframes {
-            all_keys.insert(name.clone());
-            let fallback = input.params.get(&name).cloned().unwrap_or(Value::Null);
-            tracks.insert(name, ResolvedTrack::new(keyframes, fallback, duration));
-        }
-        let numeric_track_count = tracks.values().filter(|track| track.numeric).count();
-        let expressions = expressions_from_extra(&input.extra);
-        Self {
-            id: input.id,
-            name: input.name,
-            enabled: input.enabled,
-            known: input.known,
-            fps,
-            params: input.params,
-            extra: input.extra,
-            tracks,
-            all_keys: all_keys.into_iter().collect(),
-            numeric_track_count,
-            last_numeric_frame: None,
-            numeric_values: BTreeMap::new(),
-            resolved_expressions: BTreeMap::new(),
-            expressions,
-        }
-    }
-
     fn from_document(effect: &EffectDocument, duration: i32, fps: f64) -> Self {
         let params = effect
             .params
@@ -950,28 +742,6 @@ struct EvaluatedGroupControl {
 }
 
 impl CachedClip {
-    #[cfg(test)]
-    fn new(input: ClipInput, fps: f64) -> Self {
-        let effects = input
-            .effects
-            .into_iter()
-            .map(|effect| CachedEffect::new(effect, input.duration_frames, fps))
-            .collect();
-        Self {
-            clip_id: input.id,
-            layer: input.layer,
-            start_frame: input.start_frame,
-            duration_frames: input.duration_frames,
-            end_frame: input
-                .start_frame
-                .saturating_add(input.duration_frames.max(0)),
-            clip_by_upper_object: input.clip_by_upper_object,
-            clip_type: input.clip_type,
-            audio_plugins: Vec::new(),
-            effects,
-        }
-    }
-
     fn from_document(clip: &ClipDocument, fps: f64) -> Self {
         let audio_plugins = clip
             .audio_plugins
@@ -1412,36 +1182,6 @@ fn finite_f32(value: f64) -> f32 {
 }
 
 impl BakePlan {
-    #[cfg(test)]
-    fn parse(input: &[u8]) -> Result<Self, ()> {
-        let input: SceneInput = serde_json::from_slice(input).map_err(|_| ())?;
-        if input.max_clip_id <= 0 {
-            return Err(());
-        }
-        let fps = input.fps;
-        let max_clip_id = input.max_clip_id;
-        let clips = input
-            .clips
-            .into_iter()
-            .filter(|clip| clip.id >= 0 && clip.id < max_clip_id)
-            .map(|clip| CachedClip::new(clip, fps))
-            .collect();
-        let layer_settings = input
-            .layer_settings
-            .iter()
-            .map(|setting| (setting.layer, LayerSetting::from_document(setting)))
-            .collect();
-        Ok(Self::from_clips(
-            fps,
-            input.width,
-            input.height,
-            0,
-            clips,
-            HashMap::new(),
-            layer_settings,
-        ))
-    }
-
     fn from_document(
         document: &ProjectDocument,
         scene_id: i32,
@@ -2604,6 +2344,256 @@ fn audio_layer_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn default_bzy2() -> f64 {
+        1.0
+    }
+
+    fn default_bzx2() -> f64 {
+        0.66
+    }
+
+    fn default_bzx1() -> f64 {
+        0.33
+    }
+
+    fn default_interpolation() -> String {
+        "linear".to_owned()
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct KeyframeInput {
+        #[serde(default)]
+        frame: i32,
+        #[serde(default)]
+        value: Value,
+        #[serde(default = "default_interpolation", rename = "interp")]
+        interpolation: String,
+        #[serde(default = "default_bzx1")]
+        bzx1: f64,
+        #[serde(default)]
+        bzy1: f64,
+        #[serde(default = "default_bzx2")]
+        bzx2: f64,
+        #[serde(default = "default_bzy2")]
+        bzy2: f64,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct EffectInput {
+        #[serde(default)]
+        id: String,
+        /// Display name, which `Effect.Param` references match.
+        #[serde(default)]
+        name: String,
+        /// Unknown fields ride along, including the `expressions` map.
+        #[serde(flatten)]
+        extra: ExtraFields,
+        #[serde(default = "default_enabled")]
+        enabled: bool,
+        #[serde(default)]
+        known: bool,
+        #[serde(default)]
+        params: BTreeMap<String, Value>,
+        #[serde(default)]
+        keyframes: BTreeMap<String, Vec<KeyframeInput>>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ClipInput {
+        id: i32,
+        #[serde(default)]
+        layer: i32,
+        #[serde(default)]
+        start_frame: i32,
+        #[serde(default)]
+        duration_frames: i32,
+        #[serde(default)]
+        clip_by_upper_object: bool,
+        #[serde(default, rename = "type")]
+        clip_type: String,
+        #[serde(default)]
+        effects: Vec<EffectInput>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SceneInput {
+        fps: f64,
+        #[serde(default = "default_scene_width")]
+        width: i32,
+        #[serde(default = "default_scene_height")]
+        height: i32,
+        #[serde(default = "default_max_clip_id")]
+        max_clip_id: i32,
+        #[serde(default)]
+        clips: Vec<ClipInput>,
+        #[serde(default)]
+        layer_settings: Vec<LayerSettingDocument>,
+    }
+
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_scene_height() -> i32 {
+        1080
+    }
+
+    fn default_scene_width() -> i32 {
+        1920
+    }
+
+    fn default_max_clip_id() -> i32 {
+        4096
+    }
+
+    use serde_json::Map;
+
+    use serde::Deserialize;
+
+    fn keyframe_point(keyframe: KeyframeInput) -> Value {
+        let mut point = Map::new();
+        point.insert("frame".to_owned(), Value::from(keyframe.frame));
+        point.insert("value".to_owned(), keyframe.value);
+        let custom = keyframe.interpolation == "custom";
+        point.insert("interp".to_owned(), Value::String(keyframe.interpolation));
+        if custom {
+            point.insert(
+                "points".to_owned(),
+                Value::Array(
+                    [
+                        keyframe.bzx1,
+                        keyframe.bzy1,
+                        keyframe.bzx2,
+                        keyframe.bzy2,
+                        1.0,
+                        1.0,
+                    ]
+                    .into_iter()
+                    .map(Value::from)
+                    .collect(),
+                ),
+            );
+        }
+        Value::Object(point)
+    }
+
+    impl BakePlan {
+        fn parse(input: &[u8]) -> Result<Self, ()> {
+            let input: SceneInput = serde_json::from_slice(input).map_err(|_| ())?;
+            if input.max_clip_id <= 0 {
+                return Err(());
+            }
+            let fps = input.fps;
+            let max_clip_id = input.max_clip_id;
+            let clips = input
+                .clips
+                .into_iter()
+                .filter(|clip| clip.id >= 0 && clip.id < max_clip_id)
+                .map(|clip| CachedClip::new(clip, fps))
+                .collect();
+            let layer_settings = input
+                .layer_settings
+                .iter()
+                .map(|setting| (setting.layer, LayerSetting::from_document(setting)))
+                .collect();
+            Ok(Self::from_clips(
+                fps,
+                input.width,
+                input.height,
+                0,
+                clips,
+                HashMap::new(),
+                layer_settings,
+            ))
+        }
+    }
+
+    impl CachedClip {
+        fn new(input: ClipInput, fps: f64) -> Self {
+            let effects = input
+                .effects
+                .into_iter()
+                .map(|effect| CachedEffect::new(effect, input.duration_frames, fps))
+                .collect();
+            Self {
+                clip_id: input.id,
+                layer: input.layer,
+                start_frame: input.start_frame,
+                duration_frames: input.duration_frames,
+                end_frame: input
+                    .start_frame
+                    .saturating_add(input.duration_frames.max(0)),
+                clip_by_upper_object: input.clip_by_upper_object,
+                clip_type: input.clip_type,
+                audio_plugins: Vec::new(),
+                effects,
+            }
+        }
+    }
+
+    impl CachedEffect {
+        fn new(input: EffectInput, duration: i32, fps: f64) -> Self {
+            let mut all_keys: BTreeSet<String> = input.params.keys().cloned().collect();
+            all_keys.insert("time".to_owned());
+            let mut tracks = BTreeMap::new();
+            for (name, keyframes) in input.keyframes {
+                all_keys.insert(name.clone());
+                let fallback = input.params.get(&name).cloned().unwrap_or(Value::Null);
+                tracks.insert(name, ResolvedTrack::new(keyframes, fallback, duration));
+            }
+            let numeric_track_count = tracks.values().filter(|track| track.numeric).count();
+            let expressions = expressions_from_extra(&input.extra);
+            Self {
+                id: input.id,
+                name: input.name,
+                enabled: input.enabled,
+                known: input.known,
+                fps,
+                params: input.params,
+                extra: input.extra,
+                tracks,
+                all_keys: all_keys.into_iter().collect(),
+                numeric_track_count,
+                last_numeric_frame: None,
+                numeric_values: BTreeMap::new(),
+                resolved_expressions: BTreeMap::new(),
+                expressions,
+            }
+        }
+    }
+
+    impl ResolvedTrack {
+        fn new(keyframes: Vec<KeyframeInput>, fallback: Value, duration: i32) -> Self {
+            let mut start = Map::new();
+            start.insert("frame".to_owned(), Value::from(0));
+            start.insert("value".to_owned(), fallback.clone());
+            start.insert("interp".to_owned(), Value::String("none".to_owned()));
+            let mut points = Vec::new();
+            for keyframe in keyframes {
+                let point = keyframe_point(keyframe);
+                if point
+                    .as_object()
+                    .and_then(|point| point.get("frame"))
+                    .and_then(Value::as_i64)
+                    .is_some_and(|frame| frame <= 0)
+                {
+                    start = point.as_object().cloned().unwrap_or_default();
+                } else {
+                    points.push(point);
+                }
+            }
+            let track = Value::Object(Map::from_iter([
+                ("start".to_owned(), Value::Object(start)),
+                ("points".to_owned(), Value::Array(points)),
+            ]));
+            Self::from_document_track(&track, fallback, duration)
+        }
+    }
     use serde_json::json;
 
     fn scene_json() -> Vec<u8> {
