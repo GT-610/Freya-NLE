@@ -3441,7 +3441,7 @@ pub(super) fn install_callbacks(
         if let Err(error) =
             save_timeline_preview_settings(&adjust_preview_settings, None, Some(next))
         {
-            eprintln!("Could not save the preview height: {error}");
+            log::warn!(target: "ui", "Could not save the preview height: {error}");
         }
     });
     let own_preview_target = main.as_weak();
@@ -3449,7 +3449,7 @@ pub(super) fn install_callbacks(
         if let Some(main) = own_preview_target.upgrade()
             && let Err(error) = main.show()
         {
-            eprintln!("Could not show the preview window: {error}");
+            log::warn!(target: "ui", "Could not show the preview window: {error}");
         }
     });
     let preview_window_target = main.as_weak();
@@ -3458,7 +3458,7 @@ pub(super) fn install_callbacks(
             // The merged layout lets the preview window be closed; this is the
             // way back from the timeline's View menu.
             if let Err(error) = main.show() {
-                eprintln!("Could not show the preview window: {error}");
+                log::warn!(target: "ui", "Could not show the preview window: {error}");
             }
         }
     });
@@ -3480,7 +3480,7 @@ pub(super) fn install_callbacks(
         if let Err(error) =
             save_timeline_preview_settings(&preview_height_settings, None, Some(height))
         {
-            eprintln!("Could not save the preview height: {error}");
+            log::warn!(target: "ui", "Could not save the preview height: {error}");
         }
     });
 
@@ -3503,7 +3503,7 @@ pub(super) fn install_callbacks(
         if let Err(error) =
             save_timeline_preview_settings(&preview_toggle_settings, Some(visible), None)
         {
-            eprintln!("Could not save the timeline preview preference: {error}");
+            log::warn!(target: "ui", "Could not save the timeline preview preference: {error}");
         }
     });
 

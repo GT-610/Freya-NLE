@@ -411,7 +411,7 @@ pub(super) fn sync_project_tabs(
 
 pub(super) fn update_vec_model<T: Clone + 'static>(model: &ModelRc<T>, rows: Vec<T>) {
     let Some(model) = model.as_any().downcast_ref::<VecModel<T>>() else {
-        eprintln!("UI list was replaced with a non-VecModel; skipping sync");
+        log::warn!(target: "ui", "UI list was replaced with a non-VecModel; skipping sync");
         return;
     };
     let common_rows = model.row_count().min(rows.len());

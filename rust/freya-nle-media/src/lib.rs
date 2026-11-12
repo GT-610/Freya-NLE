@@ -1,6 +1,7 @@
 //! Rust-owned media decoding for the egui/wgpu application.
 
 mod encoder;
+pub mod log_bridge;
 
 pub use encoder::{
     EncodeError, StillImageFormat, VideoEncoder, VideoEncoderConfig, available_audio_encoders,

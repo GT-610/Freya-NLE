@@ -1165,7 +1165,7 @@ pub(super) fn update_export(
     match planned {
         Ok((planned, project_path)) => {
             for warning in planned.warnings {
-                eprintln!("Export planning warning: {warning}");
+                log::warn!(target: "export", "Export planning warning: {warning}");
             }
             manager.borrow_mut().submit_scene(
                 planned.scene,

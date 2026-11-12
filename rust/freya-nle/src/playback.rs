@@ -188,7 +188,7 @@ impl PreviewRuntime {
                 )
             }) {
                 for warning in planned.warnings {
-                    eprintln!("Preview planning warning: {warning}");
+                    log::warn!(target: "preview", "Preview planning warning: {warning}");
                 }
                 self.decoder.request(planned.scene);
             }
@@ -198,7 +198,7 @@ impl PreviewRuntime {
             return false;
         };
         for error in &batch.errors {
-            eprintln!("Preview decode warning: {error}");
+            log::warn!(target: "preview", "Preview decode warning: {error}");
         }
         let target_replaced = self.surface.compose(&batch.scene, batch.generation);
         if target_replaced {
@@ -211,7 +211,9 @@ impl PreviewRuntime {
                         timeline.set_preview_image(image);
                     }
                 }
-                Err(error) => eprintln!("Preview texture import failed: {error}"),
+                Err(error) => {
+                    log::warn!(target: "preview", "Preview texture import failed: {error}")
+                }
             }
         }
         true
@@ -336,7 +338,7 @@ impl AudioPlaybackRuntime {
                 break;
             };
             for warning in planned.warnings {
-                eprintln!("Audio preview planning warning: {warning}");
+                log::warn!(target: "audio", "Audio preview planning warning: {warning}");
             }
             let sources = resolve_timeline_audio_sources(
                 planned.audio,
@@ -353,7 +355,7 @@ impl AudioPlaybackRuntime {
             ) {
                 Ok(block) => {
                     for error in block.errors {
-                        eprintln!("Audio preview warning: {error}");
+                        log::warn!(target: "audio", "Audio preview warning: {error}");
                     }
                     self.master_levels = stereo_levels(&block.samples);
                     self.track_levels = block
@@ -375,7 +377,9 @@ impl AudioPlaybackRuntime {
                         output.enqueue_stereo(&block.samples);
                     }
                 }
-                Err(error) => eprintln!("Audio preview timing warning: {error:?}"),
+                Err(error) => {
+                    log::warn!(target: "audio", "Audio preview timing warning: {error:?}")
+                }
             }
             self.next_frame = Some(frame.saturating_add(1));
         }
@@ -417,7 +421,7 @@ impl AudioPlaybackRuntime {
             }
             Err(error) => {
                 if self.output_error != error {
-                    eprintln!("Audio preview unavailable: {error}");
+                    log::warn!(target: "audio", "Audio preview unavailable: {error}");
                 }
                 self.output_error = error;
                 false
@@ -524,7 +528,7 @@ impl TimelineWaveformRuntime {
                 self.worker_stop = Some(worker_stop);
             }
             Err(error) => {
-                eprintln!("Failed to start waveform builder: {error}");
+                log::warn!(target: "playback", "Failed to start waveform builder: {error}");
                 self.completed_key = Some(source_key);
             }
         }
