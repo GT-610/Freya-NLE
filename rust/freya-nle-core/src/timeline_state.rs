@@ -2540,43 +2540,34 @@ mod tests {
     }
 
     #[test]
-    fn document_validation_rejects_out_of_order_marks() {
-        let mut document = document();
-        document.scenes[0].marks = vec![mark(4, ""), mark(2, "")];
-        assert_eq!(
-            TimelineState::new(document, 2, 1).err(),
-            Some(StateError::InvalidArgument)
-        );
-    }
-
-    #[test]
-    fn document_validation_rejects_negative_clip_groups() {
-        let mut document = document();
-        document.clips[0].group = Some(-1);
-        assert_eq!(
-            TimelineState::new(document, 2, 1).err(),
-            Some(StateError::InvalidArgument)
-        );
-    }
-
-    #[test]
-    fn document_validation_rejects_multiline_scene_labels() {
-        let mut document = document();
-        document.scenes[0].label = "line\nbreak".to_owned();
-        assert_eq!(
-            TimelineState::new(document, 2, 1).err(),
-            Some(StateError::InvalidArgument)
-        );
-    }
-
-    #[test]
-    fn document_validation_rejects_out_of_order_layer_settings() {
-        let mut document = document();
-        document.scenes[0].layer_settings = vec![layer_setting(3, ""), layer_setting(1, "")];
-        assert_eq!(
-            TimelineState::new(document, 2, 1).err(),
-            Some(StateError::InvalidArgument)
-        );
+    fn document_validation_rejects_every_malformed_field() {
+        // One case per rule the loader enforces, so a rule that stops rejecting a
+        // malformed document fails here by name instead of passing silently.
+        type Corrupt = fn(&mut ProjectDocument);
+        let cases: [(&str, Corrupt); 4] = [
+            ("out-of-order marks", |document| {
+                document.scenes[0].marks = vec![mark(4, ""), mark(2, "")];
+            }),
+            ("negative clip group", |document| {
+                document.clips[0].group = Some(-1);
+            }),
+            ("multiline scene label", |document| {
+                document.scenes[0].label = "line\nbreak".to_owned();
+            }),
+            ("out-of-order layer settings", |document| {
+                document.scenes[0].layer_settings =
+                    vec![layer_setting(3, ""), layer_setting(1, "")];
+            }),
+        ];
+        for (rule, corrupt) in cases {
+            let mut document = document();
+            corrupt(&mut document);
+            assert_eq!(
+                TimelineState::new(document, 2, 1).err(),
+                Some(StateError::InvalidArgument),
+                "{rule} must be rejected"
+            );
+        }
     }
 
     #[test]

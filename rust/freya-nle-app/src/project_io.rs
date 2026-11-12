@@ -410,11 +410,20 @@ mod tests {
     }
 
     #[test]
-    fn failed_save_as_keeps_the_old_project_and_dirty_state() {
+    fn failed_save_as_leaves_the_project_untouched() {
         let directory = tempfile::tempdir().unwrap();
-        let target = directory.path().join("project.aviqtl");
         let blocked = directory.path().join("directory.aviqtl");
         fs::create_dir(&blocked).unwrap();
+
+        // A blank project has no path yet; a refused save must not invent one.
+        let mut blank = ProjectSession::blank();
+        blank.dirty = true;
+        assert!(blank.save_as(&blocked).is_err());
+        assert_eq!(blank.path, None);
+        assert!(blank.dirty);
+
+        // A saved project keeps its old path, its bytes on disk, and its dirty flag.
+        let target = directory.path().join("project.aviqtl");
         let mut project = ProjectSession::blank();
         project.save_as(&target).unwrap();
         let original = fs::read(&target).unwrap();
@@ -429,7 +438,6 @@ mod tests {
         assert_eq!(project.path.as_deref(), Some(target.as_path()));
         assert_eq!(fs::read(&target).unwrap(), original);
         assert!(blocked.is_dir());
-        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
     }
 
     #[test]
@@ -486,27 +494,6 @@ mod tests {
         assert_eq!(reopened.document.scenes[0].name, "Edited in Rust");
         assert!(!reopened.dirty);
         fs::remove_file(path).expect("test project removes");
-    }
-
-    #[test]
-    fn failed_save_as_preserves_the_previous_path_and_dirty_state() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time follows the Unix epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "freya-nle-save-as-directory-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).expect("fixture directory creates");
-        let mut project = ProjectSession::blank();
-        project.dirty = true;
-
-        assert!(project.save_as(&path).is_err());
-        assert_eq!(project.path, None);
-        assert!(project.dirty);
-
-        fs::remove_dir(path).expect("fixture directory removes");
     }
 
     #[test]

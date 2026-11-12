@@ -3984,11 +3984,6 @@ mod tests {
     }
 
     #[test]
-    fn uniform_layout_is_six_wgsl_vec4_values() {
-        assert_eq!(f32_bytes([0.0; 24]).len(), 96);
-    }
-
-    #[test]
     fn frame_stamp_changes_only_for_a_new_decoded_frame_or_size() {
         let first = frame(100, 50);
         let mut same_frame = frame(100, 50);

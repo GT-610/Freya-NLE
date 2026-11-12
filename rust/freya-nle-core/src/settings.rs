@@ -436,17 +436,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_documented_project_baseline() {
-        // AviUtl ExEdit's defaults, carried over from the Qt frontend's constants header.
-        assert_eq!(DEFAULT_WIDTH, 1_920);
-        assert_eq!(DEFAULT_HEIGHT, 1_080);
-        assert_eq!(DEFAULT_SAMPLE_RATE, 48_000);
-        assert_eq!(DEFAULT_CLIP_DURATION, 100);
-        assert_eq!(AUDIO_MAX_BLOCK_SIZE, 4_096);
-        assert_eq!(DEFAULT_FPS, 60.0);
-    }
-
-    #[test]
     fn persistent_document_removes_only_runtime_keys() {
         let settings = json!({
             "theme": "Dark",

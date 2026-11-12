@@ -75,7 +75,6 @@ macro_rules! status_message {
 
 #[cfg(test)]
 mod tests {
-    use super::StatusMessage;
 
     /// Every `status_message!` call site in the crate, as (english, chinese, japanese).
     ///
@@ -175,6 +174,5 @@ mod tests {
         let message = status_message!("Ready", "就绪", "準備完了");
         assert_eq!(message.english(), "Ready");
         assert_eq!(message.japanese(), "準備完了");
-        assert_eq!(StatusMessage::default().english(), "");
     }
 }

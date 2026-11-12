@@ -132,21 +132,11 @@ fn directory_is_writable(directory: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-    fn temporary_root() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "freya-nle-egui-presets-{}-{}",
-            std::process::id(),
-            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
-        ))
-    }
 
     #[test]
     fn save_load_list_delete_and_identity_checks_match_qt() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().to_path_buf();
         let store = PresetStore::from_root(root.clone());
         store
             .save(

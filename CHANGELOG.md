@@ -85,6 +85,16 @@ All notable changes to Freya NLE are documented in this file.
   and `BakePlan`. They now live in the module's own test block, so production
   `bake_plan.rs` no longer carries a second, silently drifting copy of the
   document schema
+- Twelve hand-written temporary-directory helpers across the app, media, and
+  export test modules, each rebuilding the same timestamp/pid/sequence name and
+  removing the tree only if the assertions passed first. The tests now take a
+  `tempfile::TempDir` guard, so a failing assertion no longer leaves files in the
+  system temp directory
+- Four tests that could not fail: a row projection asserted against a closure
+  defined beside it, a `unicode-normalization` behaviour check, a
+  `f32_bytes(..).len()` constant, and a compile-time-only `va_list` assertion;
+  plus the self-referential default-constants check in `settings.rs` and a
+  `StatusMessage::default()` line
 
 ## [0.8.0] - 2026-11-09
 

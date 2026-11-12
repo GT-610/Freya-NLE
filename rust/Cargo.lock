@@ -1846,6 +1846,7 @@ dependencies = [
  "freya-nle-core",
  "freya-nle-media",
  "freya-nle-preview",
+ "tempfile",
  "wgpu",
 ]
 
@@ -1856,6 +1857,7 @@ dependencies = [
  "ffmpeg-the-third",
  "image",
  "log",
+ "tempfile",
 ]
 
 [[package]]

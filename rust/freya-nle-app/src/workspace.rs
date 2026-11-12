@@ -6365,17 +6365,6 @@ mod tests {
     use crate::timeline_interaction::TimelineDragKind;
     use freya_nle_core::api::{TimelineState, clip_midpoints};
 
-    fn temporary_media_file(extension: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-media-{}-{}.{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id(),
-            extension
-        ));
-        std::fs::write(&path, []).expect("temporary media placeholder is writable");
-        path
-    }
-
     fn selected_ids(workspace: &WorkspaceModel) -> Vec<i32> {
         let mut ids: Vec<i32> = workspace
             .timeline_clips()
@@ -8110,8 +8099,12 @@ mod tests {
         let mut workspace = workspace();
         assert!(workspace.media_bin().is_empty(), "absence means never used");
 
-        let video = temporary_media_file("png");
-        let audio = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let video = temp.path().join("video.png");
+        std::fs::write(&video, []).expect("temporary media placeholder is writable");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let audio = temp.path().join("audio.wav");
+        std::fs::write(&audio, []).expect("temporary media placeholder is writable");
         // The same file twice plus a different file must yield two entries, not three.
         let paths = [video.clone(), video.clone(), audio.clone()];
         assert_eq!(workspace.add_media_to_bin(&paths, 60.0, 15), 2);
@@ -8137,7 +8130,9 @@ mod tests {
     #[test]
     fn media_bin_ranges_clamp_and_missing_entries_are_reported() {
         let mut workspace = workspace();
-        let path = temporary_media_file("png");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.png");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         assert_eq!(
             workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 40),
             1
@@ -8166,7 +8161,9 @@ mod tests {
     #[test]
     fn media_bin_groups_assign_an_entry_to_at_most_one_group() {
         let mut workspace = workspace();
-        let path = temporary_media_file("png");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.png");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 30);
         let entry_id = workspace.media_bin().entries()[0].id;
 
@@ -8197,7 +8194,9 @@ mod tests {
     fn a_bin_insert_really_uses_the_entry_range() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace_with_row();
-        let path = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.wav");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 40);
         let entry = workspace.media_bin();
         let id = entry.entries()[0].id;
@@ -8230,7 +8229,9 @@ mod tests {
         let mut workspace = workspace_with_row();
         // A wav placeholder tells the probe "no duration", so the bin keeps the requested default
         // of 20; the range then makes the inserted block five frames long.
-        let path = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.wav");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
         let id = workspace.media_bin().entries()[0].id;
         assert!(workspace.set_media_bin_range(id, Some(0), Some(5)));
@@ -8295,7 +8296,9 @@ mod tests {
         // A video entry writes a video clip on the requested layer and a linked audio clip one
         // layer below it. Layer 1 is empty here, so nothing overlaps it and only the target-layer
         // check can notice that the lock would be written through.
-        let path = temporary_media_file("mp4");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.mp4");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
         let id = workspace.media_bin().entries()[0].id;
         assert!(workspace.toggle_layer_lock(1));
@@ -8320,7 +8323,9 @@ mod tests {
     fn overwrite_keeps_both_neighbours_of_a_covered_range() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace_with_row();
-        let path = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.wav");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
         let id = workspace.media_bin().entries()[0].id;
         assert!(workspace.set_media_bin_range(id, Some(0), Some(10)));
@@ -8359,7 +8364,9 @@ mod tests {
     fn overwrite_refuses_a_missing_source_before_removing_anything() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace_with_row();
-        let path = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.wav");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
         let id = workspace.media_bin().entries()[0].id;
         std::fs::remove_file(&path).expect("temporary media placeholder is removable");
@@ -8382,7 +8389,9 @@ mod tests {
     fn overwrite_refuses_a_locked_layer_without_changing_anything() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace_with_row();
-        let path = temporary_media_file("png");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.png");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
         let id = workspace.media_bin().entries()[0].id;
         assert!(workspace.toggle_layer_lock(0));
@@ -9078,11 +9087,12 @@ mod tests {
     #[test]
     fn dropped_media_uses_qt_object_shapes_sequential_targets_and_undo_groups() {
         let (catalog, _) = EffectCatalog::load();
-        let paths = [
-            temporary_media_file("png"),
-            temporary_media_file("wav"),
-            temporary_media_file("mp4"),
-        ];
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let paths = ["png", "wav", "mp4"].map(|extension| {
+            let path = temp.path().join(format!("dropped.{extension}"));
+            std::fs::write(&path, []).expect("temporary media placeholder is writable");
+            path
+        });
         let mut workspace = workspace();
 
         assert_eq!(
@@ -9165,7 +9175,9 @@ mod tests {
     fn media_import_applies_creation_defaults_without_losing_the_source() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace();
-        let path = temporary_media_file("png");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.png");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         let expected_path = Value::from(path.to_string_lossy().into_owned());
 
         // The object type's default wins over the effect default for the same
@@ -9232,7 +9244,9 @@ mod tests {
     fn media_import_keeps_a_linked_video_pair_over_stale_defaults() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace();
-        let path = temporary_media_file("mp4");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.mp4");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         let expected_path = Value::from(path.to_string_lossy().into_owned());
 
         // Saved defaults can name a file, in-point, and link state copied from
@@ -9359,7 +9373,9 @@ mod tests {
     fn media_bin_overwrite_applies_creation_defaults_and_keeps_the_range() {
         let (catalog, _) = EffectCatalog::load();
         let mut workspace = workspace_with_row();
-        let path = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("path.wav");
+        std::fs::write(&path, []).expect("temporary media placeholder is writable");
         workspace.add_media_to_bin(std::slice::from_ref(&path), 60.0, 20);
         let id = workspace.media_bin().entries()[0].id;
         assert!(workspace.set_media_bin_range(id, Some(0), Some(5)));
@@ -9410,13 +9426,14 @@ mod tests {
 
     #[test]
     fn missing_media_relink_is_type_safe_dirty_and_undoable() {
-        let missing_path = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-missing-{}-{}.png",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
-        let replacement_path = temporary_media_file("png");
-        let wrong_type_path = temporary_media_file("wav");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let missing_path = temp.path().join("root");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let replacement_path = temp.path().join("replacement_path.png");
+        std::fs::write(&replacement_path, []).expect("temporary media placeholder is writable");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let wrong_type_path = temp.path().join("wrong_type_path.wav");
+        std::fs::write(&wrong_type_path, []).expect("temporary media placeholder is writable");
         let state = TimelineState::from_json(
             format!(
                 r#"{{
@@ -10258,11 +10275,8 @@ mod tests {
 
     #[test]
     fn workspace_preset_actions_round_trip_the_selected_effect() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
@@ -10339,11 +10353,8 @@ mod tests {
 
     #[test]
     fn a_scoped_preset_saves_only_the_chosen_parameters() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-scoped-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let state = TimelineState::from_json(
             br#"{
@@ -10422,11 +10433,8 @@ mod tests {
 
     #[test]
     fn a_scoped_preset_accepts_a_keyframe_only_parameter() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-keyframe-only-scope-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let state = TimelineState::from_json(
             br#"{
@@ -10556,11 +10564,8 @@ mod tests {
     fn effect_presets_round_trip_expressions_and_keep_evaluating() {
         use freya_nle_core::api::SceneRenderPlan;
 
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-expression-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
@@ -10599,11 +10604,8 @@ mod tests {
 
     #[test]
     fn a_preset_without_an_expression_clears_the_target_binding() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-plain-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
@@ -10622,11 +10624,8 @@ mod tests {
 
     #[test]
     fn a_legacy_preset_leaves_the_target_expression_alone() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-legacy-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
@@ -10661,11 +10660,8 @@ mod tests {
 
     #[test]
     fn a_preset_replays_the_expression_of_a_keyframe_only_parameter() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-keyframe-only-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
@@ -10701,11 +10697,8 @@ mod tests {
 
     #[test]
     fn an_oversized_preset_expression_leaves_the_effect_unchanged() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-workspace-oversized-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
@@ -10746,11 +10739,8 @@ mod tests {
 
     #[test]
     fn a_scoped_audio_preset_saves_only_the_chosen_parameters() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-scoped-audio-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_audio_plugins();
         workspace.click_clip(9, false);
@@ -10773,11 +10763,8 @@ mod tests {
 
     #[test]
     fn workspace_preset_actions_round_trip_the_selected_audio_plugin() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-audio-plugin-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let mut workspace = workspace_with_audio_plugins();
         workspace.click_clip(9, false);
@@ -10803,11 +10790,8 @@ mod tests {
 
     #[test]
     fn an_audio_plugin_preset_replaces_the_covered_keyframe_track() {
-        let root = std::env::temp_dir().join(format!(
-            "freya-nle-audio-plugin-track-preset-{}-{}",
-            std::process::id(),
-            crate::recovery::generate_recovery_id()
-        ));
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("root");
         let store = PresetStore::from_root(root.clone());
         let state = TimelineState::from_json(
             br#"{

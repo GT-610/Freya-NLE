@@ -999,7 +999,8 @@ mod tests {
         let mut app = ApplicationModel::default();
         app.create_project(ProjectDefaults::default());
         let placeholder_id = app.current_project_instance_id().expect("project exists");
-        let path = temporary_project_path("replace-placeholder");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replace-placeholder.aviqtl");
         ProjectSession::blank_with(ProjectDefaults::default())
             .save_as(&path)
             .expect("fixture project saves");
@@ -1024,7 +1025,8 @@ mod tests {
             .expect("project exists")
             .project_mut()
             .dirty = true;
-        let path = temporary_project_path("keep-dirty-placeholder");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("keep-dirty-placeholder.aviqtl");
         ProjectSession::blank_with(ProjectDefaults::default())
             .save_as(&path)
             .expect("fixture project saves");
@@ -1044,7 +1046,8 @@ mod tests {
             .expect("project exists")
             .project_mut()
             .dirty = true;
-        let path = temporary_project_path("direct-save");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("direct-save.aviqtl");
 
         assert_eq!(
             app.request_save_current_project(),
@@ -1079,7 +1082,8 @@ mod tests {
     fn saving_keeps_version_history_and_restores_a_copy() {
         let mut app = ApplicationModel::default();
         app.create_project(ProjectDefaults::default());
-        let path = temporary_project_path("backup-history");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("backup-history.aviqtl");
         assert!(matches!(
             app.request_save_current_project(),
             LifecycleStep::ChooseSavePath { .. }
@@ -1138,7 +1142,8 @@ mod tests {
     fn backup_history_browses_every_project_by_directory_key() {
         let mut app = ApplicationModel::default();
         app.create_project(ProjectDefaults::default());
-        let path = temporary_project_path("backup-browse");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("backup-browse.aviqtl");
         assert!(matches!(
             app.request_save_current_project(),
             LifecycleStep::ChooseSavePath { .. }
@@ -1189,7 +1194,8 @@ mod tests {
     fn manual_versions_respect_the_limit_and_the_switch() {
         let mut app = ApplicationModel::default();
         app.create_project(ProjectDefaults::default());
-        let path = temporary_project_path("manual-backup");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("manual-backup.aviqtl");
         assert!(matches!(
             app.request_save_current_project(),
             LifecycleStep::ChooseSavePath { .. }
@@ -1315,7 +1321,8 @@ mod tests {
             .expect("project exists")
             .project_mut()
             .dirty = true;
-        let path = temporary_project_path("deferred-close");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("deferred-close.aviqtl");
 
         assert!(matches!(
             app.request_close_project(0),
@@ -1343,7 +1350,8 @@ mod tests {
             .expect("project exists")
             .project_mut()
             .dirty = true;
-        let path = temporary_project_path("missing-parent").join("project.aviqtl");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("missing-parent").join("project.aviqtl");
 
         app.request_close_project(0);
         app.answer_save_confirmation(SaveDecision::Save);
@@ -1381,7 +1389,8 @@ mod tests {
     /// it deliberately.
     #[test]
     fn a_damaged_snapshot_fails_to_open_without_panicking_or_being_consumed() {
-        let root = temporary_recovery_root("damaged-snapshot");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("damaged-snapshot.recovery");
         std::fs::create_dir_all(&root).expect("recovery root creates");
 
         // A truncated document: real JSON, but not a project.
@@ -1435,7 +1444,8 @@ mod tests {
 
     #[test]
     fn timed_backup_is_recovered_once_and_save_cleans_the_snapshot() {
-        let root = temporary_recovery_root("recover-save");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("recover-save.recovery");
         let mut interrupted = ApplicationModel::with_recovery_root(root.clone());
         let index = interrupted.create_project(ProjectDefaults::default());
         interrupted
@@ -1492,7 +1502,8 @@ mod tests {
                 .starts_with("Recovered - ")
         );
 
-        let save_path = temporary_project_path("recovered-save");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let save_path = temp.path().join("recovered-save.aviqtl");
         assert!(matches!(
             restarted.request_save_current_project(),
             LifecycleStep::ChooseSavePath { .. }
@@ -1515,7 +1526,8 @@ mod tests {
 
     #[test]
     fn close_and_successful_quit_remove_their_recovery_snapshots() {
-        let root = temporary_recovery_root("close-quit");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("close-quit.recovery");
         let mut app = ApplicationModel::with_recovery_root(root.clone());
         for _ in 0..2 {
             let index = app.create_project(ProjectDefaults::default());
@@ -1546,22 +1558,5 @@ mod tests {
         assert!(restarted.recovery_entries().is_empty());
         drop(restarted);
         std::fs::remove_dir_all(root).expect("recovery root removes");
-    }
-
-    fn temporary_project_path(label: &str) -> PathBuf {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time follows the Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "freya-nle-{label}-{}-{nonce}.aviqtl",
-            std::process::id()
-        ))
-    }
-
-    fn temporary_recovery_root(label: &str) -> PathBuf {
-        temporary_project_path(label).with_extension("recovery")
     }
 }

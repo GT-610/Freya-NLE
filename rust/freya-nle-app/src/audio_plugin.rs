@@ -991,28 +991,11 @@ fn format_configs() -> Vec<FormatConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicU64;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-    fn temporary_directory() -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "freya-nle-audio-discovery-{}-{nonce}-{}",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path).expect("temporary directory");
-        path
-    }
 
     #[test]
     fn target_collection_handles_bundles_recursive_files_and_duplicate_roots() {
-        let root = temporary_directory();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().to_path_buf();
         let nested = root.join("nested");
         fs::create_dir_all(root.join("Example.vst3")).expect("bundle directory");
         fs::create_dir_all(&nested).expect("nested directory");
