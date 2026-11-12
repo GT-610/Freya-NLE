@@ -540,7 +540,9 @@ impl RotatingFile {
             .open(&self.path)?;
         self.file = Some(file);
         self.written = 0;
-        Ok(())
+        // The new file starts with the stamp, like a freshly opened one: a
+        // rotation must not leave a file whose build nobody can name.
+        self.write_session_header()
     }
 }
 
@@ -708,6 +710,12 @@ mod tests {
         // The current file plus exactly KEPT_LOG_FILES rotated ones, never more.
         assert_eq!(entries.len() as u32, KEPT_LOG_FILES + 1, "{entries:?}");
         assert!(path.exists());
+        // Each file names the build that wrote it, including the ones a
+        // rotation created.
+        let current = fs::read_to_string(&path).expect("read");
+        assert!(current.starts_with("Freya NLE "), "{current}");
+        let first = fs::read_to_string(directory.join("test.log.1")).expect("read rotated");
+        assert!(first.starts_with("Freya NLE "), "{first}");
     }
 
     #[test]
