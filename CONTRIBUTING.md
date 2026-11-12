@@ -75,13 +75,14 @@ is reported explicitly:
 ```sh
 # FFmpeg CLI on PATH; linked FFmpeg must provide libx264 and aac.
 cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-media -p freya-nle-audio -- --ignored
-# A graphics adapter; the preview tests enable DX12, Vulkan, or Metal by platform.
-cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-preview scaled_msaa_preview -- --ignored
 # Installed Carla libraries; the plugin-processing test also needs AVIQTL_CARLA_TEST_LADSPA.
 cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-carla -- --ignored
 ```
 
-Carla/GPU tests without their dependencies remain unverified, not passed.
+Carla tests without its libraries remain unverified, not passed. The GPU compositing
+tests that used to sit in `freya-nle-preview` were removed: they asked for an adapter no
+CI runner provides, so they never ran anywhere. Check
+the compositor by running the editor and exporting a frame.
 
 ## Qt retirement
 

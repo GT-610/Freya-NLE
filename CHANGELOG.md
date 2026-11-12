@@ -95,6 +95,10 @@ All notable changes to Freya NLE are documented in this file.
   `f32_bytes(..).len()` constant, and a compile-time-only `va_list` assertion;
   plus the self-referential default-constants check in `settings.rs` and a
   `StatusMessage::default()` line
+- The six GPU compositing tests in `freya-nle-preview`. They required a real
+  adapter and were `#[ignore]`d, and no CI job ran them, so the compute-effect
+  and MSAA paths they described have been unexecuted since they were written.
+  `CONTRIBUTING.md` no longer offers a command for them
 
 ## [0.8.0] - 2026-11-09
 
