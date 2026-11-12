@@ -1,6 +1,41 @@
-# Contributing to Freya NLE
+Thank you for your interest in contributing to Freya NLE!
 
-Thank you for your interest in contributing!
+## AI/LLM Contributions
+
+You may use AI/LLMs. They are tools, like a compiler or an autocomplete
+engine, and the person who runs them is the author: if you wrote a change with
+an LLM, you still wrote it, and you are the one who answers for it.
+
+Four rules follow from that:
+
+- **You are the author.** Understand the change and test it before you open a
+  pull request. "The model wrote it" is not an answer to a review question,
+  and a patch you cannot explain is not ready to merge however well it
+  compiles.
+- **Do not sign an AI's name.** Do not name a model or AI tool as an author or
+  co-author, put one in a `Signed-off-by` line, or add a "generated with" note
+  to a commit or pull request — some tools append one automatically, so check
+  before you push. Every name in a signature has to be a person, because a
+  signature means someone is accountable for the change and a model cannot be.
+  `Co-authored-by:` keeps its normal meaning, a person who worked on the
+  change and can answer for their part; adding a human co-author under an AI
+  author is the same false signature, not a workaround.
+- **A pull request needs a person behind it.** Open it yourself, or from an
+  account that answers for it. A bot may not stand in for you.
+- **AI review does not count.** A model reading the diff, or answering on a
+  pull request, is no more an approval than a linter's output. Read it as a
+  hint from an untrusted source, not as a review, and wait for a person to
+  approve the change.
+
+Two things you owe because the change is yours:
+
+- **Check where the code came from.** Model output sometimes reproduces code
+  it was trained on. Make sure what you submit is yours to license under the
+  AGPLv3, and that it brings no code, header, or attribution you cannot
+  honour.
+- **Say so when it helps the reviewer.** If much of the change was generated,
+  say so in the pull request so the reviewer knows where to read closely. For
+  a routine edit it adds nothing, and it is never held against you.
 
 ## Getting Started
 
@@ -17,13 +52,13 @@ Thank you for your interest in contributing!
 - **Build**: `python3 BUILD.py` drives Cargo for every platform
 - **Dependencies**: FFmpeg, Carla, a GPU-backed graphics adapter, and a working audio output device
 
-Qt is not required: the Qt Quick frontend was retired in 0.8. See [Qt retirement](#qt-retirement).
+Qt is not required: the Qt Quick frontend was retired in 0.8.
 
 ## Code Style
 
 - **Rust**: `cargo fmt` and `cargo clippy` (both are CI gates)
 - **Slint**: match existing patterns in `rust/freya-nle/ui/`
-- **Commits**: use concise, descriptive messages
+- **Commits**: use concise, descriptive English messages
 
 ## Project Structure
 
@@ -84,18 +119,6 @@ tests that used to sit in `freya-nle-preview` were removed: they asked for an ad
 CI runner provides, so they never ran anywhere. Check
 the compositor by running the editor and exporting a frame.
 
-## Qt retirement
-
-The Qt Quick + QRhi frontend and its C++ support library were removed in 0.8. The
-[Rust + Slint UI parity gate](audits/2026-10-23-slint-ui-parity-gate.md) records
-the behavior it was held to, and the
-[retirement audit](audits/2026-10-26-qt-retirement.md) records what was migrated,
-what deliberately changed, and what is still open.
-
-The C ABI is gone with the Qt consumer: no `aviqtl_*` exports, header, or contract
-check remain. `freya-nle-core` exposes Rust APIs only, and the shared bake/timeline data
-types live in its `types` module.
-
 ## Versions and Releases
 
 `rust/Cargo.toml` owns the project version (`[workspace.package] version`); no
@@ -116,21 +139,6 @@ first release candidate of 0.8.0 is version `0.8.0-rc.1` with tag
 `tests/test_build_version.py` fails when the version is not SemVer, when the
 suffix is not `rc.<n>`, or when `CHANGELOG.md` has no section for the workspace
 version, so bump them together.
-
-To prepare a release:
-
-1. Set `[workspace.package] version` in `rust/Cargo.toml` and refresh
-   `rust/Cargo.lock` with `cargo update --workspace --offline`.
-2. Move the `Unreleased` entries of `CHANGELOG.md` into a
-   `## [<version>] - <YYYY-MM-DD>` section and leave `Unreleased` empty.
-3. Run the checks listed in [Adding Tests](#adding-tests), then build and smoke
-   test a package with `python3 BUILD.py`. A release publishes five artifacts,
-   one per target, all named `Freya-NLE-<version>-<os>-<arch>`:
-   `…-linux-x86_64.AppImage`, `…-linux-x86_64-archlinux.tar.zst`,
-   `…-macos-arm64.zip`, `…-macos-x86_64.zip`, `…-windows-x86_64.zip` — plus
-   `SHA256SUMS`, and the release job refuses to publish an incomplete set.
-4. Tag the validated commit `v<version>`. A tag containing `-` is published as a
-   GitHub pre-release and does not replace the latest stable release.
 
 Artifact names carry no toolchain: the toolchain, the commit, and the minimum
 system a build needs belong in the `build-info.json` inside the archive.

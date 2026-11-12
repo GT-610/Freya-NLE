@@ -25,7 +25,7 @@ still require the separately scheduled Computer Use suite.
 As of 2026-09-18, this table contains 6 `parity`, 37 `foundation`, and 1 `partial` entries.
 These are acceptance statuses, not percentages of implemented functionality. Module refactoring
 and successful compilation do not promote an entry. Desktop operation is deferred to a separate
-session; see [the Qt retirement criteria](../CONTRIBUTING.md#qt-retirement).
+session; see [the Qt retirement audit](2026-10-26-qt-retirement.md).
 
 ## Desktop acceptance, 2026-10-22
 
