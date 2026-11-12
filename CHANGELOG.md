@@ -21,12 +21,15 @@ All notable changes to Freya NLE are documented in this file.
   the GPL-2.0 and LGPL-2.1 texts, and the third-party notices it owes its
   recipients
 
-- Diagnostics are written to `logs/freya-nle.log` under the application data
-  directory as well as to stderr, with timestamps, module targets, `RUST_LOG`
-  filtering (default `info`), size rotation, and a panic record, so a bug
-  report carries evidence even when the application was launched by
-  double-clicking it and has no console. FFmpeg's own log output joins the same
-  records instead of writing to stderr directly
+- A log window (Tools → Log) shows the session's recent diagnostics with a
+  level filter, copies the text, and saves it for a bug report. Records also go
+  to stderr with timestamps, module targets, and `RUST_LOG` filtering (default
+  `info`), panics are recorded before the process aborts, and FFmpeg's own log
+  output joins the same records instead of writing to stderr directly
+- Diagnostics can be written to a rotating `logs/freya-nle.log` under the
+  application data directory. The file is off by default; the log window's
+  `Write log to file` switch turns it on, and `FREYA_NLE_LOG_DIR` does for
+  scripted runs
 - A launch that cannot start, for example on a host with no GPU-backed adapter,
   explains why in a native error dialog instead of only on a console that a
   windowed launch does not have
