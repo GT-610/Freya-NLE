@@ -39,34 +39,6 @@ impl Midpoints {
         &self.frames
     }
 
-    /// Returns the midpoint interval containing `frame`, as a half-open `(lower, upper)` pair
-    /// where both bounds are fixed frames of the clip. A frame that *is* a midpoint opens its own
-    /// segment, so it is its own lower bound.
-    pub(crate) fn interval(&self, frame: i32) -> (i32, i32) {
-        let lower = self
-            .frames
-            .partition_point(|midpoint| *midpoint <= frame)
-            .checked_sub(1)
-            .map(|index| self.frames[index])
-            .unwrap_or(0);
-        let upper = self
-            .frames
-            .iter()
-            .copied()
-            .find(|midpoint| *midpoint > frame)
-            .unwrap_or(i32::MAX);
-        (lower, upper)
-    }
-
-    /// Returns the number of parameterisation segments a clip with these midpoints has. One
-    /// midpoint divides a clip into two segments.
-    pub(crate) fn segment_count(&self, duration: i32) -> usize {
-        self.frames
-            .iter()
-            .filter(|frame| **frame > 0 && **frame < duration)
-            .count()
-            + 1
-    }
 }
 
 /// Reads the midpoint list from a clip's flattened extras, dropping any frame that is not a
@@ -352,17 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn interval_reports_the_containing_segment_bounds() {
-        let midpoints = read_midpoints(&extra(json!([20, 40])));
-        assert_eq!(midpoints.interval(0), (0, 20));
-        assert_eq!(midpoints.interval(19), (0, 20));
-        assert_eq!(midpoints.interval(20), (20, 40));
-        assert_eq!(midpoints.interval(30), (20, 40));
-        assert_eq!(midpoints.interval(40), (40, i32::MAX));
-        assert_eq!(midpoints.interval(i32::MAX), (40, i32::MAX));
-    }
-
-    #[test]
     fn sanitize_drops_frames_outside_the_open_interval() {
         let midpoints = read_midpoints(&extra(json!([-5, 0, 10, 99, 100, 250])));
         assert_eq!(sanitize(midpoints, 100).frames(), [10, 99]);
@@ -373,15 +334,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn segment_count_counts_parameterisation_segments() {
-        assert_eq!(Midpoints::default().segment_count(100), 1);
-        assert_eq!(read_midpoints(&extra(json!([10]))).segment_count(100), 2);
-        assert_eq!(
-            read_midpoints(&extra(json!([10, 50]))).segment_count(100),
-            3
-        );
-        // A midpoint at or past the endpoint cannot divide anything.
-        assert_eq!(read_midpoints(&extra(json!([100]))).segment_count(100), 1);
-    }
 }

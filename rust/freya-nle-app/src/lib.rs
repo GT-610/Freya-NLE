@@ -686,12 +686,6 @@ impl ApplicationModel {
         self.backup_store.root().to_path_buf()
     }
 
-    /// The bytes every stored version takes; the settings page shows it so the
-    /// budget is not a number without a reference point.
-    pub fn backup_total_bytes(&self) -> u64 {
-        self.backup_store.total_size()
-    }
-
     /// Prunes the oldest versions across projects until the store fits its
     /// budget. Manual and automatic saves both call this.
     fn enforce_backup_budget(&mut self) {

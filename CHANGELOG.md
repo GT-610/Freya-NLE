@@ -61,6 +61,16 @@ All notable changes to Freya NLE are documented in this file.
 - `BUILD.py --arch` no longer requires distrobox: where only podman is
   installed, it runs the build in a container of its own
 
+### Removed
+- Dead code that no build reached: `ApplicationModel::backup_total_bytes`, the
+  unused `clip_midpoint_segment_count`/`clip_midpoint_interval` accessors and the
+  segment maths behind them, `XcodeBuilder.verify_minimum_system`, an unused
+  Slint settings row (`SystemSettingLineRow`), and the duplicated `#[cfg(test)]`
+  on `EasingKind::from_abi`
+- Files nothing referenced: the `assets/aviutl.svg` placeholder, the `triplets/`
+  vcpkg triplet overlays (never selected), and the `.clang-format`/`.clang-tidy`
+  configuration left over from the retired C++ frontend
+
 ## [0.8.0] - 2026-11-09
 
 0.8 is the release the rename lands on: the project is Freya NLE everywhere a
