@@ -52,22 +52,10 @@ pub struct SelectionProperty {
     pub param: Option<String>,
     /// What the parameter reads across the selection.
     pub value: SelectionValue,
-    /// How many selected objects have this parameter, including objects on locked layers. This is
-    /// the denominator the sidebar uses to report an edit, and the count `present_objects()`
-    /// returns for a uniform or mixed value.
+    /// How many selected objects have this parameter, including objects on locked layers. A
+    /// smaller number than the selection size is the normal case for mixed selections of
+    /// dissimilar objects.
     pub editable_objects: usize,
-}
-
-impl SelectionProperty {
-    /// The number of selected objects that hold this parameter. A smaller number than the
-    /// selection size is the normal case for mixed selections of dissimilar objects.
-    pub fn present_objects(&self) -> usize {
-        match &self.value {
-            SelectionValue::Absent => 0,
-            SelectionValue::Uniform(_) => self.editable_objects,
-            SelectionValue::Mixed(_) => self.editable_objects,
-        }
-    }
 }
 
 /// The result of resolving one property across a multi-object selection.
@@ -804,6 +792,6 @@ mod tests {
             .find(|property| property.param.as_deref() == Some("opacity"))
             .expect("opacity is listed");
         assert_eq!(opacity.editable_objects, 1);
-        assert_eq!(opacity.present_objects(), 1);
+        assert_eq!(opacity.editable_objects, 1);
     }
 }

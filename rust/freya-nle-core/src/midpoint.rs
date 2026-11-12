@@ -38,7 +38,6 @@ impl Midpoints {
     pub(crate) fn frames(&self) -> &[i32] {
         &self.frames
     }
-
 }
 
 /// Reads the midpoint list from a clip's flattened extras, dropping any frame that is not a
@@ -333,5 +332,4 @@ mod tests {
                 .is_empty()
         );
     }
-
 }

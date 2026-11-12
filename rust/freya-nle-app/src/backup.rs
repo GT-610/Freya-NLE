@@ -389,6 +389,7 @@ impl BackupStore {
         Ok(directory.join(file_name))
     }
 
+    #[cfg(test)]
     pub(crate) fn path_for(&self, project_path: &Path, file_name: &str) -> Result<PathBuf, String> {
         if !valid_backup_file(file_name) {
             return Err(format!("{file_name:?} is not a backup file name"));
@@ -409,11 +410,6 @@ impl BackupStore {
             ));
         }
         fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))
-    }
-
-    pub(crate) fn remove(&self, project_path: &Path, file_name: &str) -> Result<(), String> {
-        let path = self.path_for(project_path, file_name)?;
-        fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))
     }
 
     fn prune(&self, directory: &Path, limit: usize) -> Result<(), String> {

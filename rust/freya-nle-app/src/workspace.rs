@@ -1033,15 +1033,6 @@ impl WorkspaceModel {
         }
     }
 
-    pub fn save_effect_preset(
-        &mut self,
-        store: &PresetStore,
-        effect_index: usize,
-        name: &str,
-    ) -> bool {
-        self.save_effect_preset_scoped(store, effect_index, name, None)
-    }
-
     /// Saves a preset, optionally limited to `scope` parameter names.
     ///
     /// AviUtl2 chooses the saved items when the preset is created: applying a
@@ -1216,15 +1207,6 @@ impl WorkspaceModel {
                 false
             }
         }
-    }
-
-    pub fn save_audio_plugin_preset(
-        &mut self,
-        store: &PresetStore,
-        plugin_index: usize,
-        name: &str,
-    ) -> bool {
-        self.save_audio_plugin_preset_scoped(store, plugin_index, name, None)
     }
 
     /// Saves an audio-plugin preset, optionally limited to `scope` parameters.
@@ -5272,27 +5254,6 @@ impl WorkspaceModel {
         }
     }
 
-    /// Returns the new source in-point a slip would produce, or `None` when the clip has no
-    /// known source range to slip within.
-    pub fn plan_clip_slip_source_start(
-        &self,
-        clip_id: i32,
-        delta_frames: i32,
-        current_source_start_frames: i32,
-        source_duration_frames: Option<i32>,
-    ) -> Option<i32> {
-        plan_clip_slip(
-            &self.project.document,
-            self.selected_scene,
-            clip_id,
-            delta_frames,
-            current_source_start_frames,
-            source_duration_frames,
-        )
-        .ok()
-        .flatten()
-    }
-
     /// Resolves the source in-point a slip would produce for one clip, without changing anything.
     ///
     /// This is the read half of [`Self::slip_clip`], so the gesture outline and the committed edit
@@ -8879,43 +8840,42 @@ mod tests {
     #[test]
     fn slip_reports_no_change_without_a_known_source_and_clamps_inside_the_source() {
         let workspace = workspace_with_row();
+        /// The production path is `preview_slip`, which resolves the media source first; this
+        /// asks the same planner the same question with the bounds already known.
+        fn slip_in(
+            workspace: &WorkspaceModel,
+            clip_id: i32,
+            delta: i32,
+            source_start: i32,
+            source_duration: Option<i32>,
+        ) -> Option<i32> {
+            plan_clip_slip(
+                workspace.document(),
+                workspace.selected_scene(),
+                clip_id,
+                delta,
+                source_start,
+                source_duration,
+            )
+            .ok()
+            .flatten()
+        }
 
         // Clip 2 is 20 frames long on a 40-frame source, so a legal in-point is 0..=20.
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(2, 10, 0, Some(40)),
-            Some(10)
-        );
+        assert_eq!(slip_in(&workspace, 2, 10, 0, Some(40)), Some(10));
         // Past the end of the source the in-point clamps to the last legal frame.
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(2, 21, 0, Some(40)),
-            Some(20)
-        );
+        assert_eq!(slip_in(&workspace, 2, 21, 0, Some(40)), Some(20));
         // Before the start it clamps to zero.
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(2, -10, 5, Some(40)),
-            Some(0)
-        );
+        assert_eq!(slip_in(&workspace, 2, -10, 5, Some(40)), Some(0));
 
         // Without a source length there is no safe bound, so the tool reports no change instead
         // of guessing one.
-        assert_eq!(workspace.plan_clip_slip_source_start(2, 10, 0, None), None);
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(2, 10, 0, Some(0)),
-            None
-        );
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(2, 0, 0, Some(40)),
-            None
-        );
+        assert_eq!(slip_in(&workspace, 2, 10, 0, None), None);
+        assert_eq!(slip_in(&workspace, 2, 10, 0, Some(0)), None);
+        assert_eq!(slip_in(&workspace, 2, 0, 0, Some(40)), None);
         // Already at the bound, so another step the same way changes nothing.
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(2, 5, 20, Some(40)),
-            None
-        );
-        assert_eq!(
-            workspace.plan_clip_slip_source_start(99, 5, 0, Some(40)),
-            None
-        );
+        assert_eq!(slip_in(&workspace, 2, 5, 20, Some(40)), None);
+        assert_eq!(slip_in(&workspace, 99, 5, 0, Some(40)), None);
 
         // A slip is a source-only edit: the planner returns a number and never touches the
         // document, so no transaction and no undo entry exist.
@@ -10307,7 +10267,7 @@ mod tests {
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
         assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(5.0)));
-        assert!(workspace.save_effect_preset(&store, 0, "Current"));
+        assert!(workspace.save_effect_preset_scoped(&store, 0, "Current", None));
         assert_eq!(store.names("rect"), ["Current"]);
 
         assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(2.0)));
@@ -10606,7 +10566,7 @@ mod tests {
         workspace.click_clip(1, false);
         assert!(workspace.set_effect_parameter_at_frame(0, "count", 0, json!(3.0)));
         assert!(workspace.set_effect_expression(0, "count", Some("10 + time * 2")));
-        assert!(workspace.save_effect_preset(&store, 0, "Animated"));
+        assert!(workspace.save_effect_preset_scoped(&store, 0, "Animated", None));
 
         // Moving both the fallback and the binding away must not survive the
         // preset: the expression is part of what was saved.
@@ -10648,7 +10608,7 @@ mod tests {
         let mut workspace = workspace_with_effects();
         workspace.click_clip(1, false);
         // Saved with no expression, so the preset describes a plain value.
-        assert!(workspace.save_effect_preset(&store, 0, "Plain"));
+        assert!(workspace.save_effect_preset_scoped(&store, 0, "Plain", None));
         assert!(workspace.set_effect_expression(0, "count", Some("2 * 2")));
         assert!(workspace.load_effect_preset(&store, 0, "Plain"));
         assert_eq!(
@@ -10822,7 +10782,7 @@ mod tests {
         let mut workspace = workspace_with_audio_plugins();
         workspace.click_clip(9, false);
         assert!(workspace.set_audio_plugin_parameter_at_frame(0, "0", 0, json!(0.8)));
-        assert!(workspace.save_audio_plugin_preset(&store, 0, "Current"));
+        assert!(workspace.save_audio_plugin_preset_scoped(&store, 0, "Current", None));
         assert_eq!(store.names("gain"), ["Current"]);
 
         assert!(workspace.set_audio_plugin_parameter_at_frame(0, "0", 0, json!(0.1)));

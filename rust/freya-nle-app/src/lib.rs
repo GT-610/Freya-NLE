@@ -38,8 +38,7 @@ pub use recovery::RecoveryEntry;
 pub use workspace::{LayerSettingsInput, ProjectSettingsInput, SceneSettingsInput, WorkspaceModel};
 
 use backup::{
-    BackupEntry, BackupProject, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT,
-    DEFAULT_BACKUP_TOTAL_LIMIT_MB,
+    BackupProject, BackupStore, DEFAULT_BACKUP_HISTORY_LIMIT, DEFAULT_BACKUP_TOTAL_LIMIT_MB,
 };
 use lifecycle::{LifecycleContinuation, PendingLifecycle};
 use recovery::{
@@ -521,18 +520,6 @@ impl ApplicationModel {
         }
     }
 
-    /// Saved versions of one open project, newest first.
-    pub fn backup_entries(&self, project_index: usize) -> Vec<BackupEntry> {
-        let Some(path) = self
-            .projects
-            .get(project_index)
-            .and_then(|project| project.workspace.project().path.clone())
-        else {
-            return Vec::new();
-        };
-        self.backup_store.entries(&path)
-    }
-
     /// Every project with saved versions, for the all-projects browser.
     pub fn all_backup_projects(&self) -> Vec<BackupProject> {
         self.backup_store.projects()
@@ -588,38 +575,6 @@ impl ApplicationModel {
     /// Removes one saved version addressed by its backup directory key.
     pub fn remove_backup_entry(&mut self, key: &str, file_name: &str) -> Result<(), String> {
         self.backup_store.remove_key(key, file_name)
-    }
-
-    pub fn remove_backup(&mut self, project_index: usize, file_name: &str) -> Result<(), String> {
-        let path = self
-            .projects
-            .get(project_index)
-            .and_then(|project| project.workspace.project().path.clone())
-            .ok_or_else(|| "save the project once before managing its backups".to_owned())?;
-        self.backup_store.remove(&path, file_name)
-    }
-
-    /// Opens a saved version as a new unsaved project.
-    ///
-    /// Like recovery, the restored copy has no path and starts dirty, so saving
-    /// it cannot overwrite the project it came from.
-    pub fn open_backup_as_project(
-        &mut self,
-        project_index: usize,
-        file_name: &str,
-    ) -> Result<usize, String> {
-        let path = self
-            .projects
-            .get(project_index)
-            .and_then(|project| project.workspace.project().path.clone())
-            .ok_or_else(|| "save the project once before restoring a backup".to_owned())?;
-        let backup_path = self.backup_store.path_for(&path, file_name)?;
-        let project = ProjectSession::load_recovery(&backup_path, &path.to_string_lossy())?;
-        let name = path.file_stem().map_or_else(
-            || "Restored backup".to_owned(),
-            |stem| format!("{} (backup)", stem.to_string_lossy()),
-        );
-        Ok(self.add_project_entry(project, name))
     }
 
     /// Records the current state as a saved version on demand.
@@ -930,6 +885,19 @@ impl ApplicationModel {
 mod tests {
     use super::*;
 
+    /// Saved versions of the current project, addressed the way the backup window asks for them.
+    fn stored_entries(app: &ApplicationModel) -> Vec<backup::BackupEntry> {
+        app.current_backup_project()
+            .map_or_else(Vec::new, |project| project.entries)
+    }
+
+    /// The directory key the backup window hands back when it opens or deletes a version.
+    fn stored_key(app: &ApplicationModel) -> String {
+        app.current_backup_project()
+            .expect("the saved project has a backup directory")
+            .key
+    }
+
     #[test]
     fn launcher_is_visible_until_a_project_exists() {
         let mut app = ApplicationModel::default();
@@ -1120,7 +1088,7 @@ mod tests {
             app.complete_save_path(Some(&path)),
             LifecycleStep::ProjectSaved { project_index: 0 }
         );
-        assert_eq!(app.backup_entries(0).len(), 1);
+        assert_eq!(stored_entries(&app).len(), 1);
 
         // A second save records another version.
         app.current_workspace_mut()
@@ -1131,14 +1099,15 @@ mod tests {
             app.request_save_current_project(),
             LifecycleStep::ProjectSaved { project_index: 0 }
         );
-        let entries = app.backup_entries(0);
+        let entries = stored_entries(&app);
         assert_eq!(entries.len(), 2);
         assert!(entries[0].saved_at >= entries[1].saved_at);
         assert!(entries[0].size > 0);
 
         // Restoring opens an unsaved copy instead of overwriting the source.
+        let key = stored_key(&app);
         let restored = app
-            .open_backup_as_project(0, &entries[1].file_name)
+            .open_backup_entry(&key, &entries[1].file_name)
             .expect("backup restores");
         assert_eq!(app.tabs().len(), 2);
         assert_eq!(app.current_project_index(), Some(restored));
@@ -1150,10 +1119,16 @@ mod tests {
         assert!(project.dirty);
         assert!(app.tabs().iter().any(|tab| tab.name.contains("(backup)")));
 
-        // Removing one entry leaves the other.
-        app.remove_backup(0, &entries[0].file_name)
+        // Removing one entry leaves the other. The restored copy is the current
+        // project now, so the list is read back by key rather than by tab.
+        app.remove_backup_entry(&key, &entries[0].file_name)
             .expect("backup removes");
-        assert_eq!(app.backup_entries(0).len(), 1);
+        let remaining = app
+            .all_backup_projects()
+            .into_iter()
+            .find(|project| project.key == key)
+            .expect("the directory remains");
+        assert_eq!(remaining.entries.len(), 1);
         assert!(app.backup_errors().is_empty());
 
         std::fs::remove_file(path).expect("saved project removes");
@@ -1223,15 +1198,15 @@ mod tests {
             app.complete_save_path(Some(&path)),
             LifecycleStep::ProjectSaved { project_index: 0 }
         );
-        assert_eq!(app.backup_entries(0).len(), 1);
+        assert_eq!(stored_entries(&app).len(), 1);
 
         app.record_backup_now(0).expect("a version is recorded");
-        assert_eq!(app.backup_entries(0).len(), 2);
+        assert_eq!(stored_entries(&app).len(), 2);
 
         // The configured limit prunes older copies immediately.
         app.set_backup_history(true, 1, 512);
         app.record_backup_now(0).expect("a version is recorded");
-        assert_eq!(app.backup_entries(0).len(), 1);
+        assert_eq!(stored_entries(&app).len(), 1);
 
         // Turning history off refuses manual versions as well.
         app.set_backup_history(false, 20, 512);
