@@ -64,6 +64,7 @@ pub(super) struct LifecycleUi {
     pub(super) package_manager: slint::Weak<PackageManagerWindow>,
     pub(super) plugin_permissions: slint::Weak<PluginPermissionWindow>,
     pub(super) about: slint::Weak<AboutWindow>,
+    pub(super) log_window: slint::Weak<LogWindow>,
     pub(super) preview: Rc<RefCell<PreviewRuntime>>,
     pub(super) model: Rc<RefCell<ApplicationModel>>,
     pub(super) settings: Rc<RefCell<SettingsStore>>,
@@ -1068,6 +1069,12 @@ impl LifecycleUi {
                 .set_preference_index(theme_index);
             crate::dialogs::apply_native_window_appearance(window.window(), dark);
         }
+        if let Some(window) = self.log_window.upgrade() {
+            window
+                .global::<AppTheme>()
+                .set_preference_index(theme_index);
+            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        }
     }
 
     pub(super) fn hydrate_audio_plugins(&self) {
@@ -1131,6 +1138,9 @@ impl LifecycleUi {
         if let Some(window) = self.about.upgrade() {
             let _ = window.hide();
         }
+        if let Some(window) = self.log_window.upgrade() {
+            let _ = window.hide();
+        }
         if let Some(window) = self.launcher.upgrade() {
             let _ = window.hide();
         }
@@ -1166,6 +1176,7 @@ impl LifecycleUi {
             &self.system_settings,
         );
         changed |= insert_visible_window_geometry(&mut replacement, "about", &self.about);
+        changed |= insert_visible_window_geometry(&mut replacement, "logWindow", &self.log_window);
         changed |=
             insert_visible_window_geometry(&mut replacement, "sceneSettings", &self.scene_settings);
         changed |= insert_visible_window_geometry(&mut replacement, "easingConfig", &self.easing);

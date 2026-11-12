@@ -425,6 +425,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         package_manager: package_manager.as_weak(),
         plugin_permissions: plugin_permissions.as_weak(),
         about: about.as_weak(),
+        log_window: log_window.as_weak(),
         preview: preview.clone(),
         model: model.clone(),
         settings: settings.clone(),

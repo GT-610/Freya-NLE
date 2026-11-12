@@ -1,17 +1,16 @@
 //! The log window: the recent records plus the actions AviUtl2's log window
 //! has (clear, copy through text selection, save, and reveal the file folder).
 //!
-//! The window only presents what `logging` already collected: a read-only
-//! `TextEdit` with the newest line on top. The timer exists so records from
+//! The window only presents what `logging` already collected: a list of coloured rows with the newest line on top. The timer exists so records from
 //! other threads (packages, decoding, plugins) appear without polling the UI
 //! on every write.
 
 use crate::dialogs::{show_and_redraw, show_info_dialog};
 use crate::localization::localized;
-use crate::{LogWindow, logging};
+use crate::{LogRowData, LogWindow, logging};
 use freya_nle_app::settings::SettingsStore;
 use log::Level;
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -102,17 +101,17 @@ pub(super) fn show(window: &LogWindow) {
 fn draw(window: &LogWindow) {
     let filter = VIEW.with(|view| view.borrow().filter);
     let entries = logging::recent();
-    let mut text = String::new();
-    for entry in entries
+    let rows: Vec<LogRowData> = entries
         .iter()
         .rev()
         .filter(|entry| passes(entry.level(), filter))
         .take(MAX_DISPLAY_LINES)
-    {
-        text.push_str(&entry.line());
-        text.push('\n');
-    }
-    window.set_log_text(text.into());
+        .map(|entry| LogRowData {
+            text: entry.line().into(),
+            level: entry.level() as i32,
+        })
+        .collect();
+    window.set_log_rows(ModelRc::new(VecModel::from(rows)));
     sync_file_state(window);
     VIEW.with(|view| view.borrow_mut().generation = logging::generation());
 }
@@ -158,9 +157,9 @@ fn copy(window: &LogWindow) {
                 "ログをコピーできません",
             ),
             localized(
-                "Select the log text and use the copy shortcut instead.",
-                "请改为选中日志文本后使用复制快捷键。",
-                "ログのテキストを選択してコピーショートカットを使用してください。",
+                "Use Save Log... to write the log to a file instead.",
+                "请改用“保存日志…”将日志写入文件。",
+                "代わりに「ログを保存…」でファイルに書き出してください。",
             ),
         );
         let _ = window;

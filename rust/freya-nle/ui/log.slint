@@ -2,10 +2,17 @@
 //
 // The ring keeps the recent records; this window only presents them. The
 // newest line sits at the top because the view is read-only text rather than a
-// list, so a fresh record never needs a scroll to be seen. Text is selectable,
-// which is also how copying works (Ctrl/Cmd+C).
-import { Button, CheckBox, ComboBox, TextEdit } from "std-widgets.slint";
+// list, so a fresh record never needs a scroll to be seen. Rows are plain
+// `Text` painted from `AppTheme`: the platform TextEdit keeps its own palette
+// and drew dark text on this dark panel. Copy goes through the toolbar.
+import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
+
+// `level` follows `log::Level` ordering: 1 error, 2 warn, 3 info, 4 debug, 5 trace.
+export struct LogRowData {
+    text: string,
+    level: int,
+}
 
 export component LogWindow inherits Window {
     title: @tr("Log");
@@ -18,7 +25,7 @@ export component LogWindow inherits Window {
     in-out property <int> filter-index: 0;
     in-out property <bool> file-enabled: false;
     in property <string> file-path: "";
-    in-out property <string> log-text: "";
+    in property <[LogRowData]> log-rows: [];
     private property <[string]> filter-choices: [
         @tr("All levels"),
         @tr("Info and above"),
@@ -115,11 +122,26 @@ export component LogWindow inherits Window {
                 border-width: 1px;
                 border-color: AppTheme.subtle-border;
                 border-radius: 4px;
-                TextEdit {
-                    text: root.log-text;
-                    read-only: true;
-                    wrap: word-wrap;
-                    font-size: 12px;
+                ScrollView {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        alignment: start;
+                        for row in root.log-rows: Text {
+                            text: row.text;
+                            wrap: word-wrap;
+                            font-size: 12px;
+                            color: row.level <= 1
+                                ? AppTheme.danger
+                                : row.level == 2
+                                    ? AppTheme.warning
+                                    : row.level >= 4 ? AppTheme.dialog-muted : AppTheme.dialog-foreground;
+                        }
+                    }
                 }
             }
         }
