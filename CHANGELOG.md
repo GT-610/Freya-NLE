@@ -133,6 +133,12 @@ All notable changes to Freya NLE are documented in this file.
   menu entries that open the object settings window ran `sync_object_settings`
   alone, so the effect catalog, presets, and palette were stale on open until
   something else refreshed them
+- Fifteen copies of the "upgrade this window's weak handle, apply the theme
+  index, darken the native chrome" block and fifteen copies of "upgrade, then
+  hide" in `lifecycle.rs`. The hide path is now `hide_window`, the theme path a
+  small macro (a function cannot work: `ComponentHandle::global` is bound to the
+  component type and these are seventeen different generated types), and the
+  windows that also refresh translated content keep that work next to the call
 
 ## [0.8.0] - 2026-11-09
 
