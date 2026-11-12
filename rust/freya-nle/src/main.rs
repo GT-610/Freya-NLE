@@ -152,12 +152,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (settings_store, settings_status) = SettingsStore::load();
     log::info!(target: "settings", "{settings_status}");
     let settings = Rc::new(RefCell::new(settings_store));
-    // File logging follows the saved preference; `FREYA_NLE_LOG_DIR` (dev and
-    // scripted runs) keeps it on regardless.
-    let file_logging = std::env::var_os("FREYA_NLE_LOG_DIR").is_some()
-        || settings.borrow().bool_value("logFile", false);
-    if file_logging != logging::file_enabled() {
-        logging::set_file_enabled(file_logging);
+    // `init` already turned the file on for `FREYA_NLE_LOG_DIR`; the saved
+    // preference is the only other reason to open it.
+    if settings.borrow().bool_value("logFile", false) && !logging::file_enabled() {
+        logging::set_file_enabled(true);
     }
     let package_manager_model =
         Rc::new(RefCell::new(PackageManagerModel::load(&settings.borrow())));

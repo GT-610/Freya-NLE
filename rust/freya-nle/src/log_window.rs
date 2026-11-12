@@ -1,9 +1,10 @@
 //! The log window: the recent records plus the actions AviUtl2's log window
-//! has (clear, copy through text selection, save, and reveal the file folder).
+//! has (copy, clear, save, and reveal the file folder).
 //!
-//! The window only presents what `logging` already collected: a list of coloured rows with the newest line on top. The timer exists so records from
-//! other threads (packages, decoding, plugins) appear without polling the UI
-//! on every write.
+//! The window only presents what `logging` already collected: rows painted
+//! newest first and coloured by level. The timer exists so records from other
+//! threads (packages, decoding, plugins) appear without making every write
+//! touch the UI thread.
 
 use crate::dialogs::{show_and_redraw, show_info_dialog};
 use crate::localization::localized;
@@ -19,8 +20,8 @@ use std::time::Duration;
 /// How fresh the view is: short enough to feel live, long enough that an idle
 /// window costs one atomic read.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(300);
-/// The window is plain text; a long session should not paint thousands of
-/// lines every time one more arrives.
+/// A long session should not repaint thousands of rows every 300 ms, so the
+/// view stops at the most recent ones; the transcript and the file keep all.
 const MAX_DISPLAY_LINES: usize = 400;
 
 type Settings = Rc<RefCell<SettingsStore>>;
@@ -55,12 +56,7 @@ pub(super) fn install(window: &LogWindow, settings: Settings) {
             draw(&window);
         }
     });
-    let copy_window = window.as_weak();
-    window.on_copy_log(move || {
-        if let Some(window) = copy_window.upgrade() {
-            copy(&window);
-        }
-    });
+    window.on_copy_log(copy);
     window.on_save_log(save);
     window.on_open_log_folder(open_folder);
     let toggle_settings = settings;
@@ -91,10 +87,9 @@ pub(super) fn refresh(window: &LogWindow) {
     }
 }
 
-/// Shows the window, taking a fresh state from the logger.
+/// Shows the window with the records collected so far.
 pub(super) fn show(window: &LogWindow) {
-    VIEW.with(|view| view.borrow_mut().generation = u64::MAX);
-    refresh(window);
+    draw(window);
     let _ = show_and_redraw(window);
 }
 
@@ -117,15 +112,11 @@ fn draw(window: &LogWindow) {
 }
 
 fn sync_file_state(window: &LogWindow) {
-    if window.get_file_enabled() != logging::file_enabled() {
-        window.set_file_enabled(logging::file_enabled());
+    let enabled = logging::file_enabled();
+    if window.get_file_enabled() != enabled {
+        window.set_file_enabled(enabled);
     }
-    window.set_file_path(
-        logging::file_path()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default()
-            .into(),
-    );
+    window.set_file_path(logging::file_path().display().to_string().into());
 }
 
 fn passes(level: Level, filter: i32) -> bool {
@@ -147,7 +138,7 @@ fn persist_file_enabled(settings: &Settings, enabled: bool) {
     }
 }
 
-fn copy(window: &LogWindow) {
+fn copy() {
     if let Err(error) = copy_to_clipboard(&logging::transcript()) {
         log::warn!(target: "app", "could not copy the log: {error}");
         show_info_dialog(
@@ -162,7 +153,6 @@ fn copy(window: &LogWindow) {
                 "代わりに「ログを保存…」でファイルに書き出してください。",
             ),
         );
-        let _ = window;
     }
 }
 
@@ -218,10 +208,8 @@ fn spawn_with_input(program: &str, arguments: &[&str], text: &str) -> std::io::R
 fn save() {
     let title = localized("Save log", "保存日志", "ログを保存");
     let default_name = logging::file_path()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "freya-nle.log".to_owned());
     let Some(path) = rfd::FileDialog::new()
         .set_title(title)
@@ -250,9 +238,7 @@ fn save() {
 }
 
 fn open_folder() {
-    let Some(directory) = logging::log_directory() else {
-        return;
-    };
+    let directory = logging::log_directory();
     if let Err(error) = std::fs::create_dir_all(&directory) {
         log::warn!(target: "app", "could not create the log folder: {error}");
         return;

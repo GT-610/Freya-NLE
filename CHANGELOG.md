@@ -21,8 +21,8 @@ All notable changes to Freya NLE are documented in this file.
   the GPL-2.0 and LGPL-2.1 texts, and the third-party notices it owes its
   recipients
 
-- A log window (Tools → Log) shows the session's recent diagnostics with a
-  level filter, copies the text, and saves it for a bug report. Records also go
+- A log window (Tools → Log) shows the session's recent diagnostics coloured
+  by level, filters them, copies them, and saves them for a bug report. Records also go
   to stderr with timestamps, module targets, and `RUST_LOG` filtering (default
   `info`), panics are recorded before the process aborts, and FFmpeg's own log
   output joins the same records instead of writing to stderr directly

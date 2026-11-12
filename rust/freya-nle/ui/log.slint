@@ -1,10 +1,10 @@
 // AviUtl2's ログ window: the diagnostics the application produced this session.
 //
 // The ring keeps the recent records; this window only presents them. The
-// newest line sits at the top because the view is read-only text rather than a
-// list, so a fresh record never needs a scroll to be seen. Rows are plain
-// `Text` painted from `AppTheme`: the platform TextEdit keeps its own palette
-// and drew dark text on this dark panel. Copy goes through the toolbar.
+// newest record sits at the top, so a fresh one is visible without scrolling.
+// Rows are plain `Text` painted from `AppTheme` rather than a platform
+// `TextEdit`, whose own palette drew dark text on the dark panel; copying goes
+// through the toolbar instead of a text selection.
 import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 
