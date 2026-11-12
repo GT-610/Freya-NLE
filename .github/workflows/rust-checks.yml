@@ -26,7 +26,7 @@ jobs:
             alsa-lib base-devel clang python pkgconf ffmpeg mesa vulkan-devel \
             libx11 libxcursor libxi libxrandr libxkbcommon wayland wayland-protocols
       - name: Validate build helpers
-        run: python -m unittest tests.test_build_version
+        run: python -m unittest tests.test_build_version tests.test_logging_hygiene
       - name: Format, lint, and test workspace
         run: |
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
