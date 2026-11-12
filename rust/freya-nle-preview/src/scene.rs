@@ -91,6 +91,11 @@ impl PreviewPlanner {
     ) {
         self.plans = build_render_plans(document);
         self.project_directory = directory;
+        // Scene problems are keyed by clip and scene ids, which only mean
+        // something inside one document: another project that reuses an id
+        // must still report its own broken reference. The catalog-keyed sets
+        // above stay, since a package id means the same thing everywhere.
+        self.warned_scene_problems.clear();
     }
 
     pub fn build(
@@ -1699,5 +1704,11 @@ mod tests {
         // worth one record, not one per frame.
         let again = planner.build(&document, 1, 1).expect("scene plans");
         assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+
+        // A rebuilt planner belongs to a document again: the same ids say
+        // nothing about another project's problem, so it reports once more.
+        planner.rebuild_with_media_directory(&document, None);
+        let rebuilt = planner.build(&document, 1, 0).expect("scene plans");
+        assert_eq!(rebuilt.warnings.len(), 1, "{:?}", rebuilt.warnings);
     }
 }

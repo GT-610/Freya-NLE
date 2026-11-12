@@ -46,11 +46,30 @@ static RECENT: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Whether records are copied into the rotating file. See the module docs.
 static FILE_ENABLED: AtomicBool = AtomicBool::new(false);
-/// Bumped whenever the switch changes. The writer treats a new epoch as a
-/// fresh attempt, so re-enabling retries an open that failed earlier.
+/// Bumped whenever the switch changes. A new epoch is a fresh attempt, so
+/// re-enabling retries an open that failed earlier.
 static SWITCH_EPOCH: AtomicU64 = AtomicU64::new(0);
-/// The last failure to open the log file, for the log window to report.
-static FILE_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// The open file, the switch epoch it reflects, and the last failure.
+///
+/// One lock covers all three, so a toggle and a write cannot disagree about
+/// whether the file is open, and the window reads the state the writer acts on.
+static FILE_SINK: Mutex<FileSink> = Mutex::new(FileSink {
+    file: None,
+    epoch: 0,
+    gave_up: false,
+    error: None,
+});
+
+struct FileSink {
+    file: Option<RotatingFile>,
+    /// The switch epoch the fields above reflect.
+    epoch: u64,
+    /// Set when the file could not be opened, so an unwritable data directory
+    /// is not retried on every record. A toggle clears it.
+    gave_up: bool,
+    /// Why the last attempt failed, for the log window.
+    error: Option<String>,
+}
 
 /// One line as the log window and saved transcripts show it.
 #[derive(Clone)]
@@ -89,7 +108,7 @@ pub(super) fn init() -> bool {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_FILTER.to_owned());
-    let target = env_logger::Target::Pipe(Box::new(TeeWriter::new(log_directory())));
+    let target = env_logger::Target::Pipe(Box::new(TeeWriter::new()));
     let mut builder = env_logger::Builder::new();
     builder
         .parse_filters(&filter)
@@ -127,16 +146,78 @@ pub(super) fn set_file_enabled(enabled: bool) {
     }
 }
 
-/// Names the file the current session appends to, and reports a failure.
+/// Opens the file, names it in a record, and reports a failure.
 ///
-/// The record below is what opens the file: `TeeWriter` cannot log from its
-/// own write path, so the reason is reported here, once, where a terminal user
-/// sees it as well as the log window.
+/// Opening is this function's job rather than the record's: at `RUST_LOG=warn`
+/// the `info` below is filtered out, and the file still has to exist. The
+/// warning is a record, so a terminal launch learns the reason too; the window
+/// reads the same state through [`file_error`].
 fn announce_file() {
-    let path = file_path();
-    log::info!(target: "app", "log file: {}", path.display());
+    sync_file();
+    log::info!(target: "app", "log file: {}", file_path().display());
     if let Some(error) = file_error() {
         log::warn!(target: "app", "could not write the log file: {error}");
+    }
+}
+
+/// Opens or closes the file to match the current switch.
+fn sync_file() {
+    let mut sink = FILE_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reconcile(
+        &mut sink,
+        SWITCH_EPOCH.load(Ordering::Relaxed),
+        FILE_ENABLED.load(Ordering::Relaxed),
+        &log_directory(),
+    );
+}
+
+/// Brings one sink in line with the switch. Split out so a test can drive the
+/// transitions without the process-wide state or a real data directory.
+fn reconcile(sink: &mut FileSink, epoch: u64, enabled: bool, directory: &Path) {
+    if sink.epoch != epoch {
+        sink.epoch = epoch;
+        // The user asked again: reopen and report afresh.
+        sink.file = None;
+        sink.gave_up = false;
+    }
+    if !enabled {
+        sink.file = None;
+        return;
+    }
+    if sink.file.is_some() || sink.gave_up {
+        return;
+    }
+    let path = directory.join(LOG_FILE_NAME);
+    match RotatingFile::open(path.clone()) {
+        Ok(file) => {
+            sink.file = Some(file);
+            sink.error = None;
+        }
+        Err(error) => {
+            sink.gave_up = true;
+            sink.error = Some(format!("{}: {error}", path.display()));
+        }
+    }
+}
+
+fn write_file(buf: &[u8]) {
+    sync_file();
+    let mut sink = FILE_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(file) = &mut sink.file {
+        file.write(buf);
+    }
+}
+
+fn flush_file() {
+    let mut sink = FILE_SINK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(file) = &mut sink.file {
+        file.flush();
     }
 }
 
@@ -146,16 +227,11 @@ pub(super) fn file_enabled() -> bool {
 
 /// Why the file could not be opened, or `None` while it is working.
 pub(super) fn file_error() -> Option<String> {
-    FILE_ERROR
+    FILE_SINK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .error
         .clone()
-}
-
-fn set_file_error(message: Option<String>) {
-    *FILE_ERROR
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = message;
 }
 
 /// The directory logs are written to: `FREYA_NLE_LOG_DIR` for scripted runs,
@@ -320,71 +396,28 @@ fn install_panic_hook() {
 /// abort the application; this sink must never do that.
 struct TeeWriter {
     terminal: io::Stderr,
-    directory: PathBuf,
-    file: Option<RotatingFile>,
-    /// Set when the file could not be opened, so an unwritable data directory
-    /// is not retried on every record. Toggling the switch clears it.
-    gave_up: bool,
-    /// The switch epoch this writer has already acted on.
-    epoch: u64,
 }
 
 impl TeeWriter {
-    fn new(directory: PathBuf) -> Self {
+    fn new() -> Self {
         Self {
             terminal: io::stderr(),
-            directory,
-            file: None,
-            gave_up: false,
-            epoch: SWITCH_EPOCH.load(Ordering::Relaxed),
-        }
-    }
-
-    /// Opens or closes the file to match the current switch. Runs on every
-    /// write so a Preferences toggle takes effect without a restart.
-    fn sync(&mut self) {
-        let epoch = SWITCH_EPOCH.load(Ordering::Relaxed);
-        if epoch != self.epoch {
-            self.epoch = epoch;
-            // The user asked again: reopen and report afresh.
-            self.file = None;
-            self.gave_up = false;
-        }
-        if !FILE_ENABLED.load(Ordering::Relaxed) {
-            self.file = None;
-            return;
-        }
-        if self.file.is_none() && !self.gave_up {
-            let path = self.directory.join(LOG_FILE_NAME);
-            match RotatingFile::open(path.clone()) {
-                Ok(file) => {
-                    self.file = Some(file);
-                    set_file_error(None);
-                }
-                Err(error) => {
-                    self.gave_up = true;
-                    set_file_error(Some(format!("{}: {error}", path.display())));
-                }
-            }
         }
     }
 }
 
 impl io::Write for TeeWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.sync();
         let _ = self.terminal.write_all(buf);
-        if let Some(file) = &mut self.file {
-            file.write(buf);
-        }
+        // The sink reopens by itself, so a toggle takes effect without a
+        // restart and this writer never tracks the switch.
+        write_file(buf);
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
         let _ = self.terminal.flush();
-        if let Some(file) = &mut self.file {
-            file.flush();
-        }
+        flush_file();
         Ok(())
     }
 }
@@ -566,29 +599,29 @@ mod tests {
 
     #[test]
     fn a_failed_open_is_reported_and_retried_after_a_toggle() {
-        let _guard = reset();
         let directory = scratch_dir("retry");
         // A regular file where the log directory should be makes the open fail.
         let blocked = directory.join("blocked");
         fs::write(&blocked, b"").expect("blocking file");
-        let mut writer = TeeWriter::new(blocked.join("logs"));
-        set_file_enabled(true);
-        writer.sync();
-        assert!(writer.gave_up);
-        assert!(file_error().is_some(), "the failure must be reported");
+        let logs = blocked.join("logs");
+        let mut sink = FileSink {
+            file: None,
+            epoch: 1,
+            gave_up: false,
+            error: None,
+        };
+        reconcile(&mut sink, 1, true, &logs);
+        assert!(sink.gave_up);
+        assert!(sink.error.is_some(), "the failure must be reported");
 
-        // The directory becomes usable, and the switch is toggled again.
+        // The directory becomes usable, and the switch is toggled again: a new
+        // epoch is a fresh attempt, so the open is retried.
         fs::remove_file(&blocked).expect("remove blocking file");
-        set_file_enabled(false);
-        set_file_enabled(true);
-        writer.sync();
-        assert!(!writer.gave_up);
-        assert!(
-            file_error().is_none(),
-            "a successful retry clears the report"
-        );
-        assert!(blocked.join("logs").join(LOG_FILE_NAME).exists());
-        set_file_enabled(false);
+        reconcile(&mut sink, 2, false, &logs);
+        reconcile(&mut sink, 2, true, &logs);
+        assert!(!sink.gave_up);
+        assert!(sink.error.is_none(), "a successful retry clears the report");
+        assert!(logs.join(LOG_FILE_NAME).exists());
     }
 
     #[test]
