@@ -1854,7 +1854,7 @@ mod tests {
                     ("__test_tall", 8, 32, [0, 0, 255, 255]),
                 ] {
                     let mut pixels = vec![0_u8; (width * height * 4) as usize];
-                    for pixel in pixels.chunks_exact_mut(4) {
+                    for pixel in pixels.as_chunks_mut::<4>().0 {
                         pixel.copy_from_slice(&color);
                     }
                     image::save_buffer(
@@ -1899,7 +1899,7 @@ mod tests {
         // AviUtl2 reads whatever image file the folder holds, so a BMP has to
         // resolve through the same lookup.
         let mut pixels = vec![0_u8; 8 * 8 * 4];
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[0, 128, 255, 255]);
         }
         image::save_buffer(

@@ -4,6 +4,50 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Every release artifact follows one name, `Freya-NLE-<version>-<os>-<arch>`, so
+  a download is chosen by platform and architecture instead of by the toolchain
+  that produced it. The Arch-compatible archive keeps a `-archlinux` variant
+  because it only runs on Arch's current glibc
+- A portable Linux AppImage is the standard Linux download. It is built on
+  Ubuntu 22.04 against a pinned FFmpeg and carries that FFmpeg, so it does not
+  depend on the distribution's copy; it still needs glibc 2.35 or newer, the
+  version Ubuntu 22.04 ships
+- The macOS Intel bundle exists again. One arm64 runner cross-compiles both
+  Apple architectures, so no paid Intel runner is involved
+- Each archive carries `build-info.json`, recording the commit, the Rust and
+  FFmpeg versions it links, and the minimum system it actually requires
+- Each release publishes `SHA256SUMS`, and every archive carries the AGPL text,
+  the GPL-2.0 and LGPL-2.1 texts, and the third-party notices it owes its
+  recipients
+
+### Changed
+- The Rust toolchain is pinned to 1.99.1 (`rust-toolchain.toml`, the workspace
+  `rust-version`, and every CI job), up from 1.97.1. Mixing the pinned
+  toolchain's compiler with a newer system `cargo` produced builds that failed
+  to resolve `proc-macro` crates, so the pin and the toolchain that compiles the
+  workspace are now one version everywhere
+- The macOS bundle declares the minimum macOS its contents really need.
+  `Info.plist` used to promise 12.0 while the bundled Homebrew libraries had
+  been built for 15.0, so the application refused to start on the systems it
+  claimed to support. Packaging now measures every binary it ships
+- Releases link one pinned FFmpeg on every platform instead of whatever the
+  build host provided, so the runtime floor is a property of the repository
+- The Windows archive carries the Visual C++ runtime it imports, so "portable"
+  no longer depends on an installed redistributable. The executable is a
+  windowed application with an icon and a version resource instead of a console
+  program with neither
+- The Linux build no longer links `libfontconfig`, and its archive is a
+  `.tar.zst` that preserves the executable bit instead of a zip that did not
+- Packaging runs in pinned container images, so a rebuild months later links the
+  same glibc and FFmpeg sonames
+
+### Fixed
+- The macOS bundle gained the icon it never had, and registers the project and
+  fragment types the application already opens from the command line
+- `BUILD.py --arch` no longer requires distrobox: where only podman is
+  installed, it runs the build in a container of its own
+
 ## [0.8.0] - 2026-11-09
 
 0.8 is the release the rename lands on: the project is Freya NLE everywhere a

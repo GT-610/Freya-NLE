@@ -13,6 +13,8 @@ on:
       - "vcpkg.json"
       - "vcpkg-configuration.json"
       - "ports/**"
+      - "assets/icon.ico"
+      - "third-party-licenses.md"
   pull_request:
     branches: ["main"]
     paths:
@@ -24,6 +26,8 @@ on:
       - "vcpkg.json"
       - "vcpkg-configuration.json"
       - "ports/**"
+      - "assets/icon.ico"
+      - "third-party-licenses.md"
 
 permissions:
   contents: read
@@ -51,7 +55,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy, rustfmt
 
@@ -205,11 +209,21 @@ jobs:
           if ((Get-ChildItem -LiteralPath build -Filter "avcodec*.dll" -File).Count -eq 0) {
             throw "FFmpeg runtime DLLs are missing"
           }
-          foreach ($directory in @("effects", "objects", "plugins", "effect-packages", "repos")) {
+          # "Portable" means it starts on a clean machine, so the runtime has to
+          # be inside the package rather than assumed to be installed.
+          foreach ($runtime in @("vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path -LiteralPath (Join-Path "build" $runtime))) {
+              throw "The MSVC runtime $runtime was not packaged"
+            }
+          }
+          foreach ($directory in @("effects", "objects", "plugins", "effect-packages", "repos", "licenses")) {
             if (-not (Test-Path -LiteralPath (Join-Path "build" $directory))) {
               throw "Packaged resource directory is missing: $directory"
             }
           }
-          if (-not (Test-Path -LiteralPath "dist\Freya-NLE-MSVC-x86_64.zip")) {
-            throw "MSVC package archive was not created"
+          # The archive is named for the version and platform, not the toolchain,
+          # so the check follows the scheme instead of one fixed file name.
+          $archives = @(Get-ChildItem -Path dist -Filter "*-windows-x86_64.zip" -File)
+          if ($archives.Count -ne 1) {
+            throw "Expected one Windows archive, found $($archives.Count)"
           }

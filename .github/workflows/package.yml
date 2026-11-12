@@ -1,0 +1,418 @@
+name: Package
+
+# Builds the release artifacts. `release.yml` calls this on a tag; the inputs
+# let a maintainer build one platform by hand to check a change without cutting
+# a release.
+on:
+  # A change to the packaging is only proven by packaging. These paths cover the
+  # build script, the release workflow, and the pinned FFmpeg recipe, so a pull
+  # request that touches them builds the artifacts instead of merging blind.
+  pull_request:
+    paths:
+      - ".github/workflows/package.yml"
+      - ".github/workflows/release.yml"
+      - ".github/actions/resolve-version/**"
+      - "BUILD.py"
+      - "scripts/**"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - "rust/Cargo.lock"
+      - "tests/test_build_version.py"
+  workflow_call:
+    inputs:
+      version:
+        description: Version to stamp into the artifacts; must match rust/Cargo.toml
+        required: true
+        type: string
+      platform:
+        description: Platform subset to build
+        required: false
+        type: string
+        # The release calls this with only a version, and a missing input would
+        # make every platform's `inputs.platform == ...` false, so a manual
+        # release would publish nothing and block on the smoke test.
+        default: all
+    outputs:
+      linux_appimage:
+        description: File name of the portable Linux artifact
+        value: ${{ jobs.linux-appimage.outputs.artifact }}
+      linux_arch:
+        description: File name of the Arch-compatible Linux artifact
+        value: ${{ jobs.linux-arch.outputs.artifact }}
+      macos_arm64:
+        description: File name of the Apple Silicon macOS artifact
+        value: ${{ jobs.macos.outputs.arm64 }}
+      macos_x86_64:
+        description: File name of the Intel macOS artifact
+        value: ${{ jobs.macos.outputs.x86_64 }}
+      windows:
+        description: File name of the Windows artifact
+        value: ${{ jobs.windows.outputs.artifact }}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build; must match rust/Cargo.toml
+        required: true
+        type: string
+      platform:
+        description: Platform to build
+        required: true
+        type: choice
+        options: [all, linux-appimage, linux-arch, macos, windows]
+        default: all
+
+permissions:
+  contents: read
+
+# Packaging is the expensive workflow, and a pull request that receives several
+# pushes in a row only needs the newest one verified.
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test Rust + Slint
+    uses: ./.github/workflows/rust-checks.yml
+
+  linux-appimage:
+    name: Linux AppImage (portable)
+    needs: [test]
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' || inputs.platform == 'linux-appimage'
+    # The glibc an ELF asks for is fixed at build time, so the portable track is
+    # built on the oldest Ubuntu GitHub still hosts: 22.04 carries glibc 2.35.
+    # Building it on the default 24.04 runner would ask for 2.39 instead.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    outputs:
+      artifact: ${{ steps.name.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Determine version
+        id: version
+        uses: ./.github/actions/resolve-version
+        with:
+          version: ${{ inputs.version }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential curl pkg-config zstd xz-utils \
+            nasm libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin
+      - uses: dtolnay/rust-toolchain@1.99.1
+      # Restore and save are separate steps so a later packaging failure cannot
+      # throw away a finished FFmpeg build.
+      - name: Restore the pinned FFmpeg
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          # No `restore-keys`: `build-ffmpeg.sh` reuses any prefix that holds a
+          # pkg-config file, so a stale entry would silently link an FFmpeg this
+          # commit did not pin. The script's hash covers both source revisions.
+          path: .build_tmp/ffmpeg/x86_64-unknown-linux-gnu
+          key: linux-appimage-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: Build the pinned FFmpeg
+        run: |
+          bash scripts/build-ffmpeg.sh \
+            --target x86_64-unknown-linux-gnu \
+            --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
+          echo "FFMPEG_DIR=$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+      - name: Save the pinned FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build_tmp/ffmpeg/x86_64-unknown-linux-gnu
+          key: linux-appimage-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: Build and package
+        # Already inside the pinned container, so BUILD.py must not open another.
+        run: python3 BUILD.py --appimage --no-container
+      - name: Verify the image
+        run: |
+          artifact="$(ls dist/*.AppImage)"
+          test -n "$artifact"
+          chmod +x "$artifact"
+          # Run the image itself, not the staging tree: this proves the runtime,
+          # the AppRun wrapper, and the bundled libraries all resolve.
+          "$artifact" --appimage-extract-and-run --version
+          echo "artifact=$(basename "$artifact")" >> "$GITHUB_OUTPUT"
+        id: name
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  linux-arch:
+    name: Linux Arch archive (compatibility)
+    needs: [test]
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' || inputs.platform == 'linux-arch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    # The Arch target builds inside a pinned container so the glibc and FFmpeg
+    # sonames a rebuild links against do not drift with the rolling release.
+    container:
+      image: docker.io/library/archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
+    outputs:
+      artifact: ${{ steps.name.outputs.artifact }}
+    steps:
+      - name: Install base tooling
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm archlinux-keyring
+          pacman -S --needed --noconfirm base-devel git python zstd nasm
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install build dependencies
+        run: |
+          pacman -S --needed --noconfirm \
+            alsa-lib clang pkgconf ffmpeg zip zstd nasm \
+            mesa vulkan-devel libx11 libxcursor libxi libxrandr libxkbcommon \
+            wayland wayland-protocols
+      - name: Determine version
+        id: version
+        uses: ./.github/actions/resolve-version
+        with:
+          version: ${{ inputs.version }}
+      - name: Build and package
+        run: python3 BUILD.py --arch --no-container
+      - name: Verify the archive
+        id: name
+        run: |
+          artifact="$(ls dist/*.tar.zst)"
+          test -n "$artifact"
+          tar --zstd -tf "$artifact" > /dev/null
+          # The executable bit is the reason this is a tar and not a zip, so the
+          # check that it survived is the check that matters.
+          tar --zstd -tvf "$artifact" | grep -q '^-rwx.* freya-nle$'
+          echo "artifact=$(basename "$artifact")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arch
+          path: dist/*.tar.zst
+          if-no-files-found: error
+
+  macos:
+    name: macOS (arm64 + x86_64)
+    needs: [test]
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' || inputs.platform == 'macos'
+    # `macos-15` is an arm64 runner. Intel is cross-compiled here rather than
+    # built on an Intel runner, which GitHub only provides as a larger paid
+    # runner: clang and the Rust target both take `-arch x86_64` natively.
+    runs-on: macos-15
+    timeout-minutes: 240
+    outputs:
+      arm64: ${{ steps.name.outputs.arm64 }}
+      x86_64: ${{ steps.name.outputs.x86_64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          brew install pkgconf nasm
+          # Both Apple architectures are needed; the runner only ships its own.
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Determine version
+        id: version
+        uses: ./.github/actions/resolve-version
+        with:
+          version: ${{ inputs.version }}
+      # Restore and save are separate steps, as in the Linux job.
+      - name: Restore the pinned FFmpeg
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          # Both prefixes under one exact key, for the reason the Linux job
+          # gives: the script reuses whatever install it finds.
+          path: |
+            .build_tmp/ffmpeg/aarch64-apple-darwin
+            .build_tmp/ffmpeg/x86_64-apple-darwin
+          key: macos-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: Build the pinned FFmpeg for both architectures
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            bash scripts/build-ffmpeg.sh --target "$target" \
+              --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/$target"
+          done
+      - name: Save the pinned FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build_tmp/ffmpeg/aarch64-apple-darwin
+            .build_tmp/ffmpeg/x86_64-apple-darwin
+          key: macos-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: Build and package arm64
+        env:
+          FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/aarch64-apple-darwin
+        run: |
+          # Not `--offline`: that flag reaches `cargo --offline`, and a fresh
+          # runner has an empty registry. The FFmpeg prefix this build links was
+          # built in the step above, so BUILD.py reuses it instead of rebuilding.
+          python3 BUILD.py --xcode --strict-deployment-target \
+            --target aarch64-apple-darwin
+      - name: Build and package x86_64
+        env:
+          FFMPEG_DIR: ${{ github.workspace }}/.build_tmp/ffmpeg/x86_64-apple-darwin
+        run: |
+          python3 BUILD.py --xcode --strict-deployment-target \
+            --target x86_64-apple-darwin
+      - name: Verify both bundles
+        id: name
+        run: |
+          set -euo pipefail
+          # Both architectures land in dist/ under names that differ by
+          # architecture, so neither build can overwrite the other.
+          for archive in dist/*.zip; do
+            [ -f "$archive" ] || continue
+            echo "Checking $archive"
+            work="$(mktemp -d)"
+            ditto -x -k "$archive" "$work"
+            app="$(find "$work" -maxdepth 1 -name '*.app' | head -1)"
+            test -n "$app"
+            # The declared floor has to cover every Mach-O inside the bundle --
+            # the defect this check exists to catch was a plist promising macOS
+            # 12 over libraries built for 15.
+            codesign --verify --deep --strict "$app"
+            binary="$app/Contents/MacOS/freya-nle"
+            bundle_arch="$(lipo -archs "$binary")"
+            case "$bundle_arch" in
+              *"$(uname -m)"*)
+                # Only the architecture this runner is can be started here; the
+                # other one would need Rosetta, which the image does not promise.
+                "$binary" --version
+                ;;
+              *)
+                echo "Skipping execution: $bundle_arch bundle on a $(uname -m) host"
+                lipo -info "$binary"
+                ;;
+            esac
+            plist_min="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
+            for binary in "$app"/Contents/MacOS/* "$app"/Contents/Frameworks/*.dylib; do
+              [ -f "$binary" ] || continue
+              binary_min="$(vtool -show-build "$binary" | awk '/minos/{print $2}' | sort -V | tail -1)"
+              [ -z "$binary_min" ] && continue
+              if [ "$(printf '%s\n%s\n' "$plist_min" "$binary_min" | sort -V | tail -1)" != "$plist_min" ]; then
+                echo "$binary needs macOS $binary_min but Info.plist declares $plist_min" >&2
+                exit 1
+              fi
+            done
+            rm -rf "$work"
+          done
+          arm="$(basename "$(ls dist/*-macos-arm64.zip | head -1)")"
+          x86="$(basename "$(ls dist/*-macos-x86_64.zip | head -1)")"
+          echo "arm64=$arm" >> "$GITHUB_OUTPUT"
+          echo "x86_64=$x86" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          # Flattened on purpose: `download-artifact` preserves an artifact's
+          # internal paths, and the release job expects every file at the top.
+          path: dist/*.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows portable
+    needs: [test]
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' || inputs.platform == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    outputs:
+      artifact: ${{ steps.name.outputs.artifact }}
+    env:
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.build_tmp\vcpkg-binary-cache,readwrite
+      VCPKG_DOWNLOADS: ${{ github.workspace }}\.build_tmp\vcpkg-downloads
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Locate vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot) { $vcpkgRoot = "C:\vcpkg" }
+          if (-not (Test-Path -LiteralPath (Join-Path $vcpkgRoot "vcpkg.exe"))) {
+            throw "vcpkg.exe was not found under $vcpkgRoot"
+          }
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build_tmp/vcpkg-binary-cache
+            .build_tmp/msvc/Release/vcpkg_installed
+          key: windows-msvc-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**') }}
+          restore-keys: |
+            windows-msvc-vcpkg-
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build_tmp/msvc/Release/cargo-target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: windows-msvc-rust-${{ hashFiles('rust/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            windows-msvc-rust-
+      - name: Prepare cache directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path .build_tmp\vcpkg-binary-cache | Out-Null
+      - name: Determine version
+        id: version
+        uses: ./.github/actions/resolve-version
+        with:
+          version: ${{ inputs.version }}
+      - name: Build and package
+        shell: pwsh
+        run: python BUILD.py --msvc
+      - name: Verify the archive
+        id: name
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Get-ChildItem -Path dist -Filter "*.zip" | Select-Object -First 1
+          if (-not $archive) { throw "No Windows archive was produced" }
+          $work = Join-Path $env:RUNNER_TEMP "verify"
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $work -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $work "freya-nle.exe"))) {
+            throw "freya-nle.exe is missing from the archive"
+          }
+          # "Portable" means it starts on a clean machine, so the CRT has to be
+          # inside the archive rather than assumed to be installed.
+          foreach ($required in @("vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $work $required))) {
+              throw "The MSVC runtime $required is missing from the archive"
+            }
+          }
+          foreach ($required in @("effects", "objects", "plugins", "effect-packages", "repos", "licenses")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $work $required))) {
+              throw "Packaged directory is missing: $required"
+            }
+          }
+          # The executable is a GUI-subsystem program, so `&` returns immediately
+          # and `$LASTEXITCODE` would describe whatever ran before it.
+          $run = Start-Process -FilePath (Join-Path $work "freya-nle.exe") `
+            -ArgumentList "--version" -NoNewWindow -Wait -PassThru
+          if ($run.ExitCode -ne 0) {
+            throw "The packaged executable exited with $($run.ExitCode)"
+          }
+          "artifact=$($archive.Name)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error

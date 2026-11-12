@@ -2,6 +2,8 @@
 """Build and package the Freya NLE desktop application (Rust + Slint)."""
 
 import argparse
+import hashlib
+import json
 import locale
 import multiprocessing
 import os
@@ -14,6 +16,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -31,6 +34,21 @@ _SEMVER_PATTERN = re.compile(
     rf"(?P<patch>{_SEMVER_NUMERIC_IDENTIFIER})"
     rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+
+# Arch is a rolling release, so `archlinux:latest` silently changes the glibc
+# and FFmpeg sonames an archive is linked against. Pin the digest instead: a
+# rebuild of one commit then produces the same runtime floor it did before.
+ARCH_LINUX_IMAGE = (
+    "docker.io/library/archlinux@sha256:"
+    "d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899"
+)
+# The AppImage is built on the oldest distribution the toolchain supports, so
+# the binary asks for the lowest glibc it can rather than Arch's current one.
+# Ubuntu 22.04 carries glibc 2.35, which is what the AppImage's ELF floor is.
+APPIMAGE_BASE_IMAGE = (
+    "docker.io/library/ubuntu@sha256:"
+    "076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11"
 )
 
 
@@ -87,6 +105,13 @@ class BuildConfig:
     version_minor: int = 0
     version_patch: int = 0
     version_string: str = "0.0.0"
+    # Fail instead of widening the declared macOS range when a dependency was
+    # built for a newer system. CI sets this so a bottle that outruns the
+    # deployment target breaks the build rather than the promise.
+    strict_deployment_target: bool = False
+    # The Rust target triple when it differs from the host, which is how one
+    # arm64 CI runner produces the Intel macOS build as well.
+    target_triple: str = ""
 
     @property
     def build_type(self) -> str:
@@ -94,7 +119,11 @@ class BuildConfig:
 
     @property
     def work_dir(self) -> Path:
-        return self.temp_base / self.target / self.build_type
+        baseline = self.temp_base / self.target / self.build_type
+        # Two architectures share one checkout, so their intermediate trees must
+        # not be the same directory: the second build would reuse the first's
+        # objects and report success while producing nothing new.
+        return baseline / self.target_triple if self.target_triple else baseline
 
     @property
     def cargo_target_dir(self) -> Path:
@@ -144,26 +173,40 @@ class PlatformBuilder:
             "CARGO_TARGET_DIR": str(config.cargo_target_dir),
         })
         self.container_name = ""
+        # The name the container was actually created under, and whether this
+        # process created it at all: removal is a `--force` on a name, so an
+        # unowned name is somebody else's container.
+        self.podman_container = ""
+        self.owns_container = False
         self.use_container = False
         self.cancelled = False
         self.current_proc: Optional[subprocess.Popen] = None
 
     def build(self):
         self.logger.progress(10, f"{self.config.build_type} build started")
-        self.logger.section("Checking dependencies")
-        self.install_dependencies()
-        self.check_cancelled()
-        self.logger.section("Compiling Rust + Slint frontend")
-        self.compile()
-        self.logger.progress(70, "Compilation complete")
-        self.check_cancelled()
-        self.logger.section("Packaging")
-        self.package()
-        self.logger.progress(90, "Package assembled")
-        self.check_cancelled()
-        self.logger.section("Creating archive")
-        self.archive()
+        try:
+            self.logger.section("Checking dependencies")
+            self.install_dependencies()
+            self.check_cancelled()
+            self.logger.section("Compiling Rust + Slint frontend")
+            self.compile()
+            self.logger.progress(70, "Compilation complete")
+            self.check_cancelled()
+            self.logger.section("Packaging")
+            self.package()
+            self.logger.progress(90, "Package assembled")
+            self.check_cancelled()
+            self.logger.section("Creating archive")
+            self.archive()
+        finally:
+            # A container this build created is its own to remove, including
+            # when it failed partway through.
+            self.cleanup()
         self.logger.progress(100, "Complete")
+
+    def cleanup(self):
+        """Release anything the build owns outside the source tree."""
+        self.remove_podman_container()
 
     def check_cancelled(self):
         if self.cancelled:
@@ -195,17 +238,28 @@ class PlatformBuilder:
             command.append("--release")
         if self.config.is_offline:
             command.append("--offline")
+        if self.config.target_triple:
+            command.extend(["--target", self.config.target_triple])
         return command
+
+    def cargo_environment(self) -> dict:
+        """Environment the compiler needs, applied before any cargo invocation."""
+        return {}
 
     def compile(self):
         jobs = multiprocessing.cpu_count()
         self.env["CARGO_BUILD_JOBS"] = str(jobs)
+        self.env.update({name: value for name, value in self.cargo_environment().items()})
         self.logger.log(f"Parallel jobs: {jobs}")
         self.run_cmd(self.get_cargo_build_cmd())
 
     def cargo_binary(self, windows: bool = False) -> Path:
         suffix = ".exe" if windows else ""
-        return self.config.cargo_target_dir / self.config.cargo_profile / f"freya-nle{suffix}"
+        # A cross build puts its output under a per-target directory.
+        directory = self.config.cargo_target_dir
+        if self.config.target_triple:
+            directory = directory / self.config.target_triple
+        return directory / self.config.cargo_profile / f"freya-nle{suffix}"
 
     def packaged_executable_name(self, windows: bool = False) -> str:
         """Name the staged executable takes inside the archive.
@@ -219,6 +273,22 @@ class PlatformBuilder:
         raise NotImplementedError
 
     def prepare_output_dir(self):
+        """Empty the staging directory, protecting anything the build still needs.
+
+        Packaging owns `build/` and deletes its contents. Anything the build
+        linked against that happens to live there would be deleted out from
+        under the packaging step, which fails much later and much less clearly.
+        """
+        output = self.config.output_dir.resolve()
+        for protected in self.protected_paths():
+            try:
+                protected.relative_to(output)
+            except ValueError:
+                continue
+            raise RuntimeError(
+                f"{protected} is inside the packaging output directory "
+                f"{self.config.output_dir}, which packaging clears; store it elsewhere"
+            )
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         # Materialize the directory entries before removing anything.  Keeping
         # an os.scandir iterator alive while rmtree runs can leave the output
@@ -264,27 +334,317 @@ class PlatformBuilder:
     def archive(self):
         self.config.dist_dir.mkdir(parents=True, exist_ok=True)
         archive_name = self.get_archive_name()
-        self.create_zip(archive_name)
-        self.logger.log(f"Archive: {self.config.dist_dir / (archive_name + '.zip')}")
+        archive_path = self.create_archive(archive_name)
+        self.logger.log(f"Archive: {archive_path}")
+
+    # -- Artifact naming -------------------------------------------------
+    #
+    # One scheme for every platform:
+    #
+    #     Freya-NLE-<version>-<os>-<arch>[-<variant>].<ext>
+    #
+    # The toolchain that produced a build belongs in `build-info.json`, not in
+    # the file name: a user downloads "the Linux build for x86_64", and the
+    # Arch-compatible archive is a variant of that, not a separate platform.
+
+    PLATFORM_OS: ClassVar[str] = "unknown"
+    PLATFORM_ARCH: ClassVar[str] = "unknown"
+
+    def platform_architecture(self) -> str:
+        """The architecture this build produces.
+
+        Constant for the builders whose architecture is fixed by their toolchain;
+        macOS overrides it because one runner produces both Apple architectures.
+        """
+        return self.PLATFORM_ARCH
+
+    # A variant marks a build that is compatible only with a narrower host than
+    # its OS and architecture imply, such as the Arch-current sysroot.
+    artifact_variant: ClassVar[str] = ""
+    archive_extension: ClassVar[str] = ".zip"
 
     def get_archive_name(self) -> str:
-        return "Freya-NLE-Archive"
+        parts = [
+            "Freya-NLE",
+            self.config.version_string,
+            self.PLATFORM_OS,
+            self.platform_architecture(),
+        ]
+        if self.artifact_variant:
+            parts.append(self.artifact_variant)
+        return "-".join(parts)
+
+    def create_archive(self, archive_name: str) -> Path:
+        archive_path = self.config.dist_dir / f"{archive_name}{self.archive_extension}"
+        archive_path.unlink(missing_ok=True)
+        if self.archive_extension == ".zip":
+            self.create_zip(archive_name)
+        elif self.archive_extension == ".tar.zst":
+            self.create_tar_zst(archive_name)
+        elif self.archive_extension == ".AppImage":
+            self.create_appimage(archive_name)
+        else:
+            raise RuntimeError(f"Unsupported archive extension: {self.archive_extension}")
+        return self.config.dist_dir / f"{archive_name}{self.archive_extension}"
 
     def create_zip(self, archive_name: str):
-        archive_path = self.config.dist_dir / f"{archive_name}.zip"
-        archive_path.unlink(missing_ok=True)
+        # `shutil.make_archive` does not preserve the executable bit, so the
+        # macOS bundle is zipped with `ditto` and Linux ships `.tar.zst`.
         shutil.make_archive(str(self.config.dist_dir / archive_name), "zip", root_dir=self.config.output_dir)
 
-    def run_cmd(self, command: List[str], shell: bool = False, force_host: bool = False):
+    def create_tar_zst(self, archive_name: str):
+        """Write a `.tar.zst` that keeps mode bits and stores no host metadata.
+
+        `tarfile` records the exact permission of every entry, which a zip made
+        by `shutil.make_archive` does not, so `freya-nle` stays executable after
+        extraction. Ownership and device numbers are normalised and the mtime is
+        pinned to the source's commit time so two builds of one commit differ
+        only by their contents.
+        """
+        # A containerised build has its own zstd, which is the copy that matters
+        # there; only a host build has to find one on the host.
+        if not self.use_container and not shutil.which("zstd", path=self.env.get("PATH")):
+            raise RuntimeError("zstd was not found; install it to build the Linux archive")
+        tar_path = self.config.dist_dir / f"{archive_name}.tar"
+        tar_path.unlink(missing_ok=True)
+        epoch = self.source_date_epoch()
+        with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as tar:
+            for entry in sorted(self.config.output_dir.rglob("*")):
+                relative = entry.relative_to(self.config.output_dir)
+                info = tar.gettarinfo(str(entry), arcname=str(relative))
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                if epoch is not None:
+                    # `gettarinfo` copies the filesystem time, which differs per
+                    # build; the archive is only reproducible if it does not.
+                    info.mtime = epoch
+                if info.isreg():
+                    with entry.open("rb") as handle:
+                        tar.addfile(info, handle)
+                else:
+                    tar.addfile(info)
+        archive_path = self.config.dist_dir / f"{archive_name}.tar.zst"
+        try:
+            self.run_cmd([
+                "zstd", "--quiet", "--force", "-19", "--long", "-T0",
+                str(tar_path), "-o", str(archive_path),
+            ])
+        finally:
+            tar_path.unlink(missing_ok=True)
+
+    # -- Archive contents ------------------------------------------------
+
+    def write_build_info(self, destination: Path):
+        """Record how this build was produced, next to the binaries.
+
+        The file name deliberately carries no toolchain, so this is where the
+        answer to "what is this build tied to" lives: the commit, the pinned
+        toolchain, the host libraries, and the minimum of each OS the binaries
+        were actually produced against.
+        """
+        info = {
+            "name": "Freya NLE",
+            "version": self.config.version_string,
+            "platform": self.PLATFORM_OS,
+            "architecture": self.platform_architecture(),
+            "variant": self.artifact_variant or None,
+            "profile": self.config.build_type,
+            "commit": self.git_commit(),
+            "target": self.build_target(),
+            "rustc": self.command_output(["rustc", "--version"]),
+            "ffmpeg": self.ffmpeg_provenance(),
+            "requirements": self.runtime_requirements(),
+        }
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "build-info.json").write_text(
+            json.dumps(info, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+    def build_target(self) -> str:
+        """The triple the binaries were built for, not the machine that built them.
+
+        One arm64 runner cross-compiles the Intel bundle, and `rustc -vV`'s
+        `host:` describes that runner; `build-info.json` has to record the
+        triple Cargo was given instead.
+        """
+        if self.config.target_triple:
+            return self.config.target_triple
+        for line in self.command_output(["rustc", "-vV"]).splitlines():
+            if line.startswith("host: "):
+                return line[len("host: "):].strip()
+        return ""
+
+    def git_commit(self) -> str:
+        output = self.command_output(["git", "rev-parse", "HEAD"])
+        return output.splitlines()[0].strip() if output else ""
+
+    def source_date_epoch(self) -> Optional[int]:
+        """The time every archive entry is stamped with.
+
+        `SOURCE_DATE_EPOCH` wins because a repackager sets it and expects to be
+        obeyed; otherwise the commit time is used, so the same commit packed
+        twice gives the same bytes. A tree without git keeps the filesystem
+        time, since an archive still has to be produced.
+        """
+        if epoch := self.env.get("SOURCE_DATE_EPOCH"):
+            try:
+                return int(epoch)
+            except ValueError:
+                pass
+        output = self.command_output(["git", "log", "-1", "--format=%ct"])
+        try:
+            return int(output.strip())
+        except ValueError:
+            return None
+
+    def ffmpeg_provenance(self) -> dict:
+        """Report the FFmpeg the build actually linked, and where it came from.
+
+        `ffmpeg` on `PATH` is a different binary from the one shipping inside the
+        archive, and can be a different version or missing entirely, so it is only
+        consulted when the build did not name a prefix. `third-party-licenses.md`
+        promises the source can be identified by version and commit; the comment
+        is recorded for that reason.
+        """
+        ffmpeg_dir = self.env.get("FFMPEG_DIR")
+        if ffmpeg_dir:
+            info = {
+                "source": "ffmpeg-dir",
+                "path": ffmpeg_dir,
+                "version": self.ffmpeg_version_from_prefix(Path(ffmpeg_dir)),
+            }
+            if revision := self.pinned_ffmpeg_revision():
+                info["revision"] = revision
+            return info
+        output = self.command_output(["ffmpeg", "-version"])
+        return {
+            "source": "system",
+            "path": None,
+            "version": output.splitlines()[0].strip() if output else "",
+        }
+
+    def ffmpeg_version_from_prefix(self, prefix: Path) -> str:
+        """The version recorded by the installed FFmpeg, not by an installed tool.
+
+        A release built from the pinned tag reports its git revision here, and a
+        packaged distribution build reports its release number; either way it is
+        the version of the libraries in this build.
+        """
+        header = prefix / "include" / "libavutil" / "ffversion.h"
+        try:
+            text = header.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        match = re.search(r'#define\s+FFMPEG_VERSION\s+"([^"]+)"', text)
+        return match.group(1) if match else ""
+
+    def pinned_ffmpeg_revision(self) -> str:
+        """The commit `scripts/build-ffmpeg.sh` pins, for the source obligation."""
+        script = self.config.source_dir / "scripts" / "build-ffmpeg.sh"
+        try:
+            text = script.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        match = re.search(r'^FFMPEG_COMMIT="([0-9a-f]{40})"', text, flags=re.MULTILINE)
+        return match.group(1) if match else ""
+
+    def runtime_requirements(self) -> dict:
+        return {}
+
+    def protected_paths(self) -> list[Path]:
+        """Directories that must survive `prepare_output_dir`."""
+        paths: list[Path] = []
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            paths.append(Path(ffmpeg_dir).resolve())
+        return paths
+
+    def copy_licenses(self, destination: Path):
+        """Ship the licence texts the archive owes its recipients.
+
+        The application is AGPLv3 and bundles FFmpeg (GPL) and x264, so an
+        archive with no licence text at all is a compliance gap rather than a
+        cosmetic omission. Missing optional files are skipped so a fixture tree
+        can still be packaged.
+        """
+        legal = destination / "licenses"
+        copied = False
+        sources = [
+            self.config.source_dir / "LICENSE.md",
+            self.config.source_dir / "third-party-licenses.md",
+        ]
+        # `third-party-licenses.md` says the archive carries the texts it names.
+        # The GPL and LGPL copies live in the repository so every platform ships
+        # them, including the Windows build, which has no FFmpeg source tree.
+        vendored = self.config.source_dir / "licenses"
+        if vendored.is_dir():
+            sources.extend(sorted(path for path in vendored.iterdir() if path.is_file()))
+        for source in sources:
+            if source.is_file():
+                legal.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, legal / source.name)
+                copied = True
+        if copied:
+            self.logger.log("Bundled licence texts")
+
+    def command_output(self, command: List[str]) -> str:
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", env=self.env, cwd=self.config.source_dir,
+            )
+        except OSError:
+            return ""
+        return result.stdout if result.returncode == 0 else ""
+
+    def inspect_output(self, command: List[str]) -> str:
+        """Output of an inspection tool, run where that tool is installed.
+
+        `objdump` and `readelf` belong to the build container whenever there is
+        one: a macOS host has neither, and reading the archive from there would
+        record an empty glibc floor as though the binary required none.
+        """
+        if not self.use_container:
+            return self.command_output(command)
+        inner = " && ".join([
+            f"cd {shlex.quote(self.container_source_dir())}",
+            shlex.join(self.container_command(command)),
+        ])
+        try:
+            result = subprocess.run(
+                self.container_invocation(inner), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", env=self.env,
+                cwd=self.config.source_dir,
+            )
+        except OSError:
+            return ""
+        return result.stdout if result.returncode == 0 else ""
+
+    def run_cmd(self, command: List[str], shell: bool = False, force_host: bool = False,
+                allow_failure: bool = False):
         self.check_cancelled()
         in_container = self.use_container and not force_host
+        if in_container and isinstance(command, list):
+            # Paths a container sees are not the host's paths; translate before
+            # quoting so `--manifest-path /src/rust/Cargo.toml` stays valid.
+            command = self.container_command(command)
         display_command = shlex.join(command) if isinstance(command, list) else command
         self.logger.log(f"{'[Container] ' if in_container else ''}{display_command}")
         actual_command = command
         if in_container:
-            inner = f"cd {shlex.quote(str(self.config.source_dir))} && {display_command}"
-            actual_command = f"distrobox enter {shlex.quote(self.container_name)} -- bash -lc {shlex.quote(inner)}"
-            shell = True
+            workdir = self.container_source_dir()
+            # Neither `podman exec` nor `distrobox enter` inherits this process's
+            # environment, so the variables a build needs are exported in the
+            # command itself instead of being handed to the container client.
+            exports = "".join(
+                f"export {name}={shlex.quote(str(value))}; "
+                for name, value in self.container_environment().items()
+            )
+            inner = f"cd {shlex.quote(workdir)} && {exports}{display_command}"
+            actual_command = self.container_invocation(inner)
+            # The list form is passed to Popen unchanged; `shell=True` would
+            # hand the client command to the host's shell, and on Windows that
+            # is `cmd.exe`, which has no idea what POSIX quoting means.
+            shell = False
         popen_options = {"start_new_session": True} if os.name != "nt" else {}
         process = subprocess.Popen(
             actual_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -294,14 +654,168 @@ class PlatformBuilder:
         self.current_proc = process
         try:
             assert process.stdout is not None
-            for line in process.stdout:
-                self.logger.log(line.rstrip())
+            with process.stdout:
+                for line in process.stdout:
+                    self.logger.log(line.rstrip())
             process.wait()
         finally:
             self.current_proc = None
         self.check_cancelled()
-        if process.returncode != 0:
+        if process.returncode != 0 and not allow_failure:
             raise subprocess.CalledProcessError(process.returncode, actual_command)
+        return process.returncode
+
+    def container_environment(self) -> dict:
+        """Variables the containerised command needs, in the container's paths.
+
+        Cargo's output directory and the FFmpeg prefix are the two the build
+        cannot infer: without them the compiler writes where packaging does not
+        look, and `ffmpeg-sys` links whatever the container happens to have.
+        """
+        variables = {}
+        source = str(self.config.source_dir)
+        for name in ("CARGO_TARGET_DIR", "FFMPEG_DIR"):
+            if value := self.env.get(name):
+                # distrobox shares the host filesystem, so its paths stay as they
+                # are; only the podman mount renames the tree to /src.
+                variables[name] = str(
+                    self.container_path(value, source)
+                    if self.container_engine == "podman"
+                    else value
+                )
+        # Not a path: `appimagetool` is told which architecture to label the
+        # image with, and the variable has to cross into the container too.
+        if arch := self.env.get("ARCH"):
+            variables["ARCH"] = arch
+        return variables
+
+    def container_source_dir(self) -> str:
+        """Where the source tree appears inside the build container.
+
+        `distrobox` shares the host filesystem, so the tree keeps its path. A
+        `podman` container only sees what is mounted, and this build mounts it at
+        `/src`.
+        """
+        return "/src" if self.container_engine == "podman" else str(self.config.source_dir)
+
+    def container_command(self, command: List[str]) -> List[str]:
+        """Rewrite host paths in a command for the container's filesystem.
+
+        The container is Linux, so the result has to be a POSIX path even when
+        the build runs on a host whose separator is a backslash: replacing the
+        prefix alone would leave `/src\\rust\\Cargo.toml` behind.
+        """
+        if self.container_engine != "podman":
+            return command
+        prefix = str(self.config.source_dir)
+        return [self.container_path(argument, prefix) for argument in command]
+
+    @staticmethod
+    def container_path(argument: object, prefix: str) -> object:
+        """Translate a host path inside the mounted tree to the mount's path.
+
+        Only an argument that *is* such a path is translated. An argument that
+        merely mentions one -- a `bash -c` program with an absolute path baked
+        into its text -- has to be left alone: prefixing it would turn the
+        program's first word into a path and the command would not run.
+        """
+        if not isinstance(argument, str):
+            return argument
+        root = prefix.rstrip("\\/")
+        if argument != root and not argument.startswith((root + "/", root + "\\")):
+            return argument
+        relative = argument[len(root):].lstrip("\\/").replace("\\", "/")
+        return "/src" + (f"/{relative}" if relative else "")
+
+    def container_invocation(self, inner: str) -> List[str]:
+        """Command that runs `inner` inside the build container, as an argument list.
+
+        `distrobox` is the preferred host because it creates a persistent
+        environment keyed to the image. It is not installed everywhere -- on
+        macOS, in particular, only podman is -- and the fallback has to persist
+        too: a `podman run --rm` per command would discard every package the
+        previous command installed.
+
+        The result is a list because `inner` is a whole program: it carries
+        quotes, `&&` and paths with spaces. Quoting it for a host shell only
+        works on hosts whose shell understands that quoting.
+        """
+        if self.container_engine == "podman":
+            return [
+                "podman", "exec",
+                "-w", "/src",
+                self.podman_container or self.container_name,
+                "bash", "-lc", inner,
+            ]
+        return [
+            "distrobox", "enter", self.container_name,
+            "--", "bash", "-lc", inner,
+        ]
+
+    def create_podman_container(self):
+        """Create the long-lived container the podman path executes into.
+
+        One container serves every command in the build, which is what lets an
+        `apt-get install` still be there for the compile that follows. The
+        source tree is mounted whole -- the build directories live inside it --
+        and the mount point has to exist before podman is asked for it.
+
+        The name is per process because removal is a `podman container rm
+        --force` on that name: a shared one would let a second build delete the
+        container a first build is still executing into. The pre-remove then
+        only clears a leftover from a crashed run that reused this PID.
+
+        There is deliberately no `--userns=keep-id`: it sets the container user
+        to the user running podman, so `apt-get install` would run unprivileged
+        and rustup would see a `HOME` (`/root`, from the image) that is not the
+        mapped user's. Running as the image's root is what rootless podman maps
+        to the invoking user anyway, so the mount stays writable and files keep
+        the user's ownership on the host.
+        """
+        self.config.temp_base.mkdir(parents=True, exist_ok=True)
+        self.podman_container = f"{self.container_name}-{os.getpid()}"
+        # Owned before `run`: a login or image failure can still leave the
+        # container behind, and removal by name is harmless when it did not.
+        self.owns_container = True
+        self.run_cmd(["podman", "container", "rm", "--force", self.podman_container],
+                     force_host=True, allow_failure=True)
+        self.run_cmd([
+            "podman", "run", "--detach",
+            "--name", self.podman_container,
+            "--security-opt", "label=disable",
+            "--platform", "linux/amd64",
+            "-v", f"{self.config.source_dir}:/src:Z",
+            "-w", "/src",
+            # Keep the container alive between commands; `exec` supplies the work.
+            self.image_name,
+            "sleep", "infinity",
+        ], force_host=True)
+
+    def remove_podman_container(self):
+        """Drop the container once the build is done, if this build made one.
+
+        Only a container this process created is removed. Host mode creates
+        none, and a name that was never created here may belong to another
+        build or to the user's own container, which `--force` would destroy.
+
+        The removal runs outside `run_cmd`, which refuses to start once
+        `cancel()` has fired -- exactly the case that would otherwise leave the
+        container running behind an interrupted build.
+        """
+        if not self.owns_container or not self.podman_container:
+            return
+        if not shutil.which("podman"):
+            return
+        try:
+            subprocess.run(
+                ["podman", "container", "rm", "--force", self.podman_container],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=self.env, cwd=self.config.source_dir, check=False,
+            )
+        except OSError as error:
+            self.logger.log(f"Could not remove the build container: {error}")
+        finally:
+            self.owns_container = False
 
     def remove_tree(self, path: Path):
         def make_writable_and_retry(function, target, _exception):
@@ -318,18 +832,34 @@ class LinuxBuilderBase(PlatformBuilder):
         super().__init__(config, logger)
         self.use_container = config.use_container
         self.image_name = ""
+        self.container_engine = "distrobox"
 
     def create_container(self):
-        if not (shutil.which("distrobox") and shutil.which("podman")):
-            raise RuntimeError("distrobox or podman not found")
-        try:
-            self.run_cmd([
-                "distrobox", "create", "--name", self.container_name,
-                "--image", self.image_name, "--yes",
-            ], force_host=True)
-        except subprocess.CalledProcessError:
-            self.logger.log("Container already exists. Using as-is.")
-        self.run_cmd(["true"])
+        """Prepare the build container, or decide not to need one.
+
+        With `distrobox` available the container is created once and reused.
+        Without it, `podman run --rm` creates a container per command, so there
+        is nothing to set up; the image is pulled on first use instead.
+        """
+        if shutil.which("distrobox") and shutil.which("podman"):
+            self.container_engine = "distrobox"
+            try:
+                self.run_cmd([
+                    "distrobox", "create", "--name", self.container_name,
+                    "--image", self.image_name, "--yes",
+                ], force_host=True)
+            except subprocess.CalledProcessError:
+                self.logger.log("Container already exists. Using as-is.")
+            self.run_cmd(["true"])
+            return
+        if shutil.which("podman"):
+            self.container_engine = "podman"
+            self.create_podman_container()
+            self.run_cmd(["true"])
+            return
+        raise RuntimeError(
+            "Building Linux packages needs distrobox or podman; install one of them"
+        )
 
     def install_dependencies(self):
         if not self.use_container:
@@ -350,28 +880,364 @@ class LinuxBuilderBase(PlatformBuilder):
         self.copy_resources(self.config.output_dir)
         if discovery := self.find_carla_discovery_tool():
             shutil.copy2(discovery, self.config.output_dir / discovery.name)
+        self.copy_licenses(self.config.output_dir)
+        self.write_build_info(self.config.output_dir)
         self.logger.log(f"Executable: {destination}")
 
 
 class ArchBuilder(LinuxBuilderBase):
+    # The archive is built against Arch current, which is a rolling release, so
+    # its glibc and FFmpeg sonames are whatever that snapshot carried. The
+    # variant says so in the file name; the AppImage is the portable track.
+    PLATFORM_OS = "linux"
+    PLATFORM_ARCH = "x86_64"
+    artifact_variant = "archlinux"
+    archive_extension = ".tar.zst"
+
     def __init__(self, config: BuildConfig, logger: Logger):
         super().__init__(config, logger)
         self.container_name = "archlinux-aviqtl"
-        self.image_name = "archlinux:latest"
+        # The digest pins the starting point, not the result: the `pacman -Syu`
+        # in `install_dependencies()` upgrades to whatever Arch ships when the
+        # build runs. That is the point of this variant -- an archive linked
+        # against current Arch -- and `runtime_requirements()` records the floor
+        # the build actually ended up with.
+        self.image_name = ARCH_LINUX_IMAGE
 
     def install_dependencies(self):
         super().install_dependencies()
         if not self.use_container or self.config.is_offline:
             return
         dependencies = [
-            "base-devel", "git", "rust", "clang", "pkgconf", "zip", "ffmpeg",
+            "base-devel", "git", "rust", "clang", "pkgconf", "zip", "zstd", "ffmpeg",
             "mesa", "vulkan-devel", "libx11", "libxcursor", "libxi", "libxrandr",
             "libxkbcommon", "wayland", "wayland-protocols",
         ]
-        self.run_cmd(["sudo", "pacman", "-Syu", "--needed", "--noconfirm", *dependencies])
+        # distrobox runs an ordinary user and needs sudo; the podman fallback
+        # executes as the container's root, where sudo may not even be installed.
+        prefix = ["sudo"] if self.container_engine != "podman" else []
+        self.run_cmd([*prefix, "pacman", "-Syu", "--needed", "--noconfirm", *dependencies])
 
-    def get_archive_name(self) -> str:
-        return "Freya-NLE-Arch-Linux-x86_64"
+    def runtime_requirements(self) -> dict:
+        """Report the glibc and FFmpeg the archive was linked against.
+
+        This is the answer to "will this run on my distribution": the archive
+        needs at least the glibc symbol version listed here and the same FFmpeg
+        sonames, which is why it is a variant rather than the standard build.
+        """
+        requirements = super().runtime_requirements()
+        requirements["glibc"] = self.maximum_glibc_version()
+        requirements["ffmpeg_sonames"] = self.ffmpeg_sonames()
+        return requirements
+
+    def maximum_glibc_version(self) -> str:
+        output = self.inspect_output(["objdump", "-T", str(self.cargo_binary())])
+        versions = re.findall(r"GLIBC_([0-9]+\.[0-9]+)", output)
+        if not versions:
+            return ""
+        return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")))
+
+    def ffmpeg_sonames(self) -> list[str]:
+        libraries = []
+        for path in self.config.output_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            for needed in re.findall(r"Shared library: \[(lib(?:av|sw)[a-z]+\.so\.[0-9]+)\]",
+                                     self.inspect_output(["readelf", "-d", str(path)])):
+                if needed not in libraries:
+                    libraries.append(needed)
+        return sorted(libraries)
+
+
+class AppImageBuilder(LinuxBuilderBase):
+    """The portable Linux build.
+
+    The Arch archive is linked against a rolling release: its glibc and FFmpeg
+    sonames are whatever the snapshot carried, which is why it is a variant. The
+    AppImage is the one a user on any distribution is expected to download, so
+    it is built on the oldest distribution the toolchain supports, links one
+    pinned FFmpeg, and ships the libraries that are not part of a desktop base
+    system. Only the graphics driver, ALSA, and the X11/Wayland client libraries
+    come from the host.
+    """
+
+    PLATFORM_OS = "linux"
+    PLATFORM_ARCH = "x86_64"
+    archive_extension = ".AppImage"
+
+    # The desktop entry and the AppRun wrapper the image carries.
+    DESKTOP_ID = "io.github.gt610.freya-nle"
+
+    def __init__(self, config: BuildConfig, logger: Logger):
+        super().__init__(config, logger)
+        self.container_name = "freya-nle-appimage"
+        self.image_name = APPIMAGE_BASE_IMAGE
+        # The pinned image is a one-shot toolchain: distrobox would create a
+        # persistent home for it that nothing here needs, and podman can supply
+        # the same isolation without one.
+        self.container_engine = "podman"
+
+    def install_dependencies(self):
+        if not self.use_container:
+            self.logger.log("Host mode: skipping system package installation")
+            return
+        if self.config.is_offline:
+            # Every container is created for one build and removed after it, so
+            # there is nothing inside one to reuse: the toolchain, the packages
+            # and the FFmpeg would all have to be downloaded. Refusing is
+            # clearer than starting network work that `--offline` forbade.
+            raise RuntimeError(
+                "An offline AppImage build cannot use a container: it starts from "
+                "an empty container with no Rust toolchain and no FFmpeg. Run it "
+                "with --no-container on a host that already has both."
+            )
+        # `apt-get install` only survives to the next command because the
+        # container outlives this call; a fresh container per command would
+        # discard it.
+        self.create_podman_container()
+        # The pinned image is Ubuntu 22.04, so the packages come from apt. Rust
+        # comes from rustup, not from the distribution: 22.04's rustc is far too
+        # old for this workspace and `rust-toolchain.toml` pins 1.99.1.
+        self.run_cmd([
+            "bash", "-c",
+            "export DEBIAN_FRONTEND=noninteractive && "
+            "apt-get update -qq && "
+            "apt-get install -y -qq --no-install-recommends "
+            "build-essential nasm curl ca-certificates git pkg-config zstd xz-utils "
+            "libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev "
+            "libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin",
+        ])
+        self.install_rust()
+        # Ubuntu's own FFmpeg is far older than the crate accepts, so the container
+        # has to build the pinned one; without this `FFMPEG_DIR` stays unset and
+        # `ffmpeg-sys` has nothing to link.
+        self.build_ffmpeg()
+
+    def install_rust(self):
+        """Install the pinned Rust toolchain inside the build container."""
+        channel = self.rust_channel()
+        self.run_cmd([
+            "bash", "-c",
+            "if ! command -v cargo >/dev/null || "
+            f"[ \"$(cargo --version | cut -d' ' -f2)\" != \"{channel}\" ]; then "
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | "
+            f"sh -s -- -y --profile minimal --default-toolchain {channel}; "
+            "fi; "
+            # The container's shell is non-interactive, so the rustup environment
+            # has to be sourced explicitly for every later command.
+            'export PATH="$HOME/.cargo/bin:$PATH"; '
+            "rustc --version",
+        ])
+
+    def rust_channel(self) -> str:
+        toolchain = self.config.source_dir / "rust-toolchain.toml"
+        try:
+            text = toolchain.read_text(encoding="utf-8")
+        except OSError:
+            return "stable"
+        match = re.search(r'^channel\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
+        return match.group(1) if match else "stable"
+
+    def build_ffmpeg(self):
+        """Build the pinned FFmpeg inside the same container as the application."""
+        prefix = "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
+        self.run_cmd([
+            "bash", "/src/scripts/build-ffmpeg.sh",
+            "--target", "x86_64-unknown-linux-gnu", "--prefix", prefix,
+        ])
+        self.env["FFMPEG_DIR"] = str(self.config.temp_base / "ffmpeg"
+                                     / "x86_64-unknown-linux-gnu")
+
+    def package(self):
+        super().package()
+        self.stage_appdir()
+
+    def appdir_path(self) -> Path:
+        return self.config.output_dir / "FreyaNLE.AppDir"
+
+    def stage_appdir(self):
+        """Build the AppDir AppImage packaging needs, next to the plain files."""
+        appdir = self.appdir_path()
+        if appdir.exists():
+            self.remove_tree(appdir)
+        (appdir / "usr" / "bin").mkdir(parents=True)
+        (appdir / "usr" / "lib").mkdir(parents=True)
+        (appdir / "usr" / "share" / "applications").mkdir(parents=True)
+        (appdir / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps").mkdir(parents=True)
+        for entry in self.config.output_dir.iterdir():
+            if entry.name == appdir.name:
+                continue
+            target = appdir / "usr" / "bin" / entry.name
+            if entry.is_dir():
+                shutil.copytree(entry, target)
+            else:
+                shutil.copy2(entry, target)
+        self.bundle_linux_libraries(appdir / "usr" / "lib")
+        self.write_apprun(appdir)
+        self.write_desktop_entry(appdir)
+        self.write_appimage_icon(appdir)
+        self.logger.log(f"AppDir: {appdir}")
+
+    def bundle_linux_libraries(self, destination: Path):
+        """Copy the pinned FFmpeg into the image, sonames and all.
+
+        The binary is linked against the FFmpeg this repository builds, so its
+        sonames (`libavcodec.so.63` and friends) exist on no distribution. A
+        portable image has to carry them; relying on the host's FFmpeg would
+        bring back exactly the dependency the pinned build removed.
+        """
+        ffmpeg_dir = self.env.get("FFMPEG_DIR")
+        if not ffmpeg_dir:
+            raise RuntimeError(
+                "FFMPEG_DIR is not set, so there is no FFmpeg to bundle; "
+                "build it with scripts/build-ffmpeg.sh first"
+            )
+        library_dir = Path(ffmpeg_dir) / "lib"
+        libraries = sorted(
+            path for path in library_dir.glob("lib*.so*")
+            if path.is_file() or path.is_symlink()
+        )
+        if not libraries:
+            raise FileNotFoundError(f"No shared libraries found in {library_dir}")
+        destination.mkdir(parents=True, exist_ok=True)
+        # The real files first, then the links that name them: a copy of a
+        # symlink would either duplicate megabytes or dangle.
+        for library in libraries:
+            if not library.is_symlink():
+                shutil.copy2(library, destination / library.name)
+        for library in libraries:
+            if library.is_symlink():
+                target = os.readlink(library)
+                link = destination / library.name
+                link.unlink(missing_ok=True)
+                link.symlink_to(target)
+        self.logger.log(f"Bundled {len(libraries)} FFmpeg libraries")
+
+    def write_apprun(self, appdir: Path):
+        """The entry point the AppImage runtime executes."""
+        apprun = appdir / "AppRun"
+        apprun.write_text(
+            "#!/bin/sh\n"
+            "# Resolve the mount point so the bundled resources are found next to\n"
+            "# the executable, then hand every argument through unchanged.\n"
+            'HERE="$(dirname "$(readlink -f "$0")")"\n'
+            'export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/../lib:${LD_LIBRARY_PATH:-}"\n'
+            'export PATH="$HERE/usr/bin:$PATH"\n'
+            f'exec "$HERE/usr/bin/freya-nle" "$@"\n',
+            encoding="utf-8",
+        )
+        apprun.chmod(0o755)
+
+    def write_desktop_entry(self, appdir: Path):
+        entry = appdir / "usr" / "share" / "applications" / f"{self.DESKTOP_ID}.desktop"
+        entry.write_text(
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=Freya NLE\n"
+            "Comment=Non-linear video editor with AviUtl's editing model\n"
+            "Exec=freya-nle %f\n"
+            f"Icon={self.DESKTOP_ID}\n"
+            "Terminal=false\n"
+            "Categories=AudioVideo;Video;\n"
+            "MimeType=application/x-freya-nle-project;\n",
+            encoding="utf-8",
+        )
+        # appimagetool requires the desktop file at the AppDir root as well.
+        shutil.copy2(entry, appdir / f"{self.DESKTOP_ID}.desktop")
+
+    def write_appimage_icon(self, appdir: Path):
+        """Write a 512x512 PNG icon, converting the committed SVG if needed."""
+        target = appdir / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps" / f"{self.DESKTOP_ID}.png"
+        source_svg = self.config.source_dir / "assets" / "icon.svg"
+        ico = self.config.source_dir / "assets" / "icon.ico"
+        self.run_cmd([
+            "bash", "-c",
+            # `rsvg-convert` or ImageMagick may be absent; the ICO already holds
+            # a 256x256 frame, which is an acceptable AppImage icon. The paths
+            # are operands rather than text so that the container rewrite sees
+            # them as paths and leaves the program alone.
+            'if command -v rsvg-convert >/dev/null && [ -f "$1" ]; then '
+            'rsvg-convert -w 512 -h 512 "$1" -o "$3"; '
+            'elif command -v convert >/dev/null && [ -f "$2" ]; then '
+            'convert "$2" -resize 512x512 "$3"; '
+            "else exit 1; fi",
+            "_", str(source_svg), str(ico), str(target),
+        ])
+        shutil.copy2(target, appdir / f"{self.DESKTOP_ID}.png")
+
+    IMAGE_TOOL = "appimagetool-x86_64.AppImage"
+    # A tagged release, not `continuous`: a rolling asset can be replaced under
+    # the pinned checksum, which would fail every build until the constant moved.
+    IMAGE_TOOL_URL = "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+    IMAGE_TOOL_SHA256 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+
+    def appimagetool_path(self) -> Path:
+        tool = self.config.temp_base / self.IMAGE_TOOL
+        if tool.is_file() and self.sha256_of(tool) == self.IMAGE_TOOL_SHA256:
+            return tool
+        tool.parent.mkdir(parents=True, exist_ok=True)
+        tool.unlink(missing_ok=True)
+        self.download(self.IMAGE_TOOL_URL, tool)
+        actual = self.sha256_of(tool)
+        if actual != self.IMAGE_TOOL_SHA256:
+            tool.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"appimagetool checksum mismatch: expected {self.IMAGE_TOOL_SHA256}, got {actual}"
+            )
+        tool.chmod(0o755)
+        return tool
+
+    @staticmethod
+    def sha256_of(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def download(self, url: str, destination: Path):
+        self.logger.log(f"Downloading {url}")
+        # `curl` honours the proxy environment the CI already sets; urllib would
+        # need the same variables passed through by hand.
+        self.run_cmd(["curl", "-fsSL", "--retry", "3", "-o", str(destination), url],
+                     force_host=True)
+
+    def create_appimage(self, archive_name: str):
+        """Pack the staged AppDir into a self-contained executable image."""
+        appdir = self.appdir_path()
+        if not appdir.is_dir():
+            raise FileNotFoundError(f"AppDir was not staged: {appdir}")
+        tool = self.appimagetool_path()
+        destination = self.config.dist_dir / f"{archive_name}.AppImage"
+        # appimagetool refuses to run without an explicit architecture when it
+        # cannot infer one from the host. `run_cmd` passes `self.env`, so this is
+        # where the value has to go to reach the tool; `container_environment()`
+        # is what carries it the rest of the way into a container.
+        self.env["ARCH"] = self.PLATFORM_ARCH
+        # The tool is itself a Linux AppImage; extracting it avoids needing FUSE.
+        # It runs wherever the build runs: a macOS host cannot execute it at all,
+        # and a Linux host with a container already has a Linux one.
+        self.run_cmd([
+            str(tool), "--appimage-extract-and-run", "--no-appstream",
+            str(appdir), str(destination),
+        ])
+
+    def runtime_requirements(self) -> dict:
+        requirements = super().runtime_requirements()
+        requirements["glibc"] = self.maximum_glibc_version()
+        requirements["ffmpeg_sonames"] = self.ffmpeg_sonames()
+        requirements["host_libraries"] = ["libasound.so.2"]
+        return requirements
+
+    def maximum_glibc_version(self) -> str:
+        output = self.inspect_output(["objdump", "-T", str(self.cargo_binary())])
+        versions = re.findall(r"GLIBC_([0-9]+\.[0-9]+)", output)
+        if not versions:
+            return ""
+        return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")))
+
+    def ffmpeg_sonames(self) -> list[str]:
+        return ArchBuilder.ffmpeg_sonames(self)
 
 
 class WindowsDependencyMixin:
@@ -426,8 +1292,78 @@ class WindowsDependencyMixin:
         if unresolved:
             raise FileNotFoundError("Runtime DLLs were not found: " + ", ".join(sorted(unresolved)))
 
+    # The MSVC C runtime is not part of Windows, and every FFmpeg DLL vcpkg
+    # builds as well as the application's own binary import VCRUNTIME140. The
+    # archive calls itself portable, so the runtime has to travel with it
+    # instead of asking the user to install a redistributable first.
+    WINDOWS_RUNTIME_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
+    # Only imported by binaries built against the C++ standard library.
+    OPTIONAL_WINDOWS_RUNTIME_DLLS = ("msvcp140.dll",)
+
+    def windows_runtime_directories(self) -> list[Path]:
+        directories: list[Path] = []
+        # `setup_msvc_environment` upper-cases every key it parses out of
+        # vcvarsall, so the mixed-case spelling never matches.
+        redist = self.env.get("VCTOOLSREDISTDIR") or self.env.get("VCToolsRedistDir")
+        if redist:
+            root = Path(redist)
+            # <VS>\VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT
+            directories.extend(sorted(root.glob("*/x64/Microsoft.VC*.CRT"), reverse=True))
+            directories.extend(sorted(root.glob("x64/Microsoft.VC*.CRT"), reverse=True))
+        system_root = Path(self.env.get("SystemRoot", os.environ.get("SystemRoot", r"C:\Windows")))
+        directories.append(system_root / "System32")
+        return directories
+
+    def copy_windows_runtime(self, imports=None):
+        """Copy the MSVC runtime the packaged binaries import.
+
+        `msvcp140.dll` is only needed by a binary built against the C++ standard
+        library, so it may legitimately be absent. It is skipped only when no
+        packaged binary imports it; a missing file that something does import
+        fails packaging, because the archive would otherwise need a separately
+        installed redistributable.
+        """
+        directories = self.windows_runtime_directories()
+        for name in self.WINDOWS_RUNTIME_DLLS:
+            destination = self.config.output_dir / name
+            if destination.exists():
+                continue
+            source = next((directory / name for directory in directories
+                           if (directory / name).is_file()), None)
+            if source is None:
+                if name in self.OPTIONAL_WINDOWS_RUNTIME_DLLS and not self.any_binary_imports(
+                    imports, name
+                ):
+                    self.logger.log(f"{name} is not imported; leaving it out")
+                    continue
+                raise FileNotFoundError(
+                    f"{name} is not available, yet a packaged binary imports it"
+                )
+            shutil.copy2(source, destination)
+            self.logger.log(f"Bundled MSVC runtime: {name}")
+
+    def any_binary_imports(self, imports, name: str) -> bool:
+        """Whether any packaged binary imports `name`.
+
+        Without a reader the answer is unknown, so the file is treated as
+        required rather than silently dropped.
+        """
+        if imports is None:
+            return True
+        wanted = name.lower()
+        for binary in self.packaged_binaries():
+            if wanted in {entry.lower() for entry in imports(binary)}:
+                return True
+        return False
+
 
 class Msys2Builder(WindowsDependencyMixin, PlatformBuilder):
+    # MSYS2 is an explicit alternative, not the Windows build a release ships,
+    # so it keeps a variant suffix rather than claiming the plain name.
+    PLATFORM_OS = "windows"
+    PLATFORM_ARCH = "x86_64"
+    artifact_variant = "msys2"
+
     def install_dependencies(self):
         if self.config.is_offline:
             self.logger.log("Skipping dependency installation (--offline)")
@@ -472,13 +1408,15 @@ class Msys2Builder(WindowsDependencyMixin, PlatformBuilder):
         if discovery := self.find_carla_discovery_tool(windows=True):
             shutil.copy2(discovery, self.config.output_dir / discovery.name)
         self.copy_windows_dependencies(self.imported_dlls, self.find_runtime_dll)
+        self.copy_licenses(self.config.output_dir)
+        self.write_build_info(self.config.output_dir)
         self.logger.log(f"Executable: {destination}")
-
-    def get_archive_name(self) -> str:
-        return "Freya-NLE-MSYS2-UCRT64-x86_64"
 
 
 class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
+    PLATFORM_OS = "windows"
+    PLATFORM_ARCH = "x86_64"
+
     def __init__(self, config: BuildConfig, logger: Logger):
         super().__init__(config, logger)
         if os.name != "nt":
@@ -753,28 +1691,102 @@ class MsvcBuilder(WindowsDependencyMixin, PlatformBuilder):
         if discovery := self.find_carla_discovery_tool(windows=True):
             shutil.copy2(discovery, self.config.output_dir / discovery.name)
         self.copy_windows_dependencies(self.imported_dlls, self.find_runtime_dll)
+        self.copy_windows_runtime(self.imported_dlls)
+        self.copy_licenses(self.config.output_dir)
+        self.write_build_info(self.config.output_dir)
         self.logger.log(f"Executable: {destination}")
-
-    def get_archive_name(self) -> str:
-        return "Freya-NLE-MSVC-x86_64"
 
 
 class XcodeBuilder(PlatformBuilder):
+    PLATFORM_OS = "macos"
+
+    # The oldest macOS the application requires. The value in Info.plist is not
+    # taken on trust: packaging measures every Mach-O it is about to ship and
+    # refuses a bundle whose real floor is higher than this, so the plist can
+    # never promise an older system than the contents support.
+    DEPLOYMENT_TARGET = "12.0"
+    # App icon in the bundle. `tools/gen_app_icon.py` writes it from the same
+    # SVG that produces the Windows ICO.
+    APP_ICON_NAME = "icon.icns"
+
+    def platform_architecture(self) -> str:
+        """The architecture being built, which a cross build overrides.
+
+        The host machine answers this for a native build, but an arm64 runner
+        producing the Intel bundle must not name that bundle after itself.
+        """
+        if self.config.target_triple:
+            return normalize_macos_architecture(self.config.target_triple.split("-")[0])
+        return normalize_macos_architecture(platform.machine())
+
     def install_dependencies(self):
         if self.config.is_offline:
             self.logger.log("Skipping dependency installation (--offline)")
             return
         if not shutil.which("brew"):
             raise RuntimeError("Homebrew not found")
-        self.run_cmd(["brew", "install", "rust", "pkgconf", "ffmpeg"])
+        # Rust comes from rustup and the pinned `rust-toolchain.toml`; letting
+        # Homebrew provide a second `rust` would shadow that pin. `nasm` is only
+        # needed to assemble the x86_64 FFmpeg when cross-compiling for Intel.
+        self.run_cmd(["brew", "install", "pkgconf", "nasm"])
+        self.build_ffmpeg()
 
-    def write_info_plist(self, contents: Path):
+    def ffmpeg_target(self) -> str:
+        if self.config.target_triple:
+            return self.config.target_triple
+        return self.build_target() or f"{platform.machine()}-apple-darwin"
+
+    def build_ffmpeg(self):
+        """Build the FFmpeg this bundle links against, at one pinned version.
+
+        Homebrew's FFmpeg is built for whatever macOS the bottle targets, so its
+        dylibs raise the bundle's floor regardless of what this project asks for,
+        and the 9.x bottles no longer cover Intel at all. Building the pinned
+        source keeps every architecture on one version, one deployment target,
+        and one feature set.
+        """
+        script = self.config.source_dir / "scripts" / "build-ffmpeg.sh"
+        if not script.is_file():
+            raise FileNotFoundError(f"FFmpeg build script not found: {script}")
+        # Not under `build/`: packaging clears that directory.
+        prefix = self.config.temp_base / "ffmpeg" / self.ffmpeg_target()
+        self.run_cmd([
+            "bash", str(script), "--target", self.ffmpeg_target(), "--prefix", str(prefix),
+        ], force_host=True)
+        environment = {"FFMPEG_DIR": str(prefix)}
+        self.env.update(environment)
+        # Later steps in the pipeline read these back.
+        self.export_environment(environment)
+
+    def export_environment(self, variables: dict):
+        """Hand variables to later GitHub Actions steps when running in CI."""
+        github_env = os.environ.get("GITHUB_ENV")
+        if not github_env:
+            return
+        with Path(github_env).open("a", encoding="utf-8") as handle:
+            for name, value in variables.items():
+                handle.write(f"{name}={value}\n")
+
+    def cargo_environment(self) -> dict:
+        # Without this the floor is whatever SDK the build host happened to have,
+        # so the same commit produces different requirements on different runner
+        # images. Every dependency compiled from source honours it as well.
+        environment = {"MACOSX_DEPLOYMENT_TARGET": self.DEPLOYMENT_TARGET}
+        # `.cargo/config.toml` carries the `-headerpad_max_install_names` link
+        # argument. Setting RUSTFLAGS here as well would override that file and
+        # leave the two mechanisms to drift apart.
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            environment["FFMPEG_DIR"] = ffmpeg_dir
+        return environment
+
+    def write_info_plist(self, contents: Path, minimum_system: str):
         bundle_version = numeric_version(self.config.version_string)
         plist = f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleExecutable</key><string>freya-nle</string>
+<key>CFBundleIconFile</key><string>{self.APP_ICON_NAME}</string>
 <key>CFBundleIdentifier</key><string>io.github.gt610.freya-nle</string>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>CFBundleName</key><string>Freya NLE</string>
@@ -782,7 +1794,42 @@ class XcodeBuilder(PlatformBuilder):
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>{bundle_version}</string>
 <key>CFBundleVersion</key><string>{bundle_version}</string>
-<key>LSMinimumSystemVersion</key><string>12.0</string>
+<key>CFBundleDocumentTypes</key><array>
+<dict>
+<key>CFBundleTypeName</key><string>Freya NLE Project</string>
+<key>CFBundleTypeRole</key><string>Editor</string>
+<key>LSHandlerRank</key><string>Owner</string>
+<key>LSItemContentTypes</key><array><string>io.github.gt610.freya-nle.project</string></array>
+<key>CFBundleTypeExtensions</key><array><string>aviqtl</string></array>
+</dict>
+<dict>
+<key>CFBundleTypeName</key><string>Freya NLE Fragment</string>
+<key>CFBundleTypeRole</key><string>Editor</string>
+<key>LSHandlerRank</key><string>Owner</string>
+<key>LSItemContentTypes</key><array><string>io.github.gt610.freya-nle.fragment</string></array>
+<key>CFBundleTypeExtensions</key><array><string>freyafrag</string><string>aviqtlfrag</string></array>
+</dict>
+</array>
+<key>UTExportedTypeDeclarations</key><array>
+<dict>
+<key>UTTypeIdentifier</key><string>io.github.gt610.freya-nle.project</string>
+<key>UTTypeDescription</key><string>Freya NLE Project</string>
+<key>UTTypeConformsTo</key><array><string>public.json</string></array>
+<key>UTTypeTagSpecification</key><dict>
+<key>public.filename-extension</key><array><string>aviqtl</string></array>
+</dict>
+</dict>
+<dict>
+<key>UTTypeIdentifier</key><string>io.github.gt610.freya-nle.fragment</string>
+<key>UTTypeDescription</key><string>Freya NLE Fragment</string>
+<key>UTTypeConformsTo</key><array><string>public.json</string></array>
+<key>UTTypeTagSpecification</key><dict>
+<key>public.filename-extension</key><array><string>freyafrag</string><string>aviqtlfrag</string></array>
+</dict>
+</dict>
+</array>
+<key>LSApplicationCategoryType</key><string>public.app-category.video</string>
+<key>LSMinimumSystemVersion</key><string>{minimum_system}</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 '''
@@ -799,6 +1846,38 @@ class XcodeBuilder(PlatformBuilder):
     def is_macos_system_dependency(path: str) -> bool:
         return path.startswith(("/System/", "/usr/lib/", "@executable_path/", "@loader_path/"))
 
+    def dependency_search_paths(self) -> list[Path]:
+        """Directories an `@rpath` entry may point into during packaging.
+
+        The build links a pinned FFmpeg whose libraries install as `@rpath/...`,
+        so the packaging step has to look where that FFmpeg lives rather than
+        only at the absolute path a distribution bottle would record.
+        """
+        paths: list[Path] = []
+        if ffmpeg_dir := self.env.get("FFMPEG_DIR"):
+            paths.append(Path(ffmpeg_dir) / "lib")
+        for value in self.env.get("DYLD_FALLBACK_LIBRARY_PATH", "").split(os.pathsep):
+            if value:
+                paths.append(Path(value))
+        paths.extend((Path("/opt/homebrew/lib"), Path("/usr/local/lib")))
+        return [path for path in dict.fromkeys(paths) if path.is_dir()]
+
+    def resolve_rpath_dependency(self, dependency: str) -> Path | None:
+        """Find the file an `@rpath/` reference names, keeping that name.
+
+        The result is deliberately not canonicalised: FFmpeg installs
+        `libswscale.10.dylib` as a symlink to `libswscale.10.1.102.dylib`, and the
+        name other binaries refer to is the short one. Collapsing it to the fully
+        versioned file would leave a bundle whose libraries disagree about each
+        other's names.
+        """
+        name = Path(dependency).name
+        for directory in self.dependency_search_paths():
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+        return None
+
     def bundle_macos_dependencies(self, executable: Path, frameworks: Path):
         frameworks.mkdir(parents=True, exist_ok=True)
         pending = [executable]
@@ -808,29 +1887,116 @@ class XcodeBuilder(PlatformBuilder):
             if binary in scanned:
                 continue
             scanned.add(binary)
-            for dependency in self.macos_dependencies(binary):
-                if self.is_macos_system_dependency(dependency):
+            for reference in self.macos_dependencies(binary):
+                if self.is_macos_system_dependency(reference):
                     continue
-                if dependency.startswith("@rpath/"):
-                    if (frameworks / Path(dependency).name).exists():
-                        continue
-                    raise FileNotFoundError(f"Could not resolve macOS @rpath dependency: {dependency}")
-                source = Path(dependency)
-                if not source.exists():
-                    raise FileNotFoundError(f"macOS dependency not found: {dependency}")
-                destination = frameworks / source.name
-                if not destination.exists():
-                    shutil.copy2(source.resolve(), destination)
-                    os.chmod(destination, destination.stat().st_mode | stat.S_IWUSR)
-                    pending.append(destination)
+                # `install_name_tool -change` matches the exact string recorded in
+                # the load command, so the original reference is kept even when
+                # the file it names is found somewhere else. Every reference is
+                # rewritten, whether or not this loop copied the file: a second
+                # binary naming an already-staged library still has to stop
+                # pointing at the build tree.
+                if reference.startswith("@rpath/"):
+                    name = Path(reference).name
+                    if (frameworks / name).exists():
+                        destination = frameworks / name
+                    else:
+                        # A library linked against a pinned FFmpeg refers to its
+                        # neighbour by name, not by the absolute path a Homebrew
+                        # bottle carries. Resolve it against that FFmpeg.
+                        source = self.resolve_rpath_dependency(reference)
+                        if source is None:
+                            raise FileNotFoundError(
+                                f"Could not resolve macOS @rpath dependency: {reference}"
+                            )
+                        destination = frameworks / source.name
+                        shutil.copy2(source.resolve(), destination)
+                        os.chmod(destination, destination.stat().st_mode | stat.S_IWUSR)
+                        pending.append(destination)
+                else:
+                    source = Path(reference)
+                    if not source.exists():
+                        raise FileNotFoundError(f"macOS dependency not found: {reference}")
+                    destination = frameworks / source.name
+                    if not destination.exists():
+                        shutil.copy2(source.resolve(), destination)
+                        os.chmod(destination, destination.stat().st_mode | stat.S_IWUSR)
+                        pending.append(destination)
                 relative = f"@executable_path/../Frameworks/{destination.name}"
-                self.run_cmd(["install_name_tool", "-change", dependency, relative, str(binary)])
+                self.run_cmd(["install_name_tool", "-change", reference, relative, str(binary)])
         for dylib in frameworks.iterdir():
-            self.run_cmd(["install_name_tool", "-id", f"@rpath/{dylib.name}", str(dylib)])
+            self.run_cmd(["install_name_tool", "-id", f"@executable_path/../Frameworks/{dylib.name}",
+                          str(dylib)])
 
     def macos_app_bundle(self) -> Path:
         """The one bundle path packaging creates and archiving publishes."""
         return self.config.output_dir / "Freya NLE.app"
+
+    @staticmethod
+    def highest_version(versions) -> str:
+        if not versions:
+            return ""
+        return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")))
+
+    def macho_minimum_system(self, path: Path) -> str:
+        """Read the minimum macOS version the slice this bundle loads was built for.
+
+        `-arch` restricts the report to that slice, so a universal file cannot
+        contribute the floor of an architecture this bundle never executes, and a
+        file without that slice is reported as carrying no floor instead of the
+        highest one it happens to have. `vtool` labels each block it prints, thin
+        or universal, so the label is what the parse keys on.
+        """
+        arch = self.platform_architecture()
+        command = ["vtool", "-show-build"]
+        if arch:
+            command += ["-arch", arch]
+        result = subprocess.run(command + [str(path)], capture_output=True,
+                                text=True, errors="replace")
+        blocks = re.split(r"^.*\(architecture ([^)]+)\):\s*$", result.stdout, flags=re.MULTILINE)
+        floors = {}
+        for index in range(1, len(blocks) - 1, 2):
+            versions = re.findall(r"^\s*minos ([0-9.]+)$", blocks[index + 1], flags=re.MULTILINE)
+            if versions:
+                floors[blocks[index].strip()] = self.highest_version(versions)
+        if arch:
+            return floors.get(arch, "")
+        return self.highest_version(list(floors.values()))
+
+    def effective_minimum_system(self, app: Path) -> str:
+        """The oldest macOS this bundle can actually start on.
+
+        The application binary, any helper executable shipped beside it, and
+        every framework it loads each carry their own floor, and the bundle runs
+        only on the strictest of them. Homebrew builds its bottles for the OS it
+        was installed on, so a bundle can claim macOS 12 in `Info.plist` while
+        shipping a library that needs macOS 15.
+        """
+        macos = app / "Contents" / "MacOS"
+        candidates = []
+        if macos.is_dir():
+            candidates.extend(
+                self.macho_minimum_system(path)
+                for path in sorted(macos.iterdir())
+                if path.is_file()
+            )
+        frameworks = app / "Contents" / "Frameworks"
+        if frameworks.is_dir():
+            candidates.extend(self.macho_minimum_system(path) for path in sorted(frameworks.iterdir()))
+        return self.highest_version([value for value in candidates if value]) or self.DEPLOYMENT_TARGET
+
+    def verify_minimum_system(self, app: Path, declared: str):
+        """Fail the build when the bundle needs a newer macOS than it claims."""
+        measured = self.effective_minimum_system(app)
+        if tuple(int(part) for part in measured.split(".")) > tuple(
+            int(part) for part in declared.split(".")
+        ):
+            raise RuntimeError(
+                f"The bundle needs macOS {measured} but Info.plist declares {declared}. "
+                "Rebuild the dependency against the deployment target or raise the "
+                "declared minimum; do not ship a bundle that claims more than it supports."
+            )
+        self.logger.log(f"Minimum macOS: {declared} (measured {measured})")
 
     def package(self):
         self.prepare_output_dir()
@@ -846,20 +2012,70 @@ class XcodeBuilder(PlatformBuilder):
         resources.mkdir(parents=True)
         executable = macos / "freya-nle"
         shutil.copy2(source, executable)
-        self.write_info_plist(contents)
         self.copy_resources(resources)
+        self.copy_app_icon(resources)
+        self.copy_licenses(resources)
         discovery = self.find_carla_discovery_tool()
         if discovery:
             shutil.copy2(discovery, macos / discovery.name)
         self.bundle_macos_dependencies(executable, frameworks)
         if discovery:
             self.bundle_macos_dependencies(macos / discovery.name, frameworks)
-        self.run_cmd(["codesign", "--deep", "--force", "--sign", "-", str(app)])
-        self.run_cmd(["codesign", "--verify", "--deep", "--strict", str(app)])
+        # Both metadata files are written once the frameworks are in place: the
+        # floor the bundle really has is only knowable then, and `build-info.json`
+        # reporting a different floor than `Info.plist` would be a contradiction.
+        self.write_info_plist(contents, self.declared_minimum_system(app))
+        self.write_build_info(resources)
+        self.sign_bundle(app)
         self.logger.log(f"App bundle: {app}")
 
-    def get_archive_name(self) -> str:
-        return f"Freya-NLE-macOS-Xcode-{normalize_macos_architecture(platform.machine())}"
+    def declared_minimum_system(self, app: Path) -> str:
+        """The version the bundle may honestly claim.
+
+        A dependency built for a newer macOS raises the floor no matter what the
+        project asked for, so the claim follows the measurement. When the
+        deployment target is meant to hold (CI builds FFmpeg against it), an
+        overshoot is an error instead of a quietly narrowed support range.
+        """
+        measured = self.effective_minimum_system(app)
+        target = self.DEPLOYMENT_TARGET
+        if tuple(int(part) for part in measured.split(".")) <= tuple(
+            int(part) for part in target.split(".")
+        ):
+            self.logger.log(f"Minimum macOS: {target} (measured {measured})")
+            return target
+        message = (
+            f"A bundled dependency needs macOS {measured}, above the {target} this "
+            "build targets; the bundle now declares the higher version"
+        )
+        if self.config.strict_deployment_target:
+            raise RuntimeError(message + " (--strict-deployment-target)")
+        self.logger.log("Warning: " + message)
+        return measured
+
+    def sign_bundle(self, app: Path):
+        """Ad-hoc sign, then verify what was written.
+
+        The signing identity is confined here so a Developer ID and notarization
+        can be added without touching packaging.
+        """
+        identity = self.env.get("MACOS_SIGN_IDENTITY", "-")
+        self.run_cmd(["codesign", "--deep", "--force", "--sign", identity, str(app)])
+        self.run_cmd(["codesign", "--verify", "--deep", "--strict", str(app)])
+
+    def copy_app_icon(self, resources: Path):
+        """Install the bundle icon, generating it from the SVG when absent."""
+        icon = self.config.source_dir / "assets" / self.APP_ICON_NAME
+        if not icon.is_file():
+            generator = self.config.source_dir / "tools" / "gen_app_icon.py"
+            if generator.is_file():
+                self.logger.log("Generating the macOS icon from assets/icon.svg")
+                self.run_cmd([sys.executable, str(generator)], force_host=True)
+        if not icon.is_file():
+            self.logger.log("No macOS icon available; the bundle will use the default")
+            return
+        shutil.copy2(icon, resources / self.APP_ICON_NAME)
+        self.logger.log(f"Bundled app icon: {self.APP_ICON_NAME}")
 
     def create_zip(self, archive_name: str):
         archive_path = self.config.dist_dir / f"{archive_name}.zip"
@@ -870,7 +2086,14 @@ class XcodeBuilder(PlatformBuilder):
         ], force_host=True)
 
 
+    def runtime_requirements(self) -> dict:
+        requirements = super().runtime_requirements()
+        requirements["minimum_macos"] = self.declared_minimum_system(self.macos_app_bundle())
+        return requirements
+
+
 BUILDERS: dict[str, Type[PlatformBuilder]] = {
+    "appimage": AppImageBuilder,
     "arch": ArchBuilder,
     "msys2": Msys2Builder,
     "msvc": MsvcBuilder,
@@ -925,6 +2148,8 @@ def parse_args() -> argparse.Namespace:
                 "  python BUILD.py --msys2\n  python BUILD.py --xcode --offline\n"),
     )
     targets = parser.add_mutually_exclusive_group()
+    targets.add_argument("--appimage", action="store_true",
+                         help="Build the portable Linux AppImage")
     targets.add_argument("--arch", action="store_true", help="Build for Arch Linux")
     targets.add_argument("--msys2", action="store_true", help="Build for Windows MSYS2 UCRT64")
     targets.add_argument("--msvc", action="store_true", help="Build for Windows MSVC x64")
@@ -934,13 +2159,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-container", action="store_true", help="Build Linux directly on the host")
     parser.add_argument("--version", type=str,
                         help="Validate the release version against rust/Cargo.toml")
+    parser.add_argument("--strict-deployment-target", action="store_true",
+                        help="Fail when a macOS dependency needs a newer system than targeted")
+    parser.add_argument("--target", type=str, default="",
+                        help="Rust target triple, for a cross build (e.g. x86_64-apple-darwin)")
     return parser.parse_args()
 
 
 def determine_target(args: argparse.Namespace, system_name: str | None = None) -> str | None:
-    for name in ("arch", "msys2", "msvc", "xcode"):
+    for name in ("appimage", "arch", "msys2", "msvc", "xcode"):
         if getattr(args, name):
             return name
+    # An unqualified Linux build stays on the Arch-compatible path, which is
+    # what the container tooling and the existing documentation assume; the
+    # portable AppImage is asked for explicitly.
     return {"linux": "arch", "windows": "msvc", "darwin": "xcode"}.get(
         (system_name or platform.system()).lower()
     )
@@ -953,7 +2185,7 @@ def main():
     args = parse_args()
     target = determine_target(args)
     if not target:
-        print("Error: specify one of --arch, --msys2, --msvc, --xcode")
+        print("Error: specify one of --appimage, --arch, --msys2, --msvc, --xcode")
         sys.exit(1)
     source_dir = Path.cwd()
     canonical_version = read_project_version(source_dir)
@@ -970,10 +2202,14 @@ def main():
     config = BuildConfig(
         source_dir=source_dir, temp_base=source_dir / ".build_tmp",
         output_dir=source_dir / "build", target=target, is_debug=args.debug,
-        use_container=target == "arch" and not args.no_container,
+        # Both Linux targets build inside a container: the Arch archive needs the
+        # rolling-release sysroot, the AppImage needs a pinned old one.
+        use_container=target in {"arch", "appimage"} and not args.no_container,
         is_offline=args.offline,
         version_major=version_parts[0], version_minor=version_parts[1],
         version_patch=version_parts[2], version_string=version_string,
+        strict_deployment_target=args.strict_deployment_target,
+        target_triple=args.target,
     )
     worker = BuildWorker(config)
     cancelled = False
@@ -988,8 +2224,9 @@ def main():
 
     signal.signal(signal.SIGINT, lambda _signum, _frame: cancel_build())
     mode = "Container" if config.use_container else "Host"
+    triple = f" | triple={config.target_triple}" if config.target_triple else ""
     print(f"Build started | frontend=Slint | target={target} | {config.build_type} | "
-          f"{mode} | offline={config.is_offline}")
+          f"{mode} | offline={config.is_offline}{triple}")
     worker.start()
     while not worker.finished_event.is_set():
         try:

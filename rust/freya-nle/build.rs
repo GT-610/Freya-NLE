@@ -12,6 +12,7 @@ const EFFECT_METADATA_LOCALES: &[(&str, &str)] = &[
 fn main() {
     println!("cargo:rerun-if-changed=../../i18n/effect-metadata.json");
     generate_effect_metadata_translations().expect("generate effect metadata translations");
+    embed_windows_resources();
 
     let config = slint_build::CompilerConfiguration::new()
         .with_bundled_translations("translations")
@@ -62,3 +63,38 @@ fn write_translation_array(output: &mut String, name: &str, translations: &[(Str
     }
     output.push_str("];\n");
 }
+
+/// Attach the application icon and a VERSIONINFO block to the Windows binary.
+///
+/// Without a resource section Explorer shows `freya-nle.exe` with a generic icon
+/// and no version, which makes a redistributed copy impossible to identify.
+/// The icon comes from `assets/icon.ico`; `tools/gen_app_icon.py` regenerates it
+/// from `assets/icon.svg`, so the SVG stays the single source of the artwork.
+#[cfg(windows)]
+fn embed_windows_resources() {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let icon = manifest_dir.join("../../assets/icon.ico");
+    if !icon.is_file() {
+        println!("cargo:warning=assets/icon.ico is missing; the executable keeps the default icon");
+        return;
+    }
+    println!("cargo:rerun-if-changed={}", icon.display());
+
+    let mut resource = winresource::WindowsResource::new();
+    resource.set_icon(icon.to_str().expect("icon path is valid UTF-8"));
+    resource.set("FileDescription", "Freya NLE");
+    resource.set("ProductName", "Freya NLE");
+    resource.set("LegalCopyright", "Copyright (C) Freya NLE contributors");
+    // `winresource` derives the numeric FileVersion and ProductVersion from the
+    // crate version cargo resolved, which is the workspace version. Writing them
+    // again here would only duplicate that, and a resource version is four
+    // integers, so a prerelease suffix has to stay in the string fields anyway.
+    if let Err(error) = resource.compile() {
+        // A missing resource compiler must not turn a working Windows build into
+        // a failure; the application is usable without an icon.
+        println!("cargo:warning=could not embed Windows resources: {error}");
+    }
+}
+
+#[cfg(not(windows))]
+fn embed_windows_resources() {}
