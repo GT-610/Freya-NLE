@@ -21,6 +21,29 @@ use ffmpeg::sys;
 /// Enough for the longest FFmpeg diagnostic; longer lines are truncated.
 const LINE_BYTES: usize = 1024;
 
+/// The type FFmpeg's C prototypes really take for `va_list`.
+///
+/// Where `va_list` is an array (the SysV x86-64 ABI), a C parameter of that
+/// type decays to a pointer: bindgen keeps the alias as the array while it
+/// declares the functions with the pointer. Naming either form by hand would
+/// tie this module to one target, so the binding's own alias decides.
+trait DecayedVaList {
+    type Arg;
+}
+
+impl<T> DecayedVaList for [T; 1] {
+    /// An array parameter decays to a pointer to its first element.
+    type Arg = *mut T;
+}
+
+impl<T> DecayedVaList for *mut T {
+    /// A pointer parameter stays exactly as it is.
+    type Arg = *mut T;
+}
+
+/// What the callback receives and `av_log_format_line2` consumes.
+type VaArgs = <sys::va_list as DecayedVaList>::Arg;
+
 thread_local! {
     /// FFmpeg's format helper expects a per-thread prefix flag that persists
     /// across calls, so a continuation line is not stamped twice.
@@ -39,16 +62,11 @@ pub fn install() {
 
 /// The C callback. Must not unwind: FFmpeg frames are not `extern "C"`
 /// unwind-safe, and `panic = "abort"` makes an escape fatal anywhere.
-unsafe extern "C" fn callback(
-    avcl: *mut c_void,
-    level: c_int,
-    fmt: *const c_char,
-    va: sys::va_list,
-) {
+unsafe extern "C" fn callback(avcl: *mut c_void, level: c_int, fmt: *const c_char, va: VaArgs) {
     let _ = catch_unwind(AssertUnwindSafe(|| log_line(avcl, level, fmt, va)));
 }
 
-fn log_line(avcl: *mut c_void, level: c_int, fmt: *const c_char, va: sys::va_list) {
+fn log_line(avcl: *mut c_void, level: c_int, fmt: *const c_char, va: VaArgs) {
     if fmt.is_null() {
         return;
     }
@@ -120,6 +138,14 @@ mod tests {
         }
 
         fn flush(&self) {}
+    }
+
+    #[test]
+    fn the_va_argument_is_what_the_c_prototype_takes() {
+        // An array `va_list` decays to a pointer; one that is already a pointer
+        // is passed through. Both cases must name a single pointer type.
+        let _: <[u64; 1] as DecayedVaList>::Arg = std::ptr::null_mut();
+        let _: <*mut u64 as DecayedVaList>::Arg = std::ptr::null_mut();
     }
 
     #[test]
