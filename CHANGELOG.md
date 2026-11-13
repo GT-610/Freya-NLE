@@ -4,6 +4,8 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-13
+
 ### Added
 - Every release artifact follows one name, `Freya-NLE-<version>-<os>-<arch>`, so
   a download is chosen by platform and architecture instead of by the toolchain

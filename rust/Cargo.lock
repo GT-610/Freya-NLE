@@ -1762,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "chrono",
  "env_logger",
@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-app"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-audio"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "cpal",
  "freya-nle-carla",
@@ -1823,14 +1823,14 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-carla"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "libloading",
 ]
 
 [[package]]
 name = "freya-nle-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "luna-core",
  "semver",
@@ -1840,7 +1840,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-export"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "freya-nle-audio",
  "freya-nle-core",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-media"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "ffmpeg-the-third",
  "image",
@@ -1862,7 +1862,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-preview"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "freya-nle-core",
  "freya-nle-media",
@@ -1874,7 +1874,7 @@ dependencies = [
 
 [[package]]
 name = "freya-nle-render"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "fontdb",
  "freya-nle-core",
