@@ -11,6 +11,7 @@ use crate::recovery::iso_timestamp;
 use crate::settings::application_data_root;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -217,7 +218,7 @@ impl BackupStore {
             return Ok(0);
         }
         let mut total = versions.iter().map(|(_, entry)| entry.size).sum::<u64>();
-        versions.sort_by(|left, right| left.1.file_name.cmp(&right.1.file_name));
+        versions.sort_by(|left, right| oldest_first(&left.1, &right.1));
         let mut removed = 0;
         // The last element is the newest version anywhere, and it stays even
         // when it alone exceeds the budget.
@@ -258,6 +259,19 @@ impl BackupStore {
         bytes: &[u8],
         limit: usize,
     ) -> Result<Option<BackupEntry>, String> {
+        self.record_with_stamp(project_path, bytes, limit, backup_millis(SystemTime::now()))
+    }
+
+    /// [`Self::record`] with the millisecond supplied, so a test can write
+    /// several saves in one millisecond without waiting for the clock to
+    /// produce it.
+    fn record_with_stamp(
+        &self,
+        project_path: &Path,
+        bytes: &[u8],
+        limit: usize,
+        stamp: u128,
+    ) -> Result<Option<BackupEntry>, String> {
         if limit == 0 {
             return Ok(None);
         }
@@ -275,31 +289,42 @@ impl BackupStore {
         // Best effort: the backup itself must still be written if the manifest
         // cannot be updated, because the restored data does not depend on it.
         let _ = write_manifest(&directory, project_path);
-        let stamp = backup_millis(SystemTime::now());
-        let mut file_name = format!("{stamp:013}.{BACKUP_EXTENSION}");
-        let mut path = directory.join(&file_name);
-        let mut suffix = 1;
-        while path.exists() {
-            file_name = format!("{stamp:013}-{suffix}.{BACKUP_EXTENSION}");
-            path = directory.join(&file_name);
-            suffix += 1;
+        // A prune can free the unsuffixed name inside the same millisecond.
+        // Starting the search there would let this save reuse a sequence that
+        // the retained copies already have, so it would compare as the oldest
+        // and the prune below would delete the copy just written. Continue
+        // after the highest sequence still on disk for this stamp.
+        let mut suffix = list_entries(&directory)
+            .iter()
+            .filter_map(|entry| backup_order(&entry.file_name))
+            .filter(|(entry_stamp, _)| *entry_stamp == stamp)
+            .map(|(_, suffix)| suffix)
+            .max()
+            .map_or(0, |suffix| suffix + 1);
+        loop {
             if suffix > 100 {
                 return Err(format!(
                     "{}: too many backups in the same millisecond",
                     directory.display()
                 ));
             }
+            let file_name = backup_file_name(stamp, suffix);
+            let path = directory.join(&file_name);
+            if path.exists() {
+                suffix += 1;
+                continue;
+            }
+            write_atomic(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+            self.prune(&directory, limit)?;
+            return Ok(Some(BackupEntry {
+                file_name,
+                saved_at: iso_timestamp(
+                    SystemTime::UNIX_EPOCH
+                        + Duration::from_millis(u64::try_from(stamp).unwrap_or(u64::MAX)),
+                ),
+                size: bytes.len() as u64,
+            }));
         }
-        write_atomic(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
-        self.prune(&directory, limit)?;
-        Ok(Some(BackupEntry {
-            file_name,
-            saved_at: iso_timestamp(
-                SystemTime::UNIX_EPOCH
-                    + Duration::from_millis(u64::try_from(stamp).unwrap_or(u64::MAX)),
-            ),
-            size: bytes.len() as u64,
-        }))
     }
 
     /// Newest first.
@@ -341,7 +366,7 @@ impl BackupStore {
                 })
             })
             .collect::<Vec<_>>();
-        projects.sort_by(|left, right| right.entries[0].file_name.cmp(&left.entries[0].file_name));
+        projects.sort_by(|left, right| newest_first(&left.entries[0], &right.entries[0]));
         projects
     }
 
@@ -435,10 +460,7 @@ fn list_entries(directory: &Path) -> Vec<BackupEntry> {
         .flatten()
         .filter_map(|entry| {
             let file_name = entry.file_name().to_string_lossy().into_owned();
-            if !valid_backup_file(&file_name) {
-                return None;
-            }
-            let stamp = stamp_from_file(&file_name)?;
+            let (stamp, _) = backup_order(&file_name)?;
             Some(BackupEntry {
                 file_name,
                 saved_at: iso_timestamp(
@@ -449,8 +471,19 @@ fn list_entries(directory: &Path) -> Vec<BackupEntry> {
             })
         })
         .collect::<Vec<_>>();
-    entries.sort_by(|left, right| right.file_name.cmp(&left.file_name));
+    entries.sort_by(newest_first);
     entries
+}
+
+/// Newest first, by the order the file name records rather than the bytes of
+/// the file name itself.
+fn newest_first(left: &BackupEntry, right: &BackupEntry) -> Ordering {
+    backup_order(&right.file_name).cmp(&backup_order(&left.file_name))
+}
+
+/// Oldest first, the order the budget sweep deletes in.
+fn oldest_first(left: &BackupEntry, right: &BackupEntry) -> Ordering {
+    backup_order(&left.file_name).cmp(&backup_order(&right.file_name))
 }
 
 fn write_manifest(directory: &Path, project_path: &Path) -> Result<(), String> {
@@ -502,28 +535,37 @@ fn backup_millis(time: SystemTime) -> u128 {
         .as_millis()
 }
 
-fn stamp_from_file(file_name: &str) -> Option<u128> {
-    file_name
-        .strip_suffix(".freya")?
-        .split('-')
-        .next()?
-        .parse()
-        .ok()
+/// The order a backup file name records: the millisecond it was written in and
+/// the sequence it took when several versions were written in that millisecond.
+///
+/// The first copy in a millisecond is `<stamp>.freya` and later ones are
+/// `<stamp>-<n>.freya`. Those names do not sort in write order — `.` sorts
+/// after `-`, so the first copy would be listed above the copies written after
+/// it — which is why listing, pruning and the budget sweep compare this pair
+/// instead of the name.
+fn backup_order(file_name: &str) -> Option<(u128, u64)> {
+    let stem = file_name.strip_suffix(".freya")?;
+    let (stamp, sequence) = match stem.split_once('-') {
+        Some((stamp, sequence)) => (stamp, sequence.parse().ok()?),
+        None => (stem, 0),
+    };
+    if stamp.len() != 13 || !stamp.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((stamp.parse().ok()?, sequence))
 }
 
 fn valid_backup_file(file_name: &str) -> bool {
-    let Some(stem) = file_name.strip_suffix(".freya") else {
-        return false;
-    };
-    let (stamp, suffix) = match stem.split_once('-') {
-        Some((stamp, suffix)) => (stamp, Some(suffix)),
-        None => (stem, None),
-    };
-    stamp.len() == 13
-        && stamp.bytes().all(|byte| byte.is_ascii_digit())
-        && suffix.is_none_or(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-        })
+    backup_order(file_name).is_some()
+}
+
+/// The name a version with this stamp and sequence is stored under.
+fn backup_file_name(stamp: u128, sequence: u64) -> String {
+    if sequence == 0 {
+        format!("{stamp:013}.{BACKUP_EXTENSION}")
+    } else {
+        format!("{stamp:013}-{sequence}.{BACKUP_EXTENSION}")
+    }
 }
 
 #[cfg(test)]
@@ -554,10 +596,90 @@ mod tests {
             .read(&project, &entries[0].file_name)
             .expect("newest backup reads");
         assert_eq!(newest, b"version 4");
+        let middle = store
+            .read(&project, &entries[1].file_name)
+            .expect("middle backup reads");
+        assert_eq!(middle, b"version 3");
         let oldest = store
             .read(&project, &entries[2].file_name)
             .expect("oldest kept backup reads");
         assert_eq!(oldest, b"version 2");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Two saves can land in the same millisecond. The second one gets a `-1`
+    /// suffix, and the names do not sort in write order: `.` sorts after `-`,
+    /// so `...000.freya` is compared above `...000-1.freya` even though it was
+    /// written first. Listing and pruning therefore have to compare the stamp
+    /// and the sequence as numbers, or the version just saved is the one the
+    /// limit prunes and the budget sweep deletes first.
+    #[test]
+    fn versions_written_in_the_same_millisecond_keep_their_write_order() {
+        let root = test_root("same-millisecond");
+        let store = BackupStore::with_root(root.clone());
+        let project = root.join("project.freya");
+        let directory = root.join(store.key_for(&project));
+        fs::create_dir_all(&directory).expect("backup directory creates");
+        let names = [
+            "1700000000000.freya",
+            "1700000000000-1.freya",
+            "1700000000000-2.freya",
+        ];
+        for name in names {
+            fs::write(directory.join(name), name.as_bytes()).expect("version writes");
+        }
+
+        let listed = store
+            .entries(&project)
+            .into_iter()
+            .map(|entry| entry.file_name)
+            .collect::<Vec<_>>();
+        assert_eq!(listed, [names[2], names[1], names[0]]);
+
+        // The sweep deletes from the oldest end, so a budget of zero has to
+        // leave the newest copy and nothing else.
+        store.enforce_total_budget(0).expect("the sweep completes");
+        assert!(
+            !directory.join(names[0]).exists(),
+            "the oldest copy goes first"
+        );
+        assert!(
+            !directory.join(names[1]).exists(),
+            "the middle copy goes next"
+        );
+        assert!(
+            directory.join(names[2]).exists(),
+            "the newest copy survives"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A prune can remove the unsuffixed name inside a millisecond, and the
+    /// next save must not reuse it: that would give the new copy the oldest
+    /// sequence, and the prune that follows would delete the copy it just
+    /// wrote while `record` still reported success.
+    #[test]
+    fn a_save_does_not_reuse_a_pruned_name_in_the_same_millisecond() {
+        let root = test_root("reused-name");
+        let store = BackupStore::with_root(root.clone());
+        let project = root.join("project.freya");
+        let stamp = 1_700_000_000_000;
+        for index in 0..3 {
+            let body = format!("version {index}");
+            store
+                .record_with_stamp(&project, body.as_bytes(), 1, stamp)
+                .expect("the save records");
+            let entries = store.entries(&project);
+            assert_eq!(entries.len(), 1, "the limit keeps one version");
+            let kept = store
+                .read(&project, &entries[0].file_name)
+                .expect("the kept version reads");
+            assert_eq!(
+                kept,
+                body.as_bytes(),
+                "save {index} has to survive its own prune"
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
 
@@ -780,8 +902,10 @@ mod tests {
             .projects()
             .into_iter()
             .flat_map(|project| project.entries.into_iter())
+            // The module's ordering, not the largest name: `.` sorts after `-`,
+            // so a lexical maximum is not necessarily the newest save.
+            .min_by(newest_first)
             .map(|entry| entry.file_name)
-            .max()
             .expect("a newest version exists");
         // Room for four versions: the two oldest go, newest everywhere stays.
         let removed = store.enforce_total_budget(400).expect("budget prunes");
