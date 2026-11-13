@@ -259,6 +259,19 @@ impl BackupStore {
         bytes: &[u8],
         limit: usize,
     ) -> Result<Option<BackupEntry>, String> {
+        self.record_with_stamp(project_path, bytes, limit, backup_millis(SystemTime::now()))
+    }
+
+    /// [`Self::record`] with the millisecond supplied, so a test can write
+    /// several saves in one millisecond without waiting for the clock to
+    /// produce it.
+    fn record_with_stamp(
+        &self,
+        project_path: &Path,
+        bytes: &[u8],
+        limit: usize,
+        stamp: u128,
+    ) -> Result<Option<BackupEntry>, String> {
         if limit == 0 {
             return Ok(None);
         }
@@ -276,31 +289,42 @@ impl BackupStore {
         // Best effort: the backup itself must still be written if the manifest
         // cannot be updated, because the restored data does not depend on it.
         let _ = write_manifest(&directory, project_path);
-        let stamp = backup_millis(SystemTime::now());
-        let mut file_name = format!("{stamp:013}.{BACKUP_EXTENSION}");
-        let mut path = directory.join(&file_name);
-        let mut suffix = 1;
-        while path.exists() {
-            file_name = format!("{stamp:013}-{suffix}.{BACKUP_EXTENSION}");
-            path = directory.join(&file_name);
-            suffix += 1;
+        // A prune can free the unsuffixed name inside the same millisecond.
+        // Starting the search there would let this save reuse a sequence that
+        // the retained copies already have, so it would compare as the oldest
+        // and the prune below would delete the copy just written. Continue
+        // after the highest sequence still on disk for this stamp.
+        let mut suffix = list_entries(&directory)
+            .iter()
+            .filter_map(|entry| backup_order(&entry.file_name))
+            .filter(|(entry_stamp, _)| *entry_stamp == stamp)
+            .map(|(_, suffix)| suffix)
+            .max()
+            .map_or(0, |suffix| suffix + 1);
+        loop {
             if suffix > 100 {
                 return Err(format!(
                     "{}: too many backups in the same millisecond",
                     directory.display()
                 ));
             }
+            let file_name = backup_file_name(stamp, suffix);
+            let path = directory.join(&file_name);
+            if path.exists() {
+                suffix += 1;
+                continue;
+            }
+            write_atomic(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+            self.prune(&directory, limit)?;
+            return Ok(Some(BackupEntry {
+                file_name,
+                saved_at: iso_timestamp(
+                    SystemTime::UNIX_EPOCH
+                        + Duration::from_millis(u64::try_from(stamp).unwrap_or(u64::MAX)),
+                ),
+                size: bytes.len() as u64,
+            }));
         }
-        write_atomic(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
-        self.prune(&directory, limit)?;
-        Ok(Some(BackupEntry {
-            file_name,
-            saved_at: iso_timestamp(
-                SystemTime::UNIX_EPOCH
-                    + Duration::from_millis(u64::try_from(stamp).unwrap_or(u64::MAX)),
-            ),
-            size: bytes.len() as u64,
-        }))
     }
 
     /// Newest first.
@@ -535,6 +559,15 @@ fn valid_backup_file(file_name: &str) -> bool {
     backup_order(file_name).is_some()
 }
 
+/// The name a version with this stamp and sequence is stored under.
+fn backup_file_name(stamp: u128, sequence: u64) -> String {
+    if sequence == 0 {
+        format!("{stamp:013}.{BACKUP_EXTENSION}")
+    } else {
+        format!("{stamp:013}-{sequence}.{BACKUP_EXTENSION}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,6 +651,35 @@ mod tests {
             directory.join(names[2]).exists(),
             "the newest copy survives"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A prune can remove the unsuffixed name inside a millisecond, and the
+    /// next save must not reuse it: that would give the new copy the oldest
+    /// sequence, and the prune that follows would delete the copy it just
+    /// wrote while `record` still reported success.
+    #[test]
+    fn a_save_does_not_reuse_a_pruned_name_in_the_same_millisecond() {
+        let root = test_root("reused-name");
+        let store = BackupStore::with_root(root.clone());
+        let project = root.join("project.freya");
+        let stamp = 1_700_000_000_000;
+        for index in 0..3 {
+            let body = format!("version {index}");
+            store
+                .record_with_stamp(&project, body.as_bytes(), 1, stamp)
+                .expect("the save records");
+            let entries = store.entries(&project);
+            assert_eq!(entries.len(), 1, "the limit keeps one version");
+            let kept = store
+                .read(&project, &entries[0].file_name)
+                .expect("the kept version reads");
+            assert_eq!(
+                kept,
+                body.as_bytes(),
+                "save {index} has to survive its own prune"
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
 
@@ -840,8 +902,10 @@ mod tests {
             .projects()
             .into_iter()
             .flat_map(|project| project.entries.into_iter())
+            // The module's ordering, not the largest name: `.` sorts after `-`,
+            // so a lexical maximum is not necessarily the newest save.
+            .min_by(newest_first)
             .map(|entry| entry.file_name)
-            .max()
             .expect("a newest version exists");
         // Room for four versions: the two oldest go, newest everywhere stays.
         let removed = store.enforce_total_budget(400).expect("budget prunes");
