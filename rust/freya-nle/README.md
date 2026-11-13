@@ -119,6 +119,8 @@ into modules with explicit imports:
 | `playback`, `gpu`, `export` | Preview/audio/waveform coordination, shared GPU setup, and export UI |
 | `object_settings`, `easing` | Metadata projection and object/easing editor commands |
 | `settings`, `shortcuts`, `localization` | Settings drafts, input routing, and language selection |
+| `logging`, `log_window` | The `log`/`env_logger` pipeline, panic capture, the file writer, and the Tools -> Log window |
+| `batch`, `gpu` | Batch export driving and the adapter/device gate |
 | `packages`, `projection` | Background package/plugin discovery and stable shared UI models |
 | `tests` | Existing frontend behavior regressions |
 
@@ -151,20 +153,16 @@ when moving presentation code so callbacks and translation contexts retain their
 
 ### GPU requirement
 
-Freya NLE requires a **GPU-backed wgpu adapter**. It does not ship a software or CPU
-renderer, matching how Premiere documents GPU requirements and removed its
-"Mercury Playback Engine Software Only" option, and how DaVinci Resolve requires
-a discrete GPU with sufficient VRAM.
+Freya NLE requires a **GPU-backed wgpu adapter** and ships no CPU or software
+renderer, the same position Premiere takes after removing its
+"Mercury Playback Engine Software Only" option.
 
-A CPU adapter is not merely slow. On a host whose only adapter is
-`Microsoft Basic Render Driver` (WARP, `DeviceType::Cpu`), the compositor's
-41-case effect shader cannot be compiled by the FXC path that WARP uses, so
-pipeline creation dies with an access violation (`0xC0000005`) instead of
-returning an error. The application therefore checks for a GPU-backed adapter
-before it initializes wgpu and exits with an actionable message naming the
-adapters it found, rather than crashing. See
-[`../../no-gpu-probes/README.md`](../../no-gpu-probes/README.md) for the
-measured evidence.
+A CPU adapter is not merely slow: on a host whose only adapter is
+`Microsoft Basic Render Driver` (WARP, `DeviceType::Cpu`), compiling the
+compositor shader kills the process instead of returning an error, so `gpu.rs`
+checks for a GPU-backed adapter first and exits naming the adapters it found.
+[`../../no-gpu-probes/README.md`](../../no-gpu-probes/README.md) is the record of
+what was measured, layer by layer, and worth reading before changing that gate.
 
 ### Commands
 
@@ -184,11 +182,11 @@ python BUILD.py --msvc
 Runtime effects, objects, plugins, effect packages, and repository metadata
 are resolved from the shared resource directories during development.
 
-The current validation project exercises the two-window Slint/wgpu integration, real timeline
-models, and the production preview planning/decoding/compositing bridge:
+The validation project exercises the Slint/wgpu integration across the editor windows, real
+timeline models, and the production preview planning/decoding/compositing bridge:
 
 ```sh
-cargo run --release -p freya-nle-slint -- --validate-gpu --frames 120
+cargo run --release -p freya-nle -- --validate-gpu --frames 120
 ```
 
 For Slint MCP interaction checks, build with debug metadata and enable the feature only on the
@@ -208,7 +206,7 @@ Before a migration checkpoint:
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run --release -p freya-nle-slint -- --validate-gpu --frames 120
+cargo run --release -p freya-nle -- --validate-gpu --frames 120
 git diff --check
 ```
 
@@ -218,13 +216,14 @@ when logical window sizes and scale factors are recorded.
 
 ### wgpu 29 baseline
 
-Slint 1.17 exposes `unstable-wgpu-29` and has no wgpu 30 equivalent, so the production frontend
-shares devices and textures on 29 while the renderer, preview, and export crates also build on
-their own against 30.0.1. An isolated probe ran 297 workspace tests plus an offscreen Metal render
-(640x360 readback, checksum `61979074`) on wgpu 30, with strict Clippy clean outside the Slint
-binary. Moving the whole stack over needs `freya-nle-render`, `freya-nle-preview`, and
-`freya-nle-export` to change together with Slint's feature and bridge calls, because
-`BufferSlice::get_mapped_range()` now returns a `Result` and `RequestAdapterOptions` gains
-`apply_limit_buckets`. A hand-written cross-version bridge would add duplicate-device and
-texture-copy complexity for no gain, so 29 stays the production baseline until Slint ships
-matching public types.
+One wgpu version, 29.0.x, serves the whole workspace: Slint 1.17 exposes `unstable-wgpu-29` and has
+no wgpu 30 equivalent, so the frontend shares devices and textures with `freya-nle-render`,
+`freya-nle-preview`, and `freya-nle-export` on the same types. `rust/Cargo.lock` carries a single
+`wgpu` entry; the per-crate `29.0.1` requirement resolves to it.
+
+A 2026-08 probe ran the workspace against wgpu 30.0.1 out of tree and reported a clean offscreen
+Metal render (640x360 readback, checksum `61979074`). Moving the stack over is one change, not a
+gradual one: `BufferSlice::get_mapped_range()` returns a `Result` in 30 and
+`RequestAdapterOptions` gains `apply_limit_buckets`, so the render, preview, and export crates move
+together with Slint's feature and bridge calls. A hand-written cross-version bridge would duplicate
+devices and copy textures for no gain, so 29 stays until Slint ships matching public types.

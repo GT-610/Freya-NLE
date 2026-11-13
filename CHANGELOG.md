@@ -54,12 +54,91 @@ All notable changes to Freya NLE are documented in this file.
   `.tar.zst` that preserves the executable bit instead of a zip that did not
 - Packaging runs in pinned container images, so a rebuild months later links the
   same glibc and FFmpeg sonames
+- A packaging pull request runs the workspace checks once instead of twice:
+  `analysis.yml` already calls the same reusable workflow, so `package.yml` only
+  keeps its `test` job for the release path. Markdown-only and probe-only pull
+  requests skip the 45-minute container, and `rust-checks.yml` pins the same
+  `archlinux` digest the packaging jobs build and smoke-test against
 
 ### Fixed
 - The macOS bundle gained the icon it never had, and registers the project and
   fragment types the application already opens from the command line
 - `BUILD.py --arch` no longer requires distrobox: where only podman is
   installed, it runs the build in a container of its own
+- Documentation that told readers to run commands that cannot work: the
+  `freya-nle-slint` package name in `rust/freya-nle/README.md`, the "open the Lua
+  console" step in the plugin examples (there is no console; use Tools -> Log),
+  the pre-0.8 artifact names in `CONTRIBUTING.md`, the `.aviqtlfrag` fragment
+  format, and a licence table that put winit under MIT and omitted tiny-skia,
+  cpal, rfd, libloading, fontdb, and rustybuzz
+- The Japanese README said the Qt Quick line was still being pursued in the
+  present tense, and both translations were missing the fragments feature and the
+  GPU requirement note
+
+### Removed
+- Dead code that no build reached: `ApplicationModel::backup_total_bytes`, the
+  unused `clip_midpoint_segment_count`/`clip_midpoint_interval` accessors and the
+  segment maths behind them, `XcodeBuilder.verify_minimum_system`, an unused
+  Slint settings row (`SystemSettingLineRow`), and the duplicated `#[cfg(test)]`
+  on `EasingKind::from_abi`
+- Files nothing referenced: the `assets/aviutl.svg` placeholder, the `triplets/`
+  vcpkg triplet overlays (never selected), and the `.clang-format`/`.clang-tidy`
+  configuration left over from the retired C++ frontend
+- Application APIs only their own tests reached: the index-addressed backup trio
+  (`backup_entries`, `remove_backup`, `open_backup_as_project`, superseded by the
+  directory-key API the backup window uses), `save_effect_preset` and
+  `save_audio_plugin_preset` (superseded by the `*_scoped` form the preset dialog
+  calls), `plan_clip_slip_source_start` (the read half of `preview_slip`),
+  `MediaBin::reorder`, and `SelectionProperty::present_objects`; the last two had
+  no callback, menu item, or status line, so wiring them meant inventing a
+  feature rather than connecting one
+- The test-only scaffold that sat in the middle of `bake_plan.rs`: the
+  `SceneInput`/`ClipInput`/`EffectInput`/`KeyframeInput` deserialisation model,
+  its eight `serde` default helpers, `keyframe_point`, and the four
+  `#[cfg(test)]` constructors on `ResolvedTrack`, `CachedEffect`, `CachedClip`,
+  and `BakePlan`. They now live in the module's own test block, so production
+  `bake_plan.rs` no longer carries a second, silently drifting copy of the
+  document schema
+- Twelve hand-written temporary-directory helpers across the app, media, and
+  export test modules, each rebuilding the same timestamp/pid/sequence name and
+  removing the tree only if the assertions passed first. The tests now take a
+  `tempfile::TempDir` guard, so a failing assertion no longer leaves files in the
+  system temp directory
+- Four tests that could not fail: a row projection asserted against a closure
+  defined beside it, a `unicode-normalization` behaviour check, a
+  `f32_bytes(..).len()` constant, and a compile-time-only `va_list` assertion;
+  plus the self-referential default-constants check in `settings.rs` and a
+  `StatusMessage::default()` line
+- The six GPU compositing tests in `freya-nle-preview`. They required a real
+  adapter and were `#[ignore]`d, and no CI job ran them, so the compute-effect
+  and MSAA paths they described have been unexecuted since they were written.
+  `CONTRIBUTING.md` no longer offers a command for them
+- Thirteen of the fourteen no-GPU probe crates. Their conclusion (a GPU-backed
+  adapter is required) is already recorded in the probes README and cited from
+  five places, and no workflow ever built them. The six shader probes are now one
+  `shader-probe` crate with a mode per question, since four of them carried the
+  same 28-line shader assembly verbatim; `compositor-cpu-probe` stays as the
+  record's other half
+- The five `Package` workflow outputs and the steps that wrote them; no workflow,
+  release job, or script ever read them
+- `vendor/` from `.gitignore` and from `BUILD.py`'s Carla discovery. Nothing wrote
+  that directory, so the ignore rule promised a staging area the build did not use
+- Five audit records whose subject or conclusion a shipped change replaced
+  (the Qt-frontend code audit, the dependency-boundary proposal, the September
+  parity burn-down and its polish pass, and the authoritative-run note). What
+  each settled is one line in `audits/README.md`, which now indexes the records
+  that remain by status
+- Three copies of the effect-catalog row projection and three copies of its
+  search predicate in `object_settings.rs`, which had already drifted: the two
+  menu entries that open the object settings window ran `sync_object_settings`
+  alone, so the effect catalog, presets, and palette were stale on open until
+  something else refreshed them
+- Fifteen copies of the "upgrade this window's weak handle, apply the theme
+  index, darken the native chrome" block and fifteen copies of "upgrade, then
+  hide" in `lifecycle.rs`. The hide path is now `hide_window`, the theme path a
+  small macro (a function cannot work: `ComponentHandle::global` is bound to the
+  component type and these are seventeen different generated types), and the
+  windows that also refresh translated content keep that work next to the call
 
 ## [0.8.0] - 2026-11-09
 

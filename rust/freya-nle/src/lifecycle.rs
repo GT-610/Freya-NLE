@@ -250,6 +250,32 @@ fn backup_size_text(bytes: u64) -> String {
     }
 }
 
+/// Hides a window if it still exists.
+///
+/// Every window handle here is weak, because the user can close any of them and
+/// the application has to keep running.
+fn hide_window<W: slint::ComponentHandle>(window: &slint::Weak<W>) {
+    if let Some(window) = window.upgrade() {
+        let _ = window.hide();
+    }
+}
+
+/// Applies the theme choice to one window and to its native chrome, so a light
+/// OS appearance cannot leave a light titlebar above dark content.
+///
+/// A macro rather than a function because `ComponentHandle::global` is bound to
+/// the component type, and these are seventeen different generated types.
+macro_rules! apply_theme {
+    ($windows:expr, $window:ident, $theme_index:expr, $dark:expr) => {
+        if let Some(window) = $windows.$window.upgrade() {
+            window
+                .global::<AppTheme>()
+                .set_preference_index($theme_index);
+            crate::dialogs::apply_native_window_appearance(window.window(), $dark);
+        }
+    };
+}
+
 impl LifecycleUi {
     /// Shows the note editor for the mark under the playhead.
     ///
@@ -958,123 +984,51 @@ impl LifecycleUi {
         // a light OS appearance cannot leave a light titlebar above dark content.
         let dark = theme_index == 0;
         crate::dialogs::set_native_window_dark(dark);
-        if let Some(window) = self.launcher.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        apply_theme!(self, launcher, theme_index, dark);
+        apply_theme!(self, recovery, theme_index, dark);
+        apply_theme!(self, save_confirmation, theme_index, dark);
+        apply_theme!(self, main, theme_index, dark);
+        apply_theme!(self, timeline, theme_index, dark);
+        if language_changed && let Some(window) = self.timeline.upgrade() {
+            initialize_timeline_object_catalog(&window, &self.effect_catalog.borrow());
         }
-        if let Some(window) = self.recovery.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        apply_theme!(self, object_settings, theme_index, dark);
+        if language_changed && let Some(window) = self.object_settings.upgrade() {
+            let model = self.model.borrow();
+            let catalog = self.effect_catalog.borrow();
+            sync_object_settings(&window, &model, &catalog);
+            sync_object_catalog(
+                &window,
+                &model,
+                &catalog,
+                &self.audio_plugin_catalog.borrow(),
+                window.get_effect_filter().as_str(),
+                &self.settings.borrow(),
+            );
         }
-        if let Some(window) = self.save_confirmation.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        apply_theme!(self, easing, theme_index, dark);
+        if language_changed && let Some(window) = self.easing.upgrade() {
+            refresh_easing_translations(&window);
         }
-        if let Some(window) = self.main.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
+        apply_theme!(self, project_settings, theme_index, dark);
+        apply_theme!(self, scene_settings, theme_index, dark);
+        apply_theme!(self, system_settings, theme_index, dark);
+        apply_theme!(self, export, theme_index, dark);
+        if language_changed
+            && let Some(window) = self.export.upgrade()
+            && !window.get_exporting()
+        {
+            window.set_progress_label(
+                format!("0 / 0 {}", localized("frames", "帧", "フレーム")).into(),
+            );
         }
-        if let Some(window) = self.timeline.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-            if language_changed {
-                initialize_timeline_object_catalog(&window, &self.effect_catalog.borrow());
-            }
+        apply_theme!(self, package_manager, theme_index, dark);
+        apply_theme!(self, plugin_permissions, theme_index, dark);
+        if language_changed && let Some(window) = self.plugin_permissions.upgrade() {
+            sync_plugin_permissions(&window, &settings);
         }
-        if let Some(window) = self.object_settings.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-            if language_changed {
-                let model = self.model.borrow();
-                let catalog = self.effect_catalog.borrow();
-                sync_object_settings(&window, &model, &catalog);
-                sync_object_catalog(
-                    &window,
-                    &model,
-                    &catalog,
-                    &self.audio_plugin_catalog.borrow(),
-                    window.get_effect_filter().as_str(),
-                    &self.settings.borrow(),
-                );
-            }
-        }
-        if let Some(window) = self.easing.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-            if language_changed {
-                refresh_easing_translations(&window);
-            }
-        }
-        if let Some(window) = self.project_settings.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-        }
-        if let Some(window) = self.scene_settings.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-        }
-        if let Some(window) = self.system_settings.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-        }
-        if let Some(window) = self.export.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-            if language_changed && !window.get_exporting() {
-                window.set_progress_label(
-                    format!("0 / 0 {}", localized("frames", "帧", "フレーム")).into(),
-                );
-            }
-        }
-        if let Some(window) = self.package_manager.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-        }
-        if let Some(window) = self.plugin_permissions.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-            if language_changed {
-                sync_plugin_permissions(&window, &settings);
-            }
-        }
-        if let Some(window) = self.about.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-        }
-        if let Some(window) = self.log_window.upgrade() {
-            window
-                .global::<AppTheme>()
-                .set_preference_index(theme_index);
-            crate::dialogs::apply_native_window_appearance(window.window(), dark);
-        }
+        apply_theme!(self, about, theme_index, dark);
+        apply_theme!(self, log_window, theme_index, dark);
     }
 
     pub(super) fn hydrate_audio_plugins(&self) {
@@ -1108,51 +1062,21 @@ impl LifecycleUi {
 
     pub(super) fn hide_all_windows(&self) {
         self.persist_visible_window_geometries();
-        if let Some(window) = self.timeline.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.object_settings.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.easing.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.project_settings.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.scene_settings.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.system_settings.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.export.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.package_manager.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.plugin_permissions.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.about.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.log_window.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.launcher.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.recovery.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.save_confirmation.upgrade() {
-            let _ = window.hide();
-        }
-        if let Some(window) = self.main.upgrade() {
-            let _ = window.hide();
-        }
+        hide_window(&self.timeline);
+        hide_window(&self.object_settings);
+        hide_window(&self.easing);
+        hide_window(&self.project_settings);
+        hide_window(&self.scene_settings);
+        hide_window(&self.system_settings);
+        hide_window(&self.export);
+        hide_window(&self.package_manager);
+        hide_window(&self.plugin_permissions);
+        hide_window(&self.about);
+        hide_window(&self.log_window);
+        hide_window(&self.launcher);
+        hide_window(&self.recovery);
+        hide_window(&self.save_confirmation);
+        hide_window(&self.main);
     }
 
     pub(super) fn persist_visible_window_geometries(&self) {

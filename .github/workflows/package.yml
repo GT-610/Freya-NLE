@@ -32,22 +32,6 @@ on:
         # make every platform's `inputs.platform == ...` false, so a manual
         # release would publish nothing and block on the smoke test.
         default: all
-    outputs:
-      linux_appimage:
-        description: File name of the portable Linux artifact
-        value: ${{ jobs.linux-appimage.outputs.artifact }}
-      linux_arch:
-        description: File name of the Arch-compatible Linux artifact
-        value: ${{ jobs.linux-arch.outputs.artifact }}
-      macos_arm64:
-        description: File name of the Apple Silicon macOS artifact
-        value: ${{ jobs.macos.outputs.arm64 }}
-      macos_x86_64:
-        description: File name of the Intel macOS artifact
-        value: ${{ jobs.macos.outputs.x86_64 }}
-      windows:
-        description: File name of the Windows artifact
-        value: ${{ jobs.windows.outputs.artifact }}
   workflow_dispatch:
     inputs:
       version:
@@ -73,21 +57,24 @@ concurrency:
 jobs:
   test:
     name: Test Rust + Slint
+    # A pull request already ran `analysis.yml`, which calls this same reusable
+    # workflow, so repeating it here would add a second 45-minute container to
+    # every packaging PR. The release path has no other gate, so it keeps this.
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/rust-checks.yml
 
   linux-appimage:
     name: Linux AppImage (portable)
     needs: [test]
     if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.platform == 'all' || inputs.platform == 'linux-appimage'
+      !cancelled() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-appimage')
     # The glibc an ELF asks for is fixed at build time, so the portable track is
     # built on the oldest Ubuntu GitHub still hosts: 22.04 carries glibc 2.35.
     # Building it on the default 24.04 runner would ask for 2.39 instead.
     runs-on: ubuntu-22.04
     timeout-minutes: 240
-    outputs:
-      artifact: ${{ steps.name.outputs.artifact }}
     steps:
       - uses: actions/checkout@v4
       - name: Determine version
@@ -137,7 +124,6 @@ jobs:
           # Run the image itself, not the staging tree: this proves the runtime,
           # the AppRun wrapper, and the bundled libraries all resolve.
           "$artifact" --appimage-extract-and-run --version
-          echo "artifact=$(basename "$artifact")" >> "$GITHUB_OUTPUT"
         id: name
       - uses: actions/upload-artifact@v4
         with:
@@ -149,16 +135,15 @@ jobs:
     name: Linux Arch archive (compatibility)
     needs: [test]
     if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.platform == 'all' || inputs.platform == 'linux-arch'
+      !cancelled() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-arch')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     # The Arch target builds inside a pinned container so the glibc and FFmpeg
     # sonames a rebuild links against do not drift with the rolling release.
     container:
       image: docker.io/library/archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
-    outputs:
-      artifact: ${{ steps.name.outputs.artifact }}
     steps:
       - name: Install base tooling
         run: |
@@ -190,7 +175,6 @@ jobs:
           # The executable bit is the reason this is a tar and not a zip, so the
           # check that it survived is the check that matters.
           tar --zstd -tvf "$artifact" | grep -q '^-rwx.* freya-nle$'
-          echo "artifact=$(basename "$artifact")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-arch
@@ -201,16 +185,14 @@ jobs:
     name: macOS (arm64 + x86_64)
     needs: [test]
     if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.platform == 'all' || inputs.platform == 'macos'
+      !cancelled() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos')
     # `macos-15` is an arm64 runner. Intel is cross-compiled here rather than
     # built on an Intel runner, which GitHub only provides as a larger paid
     # runner: clang and the Rust target both take `-arch x86_64` natively.
     runs-on: macos-15
     timeout-minutes: 240
-    outputs:
-      arm64: ${{ steps.name.outputs.arm64 }}
-      x86_64: ${{ steps.name.outputs.x86_64 }}
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -308,10 +290,6 @@ jobs:
             done
             rm -rf "$work"
           done
-          arm="$(basename "$(ls dist/*-macos-arm64.zip | head -1)")"
-          x86="$(basename "$(ls dist/*-macos-x86_64.zip | head -1)")"
-          echo "arm64=$arm" >> "$GITHUB_OUTPUT"
-          echo "x86_64=$x86" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -324,12 +302,11 @@ jobs:
     name: Windows portable
     needs: [test]
     if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.platform == 'all' || inputs.platform == 'windows'
+      !cancelled() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: windows-latest
     timeout-minutes: 120
-    outputs:
-      artifact: ${{ steps.name.outputs.artifact }}
     env:
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.build_tmp\vcpkg-binary-cache,readwrite
       VCPKG_DOWNLOADS: ${{ github.workspace }}\.build_tmp\vcpkg-downloads
@@ -410,7 +387,6 @@ jobs:
           if ($run.ExitCode -ne 0) {
             throw "The packaged executable exited with $($run.ExitCode)"
           }
-          "artifact=$($archive.Name)" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: windows

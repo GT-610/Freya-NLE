@@ -1710,10 +1710,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     const NATIVE_SHADER: &[u8] = br#"
 fn aviqtl_effect(
@@ -1737,20 +1733,6 @@ fn aviqtl_effect(
         "ui":{"controls":[]},
         "runtime":{"engine":"aviqtl-wgsl-v1","shader":"main.wgsl","uniforms":["amount"]}
     }"#;
-
-    fn temporary_root() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir()
-            .join(format!(
-                "freya-nle-package-manager-{}-{nanos}-{}",
-                std::process::id(),
-                PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-            ))
-            .join("repos")
-    }
 
     #[test]
     fn package_state_uses_the_user_data_root() {
@@ -1883,7 +1865,8 @@ fn aviqtl_effect(
 
     #[test]
     fn cached_catalog_projects_qt_tabs_search_updates_and_local_mods() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         fs::create_dir_all(root.parent().expect("root has parent").join("plugins"))
             .expect("plugin directory creates");
         fs::create_dir_all(&root).expect("cache directory creates");
@@ -1957,7 +1940,8 @@ fn aviqtl_effect(
 
     #[test]
     fn repository_sync_keeps_partial_success_relative_catalogs_and_cache_provenance() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         let repositories = vec![
             json!({"url":"https://good.invalid","enabled":true,"priority":1}),
             json!({"url":"https://bad.invalid/repo.json","enabled":true,"priority":2}),
@@ -2015,7 +1999,8 @@ fn aviqtl_effect(
 
     #[test]
     fn repository_mutations_persist_through_the_shared_settings_store() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         let base = root.parent().expect("root has parent").to_path_buf();
         fs::create_dir_all(&base).expect("temporary package root creates");
         let settings_path = base.join("settings.json");
@@ -2065,7 +2050,8 @@ fn aviqtl_effect(
 
     #[test]
     fn package_install_and_remove_use_verified_atomic_deployment() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         fs::create_dir_all(&root).expect("package root creates");
         let archive = stored_zip(&[
             (
@@ -2167,7 +2153,8 @@ fn aviqtl_effect(
 
     #[test]
     fn native_object_packages_deploy_and_legacy_qml_packages_are_rejected() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         let native_metadata = br#"{
             "id":"object.demo",
             "name":"Demo object",
@@ -2221,7 +2208,8 @@ fn aviqtl_effect(
 
     #[test]
     fn package_deployment_rejects_unsafe_zip_entries_and_restores_on_state_failure() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         let base = root.parent().expect("root has parent");
         let traversal = stored_zip(&[("../escaped.txt", b"escape", 0o100644_u32 << 16)]);
         let destination = base.join("extract");
@@ -2265,7 +2253,8 @@ fn aviqtl_effect(
 
     #[test]
     fn plugin_permission_grants_preserve_other_plugins_and_persist_atomically() {
-        let root = temporary_root();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("repos");
         let base = root.parent().expect("root has parent");
         fs::create_dir_all(base).expect("temporary package root creates");
         let settings_path = base.join("settings.json");

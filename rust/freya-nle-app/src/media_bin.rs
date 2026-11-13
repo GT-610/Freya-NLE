@@ -273,20 +273,6 @@ impl MediaBin {
         self.bins.retain(|bin| !bin.entry_ids.is_empty());
         changed
     }
-
-    /// Moves an entry within the flat list.
-    pub fn reorder(&mut self, entry_id: i32, target_index: usize) -> bool {
-        let Some(current) = self.entries.iter().position(|entry| entry.id == entry_id) else {
-            return false;
-        };
-        let target_index = target_index.min(self.entries.len().saturating_sub(1));
-        if current == target_index {
-            return false;
-        }
-        let entry = self.entries.remove(current);
-        self.entries.insert(target_index, entry);
-        true
-    }
 }
 
 fn read_entry(value: &Value) -> Option<MediaBinEntry> {

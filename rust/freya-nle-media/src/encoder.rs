@@ -548,18 +548,6 @@ fn drain_video_packets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temporary_path(extension: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time follows the Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "freya-nle-encode-{}-{nonce}.{extension}",
-            std::process::id()
-        ))
-    }
 
     #[test]
     fn saves_png_and_quality_controlled_jpeg_frames() {
@@ -575,7 +563,9 @@ mod tests {
             (StillImageFormat::Png, "png"),
             (StillImageFormat::Jpeg, "jpg"),
         ] {
-            let path = temporary_path(extension);
+            let temp = tempfile::tempdir().expect("temporary directory");
+
+            let path = temp.path().join(format!("media.{}", extension));
             save_still_image(&path, &frame, format, 91).expect("image saves");
             assert!(std::fs::metadata(&path).expect("image exists").len() > 0);
             std::fs::remove_file(path).expect("generated image removes");
@@ -584,7 +574,9 @@ mod tests {
 
     #[test]
     fn rejects_malformed_rgba_frames() {
-        let path = temporary_path("png");
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        let path = temp.path().join(format!("media.{}", "png"));
         let error = save_still_image(
             &path,
             &VideoFrame {
@@ -608,7 +600,9 @@ mod tests {
         {
             panic!("libx264/aac are required for this test; run with -- --ignored where available");
         }
-        let path = temporary_path("mp4");
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        let path = temp.path().join(format!("media.{}", "mp4"));
         let mut encoder = VideoEncoder::open(&VideoEncoderConfig {
             width: 64,
             height: 64,
@@ -657,7 +651,9 @@ mod tests {
             if !available_video_encoders().contains(&codec) {
                 continue;
             }
-            let path = temporary_path("mp4");
+            let temp = tempfile::tempdir().expect("temporary directory");
+
+            let path = temp.path().join(format!("media.{}", "mp4"));
             let mut encoder = VideoEncoder::open(&VideoEncoderConfig {
                 width: 64,
                 height: 64,

@@ -1,5 +1,5 @@
 [package]
-name = "shader-cap-probe"
+name = "shader-probe"
 version = "0.1.0"
 edition = "2021"
 

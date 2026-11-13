@@ -112,26 +112,18 @@ fn extension_matches(extension: &str, supported: &[&str]) -> bool {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temporary_file(extension: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock follows the epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "freya-nle-media-import-{}-{nonce}.{extension}",
-            std::process::id()
-        ));
-        fs::write(&path, []).expect("temporary media placeholder is writable");
-        path
-    }
 
     #[test]
     fn import_classification_matches_qt_extensions_and_fallback_duration() {
-        let video = temporary_file("MOV");
-        let audio = temporary_file("flac");
-        let image = temporary_file("webp");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let video = temp.path().join("video.MOV");
+        fs::write(&video, []).expect("temporary media placeholder is writable");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let audio = temp.path().join("audio.flac");
+        fs::write(&audio, []).expect("temporary media placeholder is writable");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let image = temp.path().join("image.webp");
+        fs::write(&image, []).expect("temporary media placeholder is writable");
 
         let video_plan = plan_media_import(&video, 60.0, 100).expect("video is recognized");
         let audio_plan = plan_media_import(&audio, 60.0, 100).expect("audio is recognized");
@@ -150,7 +142,9 @@ mod tests {
 
     #[test]
     fn unsupported_missing_and_directory_inputs_are_rejected() {
-        let unsupported = temporary_file("txt");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let unsupported = temp.path().join("unsupported.txt");
+        fs::write(&unsupported, []).expect("temporary media placeholder is writable");
         let missing = unsupported.with_extension("png.missing");
         assert!(plan_media_import(&unsupported, 60.0, 100).is_err());
         assert!(plan_media_import(&missing, 60.0, 100).is_err());

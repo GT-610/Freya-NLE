@@ -9,42 +9,13 @@
 //! unrolling. This probe rewrites the shader and recompiles it to confirm the
 //! full shader then succeeds.
 
+use crate::shader::compositor_shader;
+use crate::shader::repo_root;
+
+
 use std::borrow::Cow;
 
-/// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
-/// needs no intermediate copy and runs from a clean checkout.
-/// The checkout the probes belong to, found by walking up to the workspace root.
-fn repo_root() -> std::path::PathBuf {
-    let mut current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    loop {
-        if current.join("rust").join("Cargo.toml").is_file() {
-            return current;
-        }
-        current = current
-            .parent()
-            .expect("the probe lives inside the repository")
-            .to_path_buf();
-    }
-}
-
-fn compositor_shader() -> String {
-    let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    const OPEN: &str = "const SHADER: &str = r#\"";
-    const CLOSE: &str = "\"#;";
-    let start = source
-        .find(OPEN)
-        .unwrap_or_else(|| panic!("{} does not declare const SHADER", path.display()))
-        + OPEN.len();
-    let end = source[start..]
-        .find(CLOSE)
-        .unwrap_or_else(|| panic!("unterminated SHADER constant in {}", path.display()))
-        + start;
-    source[start..end].to_owned()
-}
-
-fn main() {
+pub fn run() {
     let source = compositor_shader();
     // Some `textureSample(` calls span multiple lines. Work on the whole source
     // with a character iterator so parentheses are matched across newlines,

@@ -1031,21 +1031,9 @@ mod tests {
     use super::*;
     use crate::project_io::ProjectDefaults;
     use serde_json::{Map, json};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_settings(path: PathBuf) -> SettingsStore {
         SettingsStore::load_from(path, Map::new()).0
-    }
-
-    fn temporary_path(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "freya-nle-mod-host-{}-{nanos}-{name}",
-            std::process::id()
-        ))
     }
 
     #[test]
@@ -1135,7 +1123,8 @@ mod tests {
 
     #[test]
     fn update_hook_commands_drive_the_workspace() {
-        let settings_path = temporary_path("settings.json");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let settings_path = temp.path().join("settings.json");
         let settings = test_settings(settings_path.clone());
         let snapshot = ScriptHostSnapshot::default();
         let source = r#"
@@ -1197,7 +1186,8 @@ mod tests {
 
     #[test]
     fn undo_group_commands_combine_into_one_history_entry() {
-        let settings_path = temporary_path("group-settings.json");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let settings_path = temp.path().join("group-settings.json");
         let mut settings = test_settings(settings_path.clone());
         let mut model = ApplicationModel::default();
         model.create_project(ProjectDefaults::default());

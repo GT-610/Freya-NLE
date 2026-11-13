@@ -123,6 +123,10 @@ The shortcut rows stay `foundation` until the fixed build is exercised on Window
 and Linux as well, where the accelerator is Control and the recorded `Ctrl`
 spelling has always been correct.
 
+> **Superseded (0.7.0-rc.2):** the timeline window now installs the same menu bar,
+> so this no longer holds. `rust/freya-nle/ui/timeline.slint` carries its own
+> `MenuBar`, and `tests.rs` asserts both windows declare the same menu.
+
 Not covered by the fix: the native menu bar is installed only for the window that
 owns the `MenuBar` (the preview window), so the menus themselves are still absent
 while the timeline window is key. Shortcuts no longer depend on that path, but a

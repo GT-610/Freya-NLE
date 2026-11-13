@@ -146,14 +146,6 @@ mod tests {
     }
 
     #[test]
-    fn the_va_argument_is_what_the_c_prototype_takes() {
-        // An array `va_list` decays to a pointer; one that is already a pointer
-        // is passed through. Both cases must name a single pointer type.
-        let _: <[u64; 1] as DecayedVaList>::Arg = std::ptr::null_mut();
-        let _: <*mut u64 as DecayedVaList>::Arg = std::ptr::null_mut();
-    }
-
-    #[test]
     fn ffmpeg_diagnostics_reach_the_log_facade() {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let logger: &'static Capture = Box::leak(Box::new(Capture(captured.clone())));

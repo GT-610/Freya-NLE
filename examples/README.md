@@ -18,7 +18,11 @@ JSON + WGSL packages, the only package runtime the Slint edition supports.
 
 1. Copy `hello_mod/` to `<data>/plugins/hello_mod/`
 2. Restart Freya NLE
-3. Open the Lua console and type `hello()`
+3. In the Package Manager, press **Permissions** on `hello_mod` and grant
+   `log.output`, `settings.read`, and `settings.write`. Its `Load` hook calls
+   those APIs, so until they are granted it is rejected before it can report
+   anything
+4. Restart again, then check Tools -> Log: the `Load` hook reports itself there
 
 ## Extension Types
 

@@ -14,7 +14,7 @@ use crate::lifecycle::{
 };
 use crate::localization::localized;
 use crate::object_settings::{
-    ObjectSettingsUi, moved_context_search_selection, sync_object_catalog, sync_object_settings,
+    ObjectSettingsUi, moved_context_search_selection, sync_object_catalog,
     sync_timeline_context_catalog, sync_timeline_object_catalog,
 };
 use crate::packages::{
@@ -1769,19 +1769,8 @@ pub(super) fn install_callbacks(
             let _ = show_and_redraw(&window);
         }
     });
-    let settings_window = object_settings.as_weak();
-    let settings_model = model.clone();
-    let settings_catalog = effect_catalog.clone();
-    main.on_show_object_settings(move || {
-        if let Some(window) = settings_window.upgrade() {
-            sync_object_settings(
-                &window,
-                &settings_model.borrow(),
-                &settings_catalog.borrow(),
-            );
-            let _ = show_and_redraw(&window);
-        }
-    });
+    let settings_ui = object_settings_ui.clone();
+    main.on_show_object_settings(move || settings_ui.show());
 
     let project_settings_model = model.clone();
     let project_settings_window = project_settings.as_weak();
@@ -2285,19 +2274,8 @@ pub(super) fn install_callbacks(
         sync_weak_windows(&midpoint_main, &midpoint_timeline, &midpoint_model);
     });
 
-    let timeline_settings = object_settings.as_weak();
-    let timeline_settings_model = model.clone();
-    let timeline_settings_catalog = effect_catalog.clone();
-    timeline.on_show_object_settings(move || {
-        if let Some(window) = timeline_settings.upgrade() {
-            sync_object_settings(
-                &window,
-                &timeline_settings_model.borrow(),
-                &timeline_settings_catalog.borrow(),
-            );
-            let _ = show_and_redraw(&window);
-        }
-    });
+    let timeline_settings_ui = object_settings_ui.clone();
+    timeline.on_show_object_settings(move || timeline_settings_ui.show());
 
     let timeline_action_model = model.clone();
     let timeline_action_main = main.as_weak();

@@ -50,28 +50,6 @@ export component SystemSettingComboRow inherits HorizontalLayout {
     }
 }
 
-export component SystemSettingLineRow inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> value;
-    in property <string> placeholder;
-    callback commit(string);
-    spacing: AppTheme.spacing-md;
-    Text {
-        text: root.label;
-        width: 240px;
-        color: AppTheme.muted-foreground;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-    CommitLineEdit {
-        source-text: root.value;
-        placeholder-text: root.placeholder;
-        accessible-label: root.label;
-        horizontal-stretch: 1;
-        commit(value) => { root.commit(value); }
-    }
-}
-
 // A directory row: typing is allowed, and the button offers the picker so a
 // path never has to be spelled from memory.
 export component SystemSettingPathRow inherits HorizontalLayout {

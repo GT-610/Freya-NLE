@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Freya NLE source code line counter"""
 
+import os
 import sys
 from pathlib import Path
 from collections import defaultdict
@@ -48,18 +49,26 @@ def count_lines(path: Path) -> tuple[int, int, int]:
 
 
 def collect_files(root: Path) -> list[Path]:
-    """Recursively collect target files from root directory"""
+    """Recursively collect target files, skipping excluded directories on the way in
+
+    The default root is the repository, and a built checkout holds tens of gigabytes
+    under `target/`; enumerating those trees only to discard their files costs more
+    than producing the report. `os.walk` lets each excluded directory be dropped
+    before it is entered.
+    """
     result: list[Path] = []
-    for path in root.rglob("*"):
-        if path.is_dir():
-            continue
-        rel = path.relative_to(root)
-        if is_excluded(rel):
-            continue
-        if path.suffix in TARGET_EXTENSIONS:
-            result.append(path)
-        elif path.name == MANIFEST_FILENAME:
-            result.append(path)
+    for directory, dirnames, filenames in os.walk(root):
+        base = Path(directory)
+        dirnames[:] = [
+            name for name in dirnames if not is_excluded((base / name).relative_to(root))
+        ]
+        for name in filenames:
+            path = base / name
+            rel = path.relative_to(root)
+            if is_excluded(rel):
+                continue
+            if path.suffix in TARGET_EXTENSIONS or name == MANIFEST_FILENAME:
+                result.append(path)
     return sorted(result)
 
 
@@ -68,7 +77,13 @@ def format_table_row(label: str, files: int, total: int, code: int, blank: int) 
 
 
 def main() -> None:
-    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).parent.resolve()
+    # Default to the repository root, so the script can live under tools/ and still
+    # count the whole tree when it is run from anywhere.
+    root = (
+        Path(sys.argv[1]).resolve()
+        if len(sys.argv) > 1
+        else Path(__file__).resolve().parent.parent
+    )
 
     print(f"\n{'=' * 70}")
     print(f"  Freya NLE Source Code Line Count Report")

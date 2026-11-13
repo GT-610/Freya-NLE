@@ -815,18 +815,6 @@ fn configuration_error_message(error: ExportConfigurationError) -> &'static str 
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temporary_directory(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time follows the Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "freya-nle-export-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
 
     /// The requested rate comes straight from a settings file, so the whole
     /// `i32` domain has to answer. `i32::MIN` used to overflow the subtraction
@@ -956,7 +944,8 @@ mod tests {
 
     #[test]
     fn worker_reports_progress_then_completion_and_wakes_the_ui() {
-        let directory = temporary_directory("state-flow");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let directory = temp.path().join("state-flow");
         let job = image_job(directory.clone(), 1);
         let (command_sender, command_receiver) = mpsc::channel();
         let (event_sender, event_receiver) = mpsc::channel();
@@ -987,7 +976,8 @@ mod tests {
 
     #[test]
     fn image_worker_writes_the_full_sequence_and_reports_each_frame() {
-        let directory = temporary_directory("complete");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let directory = temp.path().join("complete");
         let job = image_job(directory.clone(), 2);
         let (command_sender, command_receiver) = mpsc::channel();
         let (event_sender, event_receiver) = mpsc::channel();
@@ -1014,7 +1004,8 @@ mod tests {
 
     #[test]
     fn image_worker_removes_partial_output_after_confirmed_cancellation() {
-        let directory = temporary_directory("cancelled");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let directory = temp.path().join("cancelled");
         let job = image_job(directory.clone(), 3);
         let (command_sender, command_receiver) = mpsc::channel();
         let (event_sender, _event_receiver) = mpsc::channel();
@@ -1037,7 +1028,8 @@ mod tests {
         {
             return;
         }
-        let path = temporary_directory("cancelled-video").with_extension("mp4");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("cancelled-video.mp4");
         let config = VideoEncoderConfig {
             width: 64,
             height: 64,

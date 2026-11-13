@@ -147,7 +147,6 @@ mod tests {
     use freya_nle_core::api::TimelineState;
     use serde_json::json;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn document_with_media(path: &str, clip_type: &str) -> ProjectDocument {
         let parameter = if clip_type == "audio" {
@@ -176,17 +175,6 @@ mod tests {
             .snapshot()
     }
 
-    fn temporary_path(extension: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "freya-nle-missing-media-{}-{nonce}.{extension}",
-            std::process::id()
-        ))
-    }
-
     #[test]
     fn missing_media_scan_resolves_paths_relative_to_the_directory() {
         let directory = Path::new("/projects/demo");
@@ -201,7 +189,8 @@ mod tests {
     /// parent — a restored session passes the directory directly.
     #[test]
     fn missing_media_scan_does_not_look_one_level_above_the_directory() {
-        let root = temporary_path("scan").with_extension("dir");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("scan.dir");
         let media = root.join("media");
         fs::create_dir_all(&media).expect("media directory creates");
         let still = media.join("present.png");
@@ -223,7 +212,8 @@ mod tests {
 
     #[test]
     fn relink_validates_type_extension_and_effect_target() {
-        let path = temporary_path("PNG");
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("PNG.png");
         fs::write(&path, b"fixture").expect("fixture writes");
         let document = document_with_media("missing.png", "image");
         let plan = plan_media_relink(&document, 7, &path).expect("image relink plans");

@@ -444,23 +444,6 @@ fn wgsl_files(root: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    fn temporary_directory() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "freya-nle-native-catalog-{}-{nanos}-{}",
-            std::process::id(),
-            PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ))
-    }
-
     const PASSTHROUGH_SHADER: &str = r#"
 fn aviqtl_effect(
     input_color: vec4<f32>,
@@ -543,7 +526,8 @@ fn aviqtl_effect(
 
     #[test]
     fn native_package_validation_requires_matching_metadata_and_shader() {
-        let effect_root = temporary_directory();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let effect_root = temp.path().to_path_buf();
         let package = effect_root.join("org.example.native");
         let definitions = package.join("definitions");
         let shaders = definitions.join("shaders");
@@ -588,13 +572,12 @@ fn aviqtl_effect(
         assert!(
             validate_native_package_directory(&package, "org.example.native", "effect").is_err()
         );
-
-        fs::remove_dir_all(effect_root).expect("temporary package removes");
     }
 
     #[test]
     fn native_compute_package_loads_with_its_dispatch_shape() {
-        let root = temporary_directory();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().to_path_buf();
         let package = root.join("org.example.compute");
         let definitions = package.join("definitions");
         let shaders = definitions.join("shaders");
@@ -659,13 +642,12 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let (mismatched, _) =
             EffectCatalog::load_from_roots(vec![root.clone()], vec![(root.clone(), "effect")]);
         assert!(mismatched.native_definitions().is_empty());
-
-        fs::remove_dir_all(root).expect("temporary package removes");
     }
 
     #[test]
     fn native_package_validation_rejects_unreferenced_invalid_and_oversized_shaders() {
-        let root = temporary_directory();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().to_path_buf();
         let package = root.join("org.example.native");
         let definitions = package.join("definitions");
         let shaders = definitions.join("shaders");
@@ -704,13 +686,12 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
         assert!(
             validate_native_package_directory(&package, "org.example.native", "effect").is_err()
         );
-
-        fs::remove_dir_all(root).expect("temporary package removes");
     }
 
     #[test]
     fn native_package_validation_rejects_oversized_json() {
-        let root = temporary_directory();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().to_path_buf();
         let package = root.join("org.example.native");
         fs::create_dir_all(&package).expect("package directory creates");
         fs::write(
@@ -722,37 +703,24 @@ fn aviqtl_main(@builtin(global_invocation_id) id: vec3<u32>) {
         assert!(
             validate_native_package_directory(&package, "org.example.native", "effect").is_err()
         );
-
-        fs::remove_dir_all(root).expect("temporary package removes");
     }
 
     #[test]
-    fn repository_weather_objects_satisfy_the_native_package_contract() {
-        let package = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("effect-packages/weather-objects");
-
-        validate_native_package_directory(&package, "com.aviqtl.objects.weather", "object")
-            .expect("weather object package is valid");
-    }
-
-    #[test]
-    fn repository_compute_effects_satisfy_the_native_package_contract() {
-        let package = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("effect-packages/compute-effects");
-
-        validate_native_package_directory(&package, "com.aviqtl.effects.compute", "effect")
-            .expect("compute effect package is valid");
-    }
-
-    #[test]
-    fn repository_color_effects_satisfy_the_native_package_contract() {
-        let package = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("effect-packages/color-effects");
-
-        validate_native_package_directory(&package, "com.aviqtl.effects.color", "effect")
-            .expect("color effect package is valid");
+    fn repository_effect_packages_satisfy_the_native_package_contract() {
+        // Each shipped package is validated against the same rules the installer
+        // applies, so a package that ships broken is caught before release.
+        let cases = [
+            ("weather-objects", "com.aviqtl.objects.weather", "object"),
+            ("compute-effects", "com.aviqtl.effects.compute", "effect"),
+            ("color-effects", "com.aviqtl.effects.color", "effect"),
+        ];
+        for (directory, id, kind) in cases {
+            let package = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join("effect-packages")
+                .join(directory);
+            validate_native_package_directory(&package, id, kind)
+                .unwrap_or_else(|error| panic!("{directory} is not a valid package: {error}"));
+        }
     }
 }

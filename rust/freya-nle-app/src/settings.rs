@@ -401,26 +401,11 @@ fn macos_audio_plugin_directory(format: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static TEMPORARY_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    fn temporary_settings_path() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let sequence = TEMPORARY_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "freya-nle-egui-settings-{}-{nanos}-{sequence}.json",
-            std::process::id(),
-        ))
-    }
 
     #[test]
     fn loads_migrates_and_atomically_replaces_settings() {
-        let path = temporary_settings_path();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("settings.json");
         fs::write(
             &path,
             br#"{"theme":"Light","packageRepositoryUrls":["https://example.invalid"]}"#,
@@ -445,7 +430,8 @@ mod tests {
 
     #[test]
     fn missing_file_keeps_complete_defaults_without_writing() {
-        let path = temporary_settings_path();
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("settings.json");
         let (store, status) = SettingsStore::load_from(path.clone(), Map::new());
         assert_eq!(status, "Settings · defaults");
         assert_eq!(store.f64_value("previewRenderScale", 0.0), 1.0);

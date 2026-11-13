@@ -9,6 +9,11 @@ adapter is `Microsoft Basic Render Driver` (WARP), and the failure could not be 
 from the application build alone. These probes split the problem into layers so each claim is
 measured rather than inferred.
 
+What survives is the evidence, not the scaffolding: `compositor-cpu-probe` and
+`shader-probe` are the two crates whose measurements the conclusion below rests on. The
+other twelve crates were removed once their answer was recorded here, because they had
+never joined a build or a workflow and only preserved a one-off observation.
+
 ## Conclusion
 
 **Freya NLE requires a GPU-backed wgpu adapter. It does not ship a CPU or software renderer.**
@@ -19,10 +24,10 @@ cause was measured, not guessed:
 
 | Layer | Result on a WARP-only host |
 | --- | --- |
-| Slint software renderer (`slint-software-probe`) | Window and event loop run; no GPU required |
+| Slint software renderer (measured before the crate was removed) | Window and event loop run; no GPU required |
 | wgpu device, texture, shader module, render pipeline, readback (`compositor-cpu-probe`) | All succeed; readback returns matching bytes |
-| Slint's own wgpu backend selection (`slint-wgpu-probe`) | Fails without `SLINT_WGPU_CPU`, per Slint 1.17.1 |
-| **Freya NLE's own compositor shader (`app-shader-probe`, `shader-size-probe`, `shader-fragment-probe`)** | **Fails: FXC cannot compile it, and past a size threshold the process dies with `0xC0000005`** |
+| Slint's own wgpu backend selection (measured before the crate was removed) | Fails without `SLINT_WGPU_CPU`, per Slint 1.17.1 |
+| **Freya NLE's own compositor shader (`shader-probe app\|size\|fragment`)** | **Fails: FXC cannot compile it, and past a size threshold the process dies with `0xC0000005`** |
 
 The last row is the real constraint, and it is specific to Freya NLE's renderer rather than to
 Slint or wgpu in general. The compositor shader in `freya-nle-render` is roughly 55 KB and wraps a
@@ -79,9 +84,17 @@ They need network access to fetch their dependencies through the crates.io mirro
 working mirror configured:
 
 ```powershell
-cd no-gpu-probes\shader-fragment-probe
-cargo run -- 41
+cd no-gpu-probes\shader-probe
+cargo run -- fragment 41       # compile with 41 switch cases, then read the frame back
+cargo run -- size 41           # compile with N cases kept; optional entry point as a 2nd argument
+cargo run -- app 20            # trim the application's own shader to 20 effect cases
+cargo run -- pipeline vertex   # one render pipeline: vertex|effect|normal|screen|multiply|add|complex|vertex-only
+cargo run -- cap baseline      # one capability case: baseline|samples|cap|both
+cargo run -- rewrite           # apply the textureSample -> textureSampleLevel rewrite
 ```
+
+The mode is the first positional argument. A mode that needs a value exits with its usage line
+rather than guessing one, so the probes stay one data point per process.
 
 Each probe prints `STAGE`/`RESULT` lines as it advances. Read the stage list first if you are
 chasing where a new failure appears. The shader probes read the compositor's WGSL directly out
@@ -95,8 +108,11 @@ looping internally.
 
 - These are throwaway diagnostics, not shipped code. They are kept for reproducibility, not
   for the build.
-- `slint-wgpu-probe` may resolve to a different Slint minor than the application pins, and
-  Slint's `renderer-femtovg-wgpu` feature moved to an internal `wgpu_30` module after
-  1.17.1. Check what it resolves to before trusting a negative result from it.
-- `fv-canvas-probe` renders real text via `arial.ttf`; it will not draw glyphs if that font
-  is absent, but it still completes the non-text path.
+- The removed probes measured two things this record still cites: that Slint's software
+  renderer needs no adapter, and that Slint's wgpu backend will not select a CPU adapter
+  without `SLINT_WGPU_CPU`. Re-derive either before relying on it against a new Slint minor;
+  `renderer-femtovg-wgpu` moved to an internal `wgpu_30` module after 1.17.1, so a stale
+  measurement is easy to mistake for a current one.
+- The femtovg probes (`fv-canvas-probe`, `fv-wgpu-probe`) drove femtovg 0.25.1 directly, while
+  the application reaches it through Slint's internal `renderer-femtovg-wgpu`. Their numbers
+  stopped being comparable once that internal API moved, which is why they are gone.

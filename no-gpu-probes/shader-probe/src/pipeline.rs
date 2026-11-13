@@ -6,43 +6,15 @@
 //! child process (a hard access violation kills the process) so each result is
 //! attributable to a single pipeline kind.
 //!
-//! Usage: shader-pipeline-probe <vertex|effect|normal|screen|multiply|add|complex|vertex-only>
+//! Usage: shader-probe pipeline <vertex|effect|normal|screen|multiply|add|complex|vertex-only>
+
+use crate::shader::compositor_shader;
+
 
 use std::borrow::Cow;
 
-/// Reads the compositor's WGSL straight out of `freya-nle-render/src/lib.rs`, so the probe
-/// needs no intermediate copy and runs from a clean checkout.
-fn compositor_shader() -> String {
-    fn repo_root() -> std::path::PathBuf {
-        let mut current = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        loop {
-            if current.join("rust").join("Cargo.toml").is_file() {
-                return current;
-            }
-            current = current
-                .parent()
-                .expect("the probe lives inside the repository")
-                .to_path_buf();
-        }
-    }
-    let path = repo_root().join("rust").join("freya-nle-render").join("src").join("lib.rs");
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    const OPEN: &str = "const SHADER: &str = r#\"";
-    const CLOSE: &str = "\"#;";
-    let start = source
-        .find(OPEN)
-        .unwrap_or_else(|| panic!("{} does not declare const SHADER", path.display()))
-        + OPEN.len();
-    let end = source[start..]
-        .find(CLOSE)
-        .unwrap_or_else(|| panic!("unterminated SHADER constant in {}", path.display()))
-        + start;
-    source[start..end].to_owned()
-}
-
-fn main() {
-    let kind = std::env::args().nth(1).expect("usage: <pipeline kind>");
+pub fn run() {
+    let kind = std::env::args().nth(2).expect("usage: shader-probe pipeline <kind>");
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,

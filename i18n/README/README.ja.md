@@ -17,7 +17,7 @@
 > Freya NLEは0.8までAviQtl-Plusという名前でした。古いリンクはリダイレクトされ、`.aviqtl`プロジェクトと`.aviqtlfrag`フラグメントは引き続き開けます。各識別子の変更はCHANGELOGに記録しています。
 
 > [!IMPORTANT]
-> Freya NLEは[TeamNeoUtl/NeoUtl](https://codeberg.org/TeamNeoUtl/NeoUtl)のforkであり、上流プロジェクトが**Rust + egui + wgpu**で再構築された後も**Qt Quick + QRhi + ECS**の開発路線を継続しています。その後フロントエンドは **Slint** へ移行し、0.8でQtフロントエンドを廃止しました。**現在のビルドはRust + Slint + wgpuのみです**。詳しい経緯は[プロジェクトについて](https://aviqtl.gt610.dpdns.org/guide/start-here/about)をご覧ください。
+> Freya NLEは[TeamNeoUtl/NeoUtl](https://codeberg.org/TeamNeoUtl/NeoUtl)のforkであり、上流のNeoUtlは**Rust + egui + wgpu**で作り直されましたが、Freya NLEは**Qt Quick + QRhi + ECS**の路線を続け、その後フロントエンドを**Slint**へ移しました。0.8でQtフロントエンドを廃止し、**現在のビルドはRust + Slint + wgpuのみ**です。詳しい経緯は[プロジェクトについて](https://aviqtl.gt610.dpdns.org/guide/start-here/about)をご覧ください。
 
 ## [Freya NLE](https://github.com/GT-610/freya-nle)とは
 
@@ -30,11 +30,15 @@
 ### 主な特徴
 
 - AviUtlに酷似したUI
+- **フラグメント（.freyafrag）**はクリップのまとまりを劣化なく保存し、別の場所に挿入できます。`.aviqtlfrag`も開けます
 - **AviUtl拡張編集のオブジェクトファイル（.exo）**の読み込み
 - GPUを使った**高速で強力なエフェクト**
 - VST3やLV2等の**音声エフェクト**に対応
 - **Luaプラグインシステム**（パッケージ管理、宣言的パラメータ、権限制御付き）
 - **Linux**、**Windows**、**macOS**に対応
+
+> [!NOTE]
+> Freya NLEは**GPU対応のグラフィックスアダプター**を必要とします。CPUレンダリングやソフトウェアレンダリングのモードはありません。プレビュー合成、書き出し、ハードウェアコーデックの高速化はすべてGPU上で動作します。Microsoft Basic Render Driver（WARP）のようなソフトウェアアダプターしか公開していないホストではFreya NLEは動作せず、起動時に「非対応」と報告します。
 
 ## ドキュメント
 

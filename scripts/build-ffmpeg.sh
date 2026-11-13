@@ -23,6 +23,8 @@
 # already rewrites install names keeps working.
 set -euo pipefail
 
+# macOS and Linux build FFmpeg from this tag. Windows/MSVC goes through
+# ports/ffmpeg (vcpkg, 9.0.1) instead; bump both in one commit.
 FFMPEG_TAG="n9.0.2"
 # The tarball GitHub generates for a tag is not guaranteed to stay byte
 # identical, so the commit is the identity and the tag is only a human label.
