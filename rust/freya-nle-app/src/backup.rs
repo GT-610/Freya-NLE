@@ -11,6 +11,7 @@ use crate::recovery::iso_timestamp;
 use crate::settings::application_data_root;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -217,7 +218,7 @@ impl BackupStore {
             return Ok(0);
         }
         let mut total = versions.iter().map(|(_, entry)| entry.size).sum::<u64>();
-        versions.sort_by(|left, right| left.1.file_name.cmp(&right.1.file_name));
+        versions.sort_by(|left, right| oldest_first(&left.1, &right.1));
         let mut removed = 0;
         // The last element is the newest version anywhere, and it stays even
         // when it alone exceeds the budget.
@@ -341,7 +342,7 @@ impl BackupStore {
                 })
             })
             .collect::<Vec<_>>();
-        projects.sort_by(|left, right| right.entries[0].file_name.cmp(&left.entries[0].file_name));
+        projects.sort_by(|left, right| newest_first(&left.entries[0], &right.entries[0]));
         projects
     }
 
@@ -435,10 +436,7 @@ fn list_entries(directory: &Path) -> Vec<BackupEntry> {
         .flatten()
         .filter_map(|entry| {
             let file_name = entry.file_name().to_string_lossy().into_owned();
-            if !valid_backup_file(&file_name) {
-                return None;
-            }
-            let stamp = stamp_from_file(&file_name)?;
+            let (stamp, _) = backup_order(&file_name)?;
             Some(BackupEntry {
                 file_name,
                 saved_at: iso_timestamp(
@@ -449,8 +447,19 @@ fn list_entries(directory: &Path) -> Vec<BackupEntry> {
             })
         })
         .collect::<Vec<_>>();
-    entries.sort_by(|left, right| right.file_name.cmp(&left.file_name));
+    entries.sort_by(newest_first);
     entries
+}
+
+/// Newest first, by the order the file name records rather than the bytes of
+/// the file name itself.
+fn newest_first(left: &BackupEntry, right: &BackupEntry) -> Ordering {
+    backup_order(&right.file_name).cmp(&backup_order(&left.file_name))
+}
+
+/// Oldest first, the order the budget sweep deletes in.
+fn oldest_first(left: &BackupEntry, right: &BackupEntry) -> Ordering {
+    backup_order(&left.file_name).cmp(&backup_order(&right.file_name))
 }
 
 fn write_manifest(directory: &Path, project_path: &Path) -> Result<(), String> {
@@ -502,28 +511,28 @@ fn backup_millis(time: SystemTime) -> u128 {
         .as_millis()
 }
 
-fn stamp_from_file(file_name: &str) -> Option<u128> {
-    file_name
-        .strip_suffix(".freya")?
-        .split('-')
-        .next()?
-        .parse()
-        .ok()
+/// The order a backup file name records: the millisecond it was written in and
+/// the sequence it took when several versions were written in that millisecond.
+///
+/// The first copy in a millisecond is `<stamp>.freya` and later ones are
+/// `<stamp>-<n>.freya`. Those names do not sort in write order — `.` sorts
+/// after `-`, so the first copy would be listed above the copies written after
+/// it — which is why listing, pruning and the budget sweep compare this pair
+/// instead of the name.
+fn backup_order(file_name: &str) -> Option<(u128, u64)> {
+    let stem = file_name.strip_suffix(".freya")?;
+    let (stamp, sequence) = match stem.split_once('-') {
+        Some((stamp, sequence)) => (stamp, sequence.parse().ok()?),
+        None => (stem, 0),
+    };
+    if stamp.len() != 13 || !stamp.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((stamp.parse().ok()?, sequence))
 }
 
 fn valid_backup_file(file_name: &str) -> bool {
-    let Some(stem) = file_name.strip_suffix(".freya") else {
-        return false;
-    };
-    let (stamp, suffix) = match stem.split_once('-') {
-        Some((stamp, suffix)) => (stamp, Some(suffix)),
-        None => (stem, None),
-    };
-    stamp.len() == 13
-        && stamp.bytes().all(|byte| byte.is_ascii_digit())
-        && suffix.is_none_or(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-        })
+    backup_order(file_name).is_some()
 }
 
 #[cfg(test)]
@@ -554,10 +563,61 @@ mod tests {
             .read(&project, &entries[0].file_name)
             .expect("newest backup reads");
         assert_eq!(newest, b"version 4");
+        let middle = store
+            .read(&project, &entries[1].file_name)
+            .expect("middle backup reads");
+        assert_eq!(middle, b"version 3");
         let oldest = store
             .read(&project, &entries[2].file_name)
             .expect("oldest kept backup reads");
         assert_eq!(oldest, b"version 2");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Two saves can land in the same millisecond. The second one gets a `-1`
+    /// suffix, and the names do not sort in write order: `.` sorts after `-`,
+    /// so `...000.freya` is compared above `...000-1.freya` even though it was
+    /// written first. Listing and pruning therefore have to compare the stamp
+    /// and the sequence as numbers, or the version just saved is the one the
+    /// limit prunes and the budget sweep deletes first.
+    #[test]
+    fn versions_written_in_the_same_millisecond_keep_their_write_order() {
+        let root = test_root("same-millisecond");
+        let store = BackupStore::with_root(root.clone());
+        let project = root.join("project.freya");
+        let directory = root.join(store.key_for(&project));
+        fs::create_dir_all(&directory).expect("backup directory creates");
+        let names = [
+            "1700000000000.freya",
+            "1700000000000-1.freya",
+            "1700000000000-2.freya",
+        ];
+        for name in names {
+            fs::write(directory.join(name), name.as_bytes()).expect("version writes");
+        }
+
+        let listed = store
+            .entries(&project)
+            .into_iter()
+            .map(|entry| entry.file_name)
+            .collect::<Vec<_>>();
+        assert_eq!(listed, [names[2], names[1], names[0]]);
+
+        // The sweep deletes from the oldest end, so a budget of zero has to
+        // leave the newest copy and nothing else.
+        store.enforce_total_budget(0).expect("the sweep completes");
+        assert!(
+            !directory.join(names[0]).exists(),
+            "the oldest copy goes first"
+        );
+        assert!(
+            !directory.join(names[1]).exists(),
+            "the middle copy goes next"
+        );
+        assert!(
+            directory.join(names[2]).exists(),
+            "the newest copy survives"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -61,6 +61,11 @@ All notable changes to Freya NLE are documented in this file.
   `archlinux` digest the packaging jobs build and smoke-test against
 
 ### Fixed
+- Two versions of one project saved within the same millisecond were ordered
+  backwards: the copy saved last was listed as the oldest, so the history limit
+  could prune the save that had just been made and the disk-budget sweep
+  deleted it first. Versions are now ordered by the stamp and sequence their
+  file names encode instead of by the names themselves
 - The macOS bundle gained the icon it never had, and registers the project and
   fragment types the application already opens from the command line
 - `BUILD.py --arch` no longer requires distrobox: where only podman is
