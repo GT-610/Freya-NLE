@@ -67,7 +67,7 @@ jobs:
     name: Linux AppImage (portable)
     needs: [test]
     if: |
-      always() &&
+      !cancelled() &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-appimage')
     # The glibc an ELF asks for is fixed at build time, so the portable track is
@@ -135,7 +135,7 @@ jobs:
     name: Linux Arch archive (compatibility)
     needs: [test]
     if: |
-      always() &&
+      !cancelled() &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-arch')
     runs-on: ubuntu-24.04
@@ -185,7 +185,7 @@ jobs:
     name: macOS (arm64 + x86_64)
     needs: [test]
     if: |
-      always() &&
+      !cancelled() &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos')
     # `macos-15` is an arm64 runner. Intel is cross-compiled here rather than
@@ -302,7 +302,7 @@ jobs:
     name: Windows portable
     needs: [test]
     if: |
-      always() &&
+      !cancelled() &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: windows-latest

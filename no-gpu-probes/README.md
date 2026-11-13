@@ -27,7 +27,7 @@ cause was measured, not guessed:
 | Slint software renderer (measured before the crate was removed) | Window and event loop run; no GPU required |
 | wgpu device, texture, shader module, render pipeline, readback (`compositor-cpu-probe`) | All succeed; readback returns matching bytes |
 | Slint's own wgpu backend selection (measured before the crate was removed) | Fails without `SLINT_WGPU_CPU`, per Slint 1.17.1 |
-| **Freya NLE's own compositor shader (`shader-probe --mode app\|size\|fragment`)** | **Fails: FXC cannot compile it, and past a size threshold the process dies with `0xC0000005`** |
+| **Freya NLE's own compositor shader (`shader-probe app\|size\|fragment`)** | **Fails: FXC cannot compile it, and past a size threshold the process dies with `0xC0000005`** |
 
 The last row is the real constraint, and it is specific to Freya NLE's renderer rather than to
 Slint or wgpu in general. The compositor shader in `freya-nle-render` is roughly 55 KB and wraps a
@@ -85,13 +85,16 @@ working mirror configured:
 
 ```powershell
 cd no-gpu-probes\shader-probe
-cargo run -- fragment          # baseline readback
-cargo run -- size 41           # keep the first N switch cases
-cargo run -- app 20            # bisect the application's own shader
-cargo run -- pipeline          # pipeline creation only
-cargo run -- cap 24            # capability-limited variant
-cargo run -- rewrite           # textureSample -> textureSampleLevel rewrite
+cargo run -- fragment 41       # compile with 41 switch cases, then read the frame back
+cargo run -- size 41           # compile with N cases kept; optional entry point as a 2nd argument
+cargo run -- app 20            # trim the application's own shader to 20 effect cases
+cargo run -- pipeline vertex   # one render pipeline: vertex|effect|normal|screen|multiply|add|complex|vertex-only
+cargo run -- cap baseline      # one capability case: baseline|samples|cap|both
+cargo run -- rewrite           # apply the textureSample -> textureSampleLevel rewrite
 ```
+
+The mode is the first positional argument. A mode that needs a value exits with its usage line
+rather than guessing one, so the probes stay one data point per process.
 
 Each probe prints `STAGE`/`RESULT` lines as it advances. Read the stage list first if you are
 chasing where a new failure appears. The shader probes read the compositor's WGSL directly out

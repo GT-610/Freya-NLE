@@ -76,11 +76,15 @@ Lua error.
    <Freya NLE data dir>/plugins/hello_mod/
    ```
 
-2. Restart Freya NLE. The plugin loads automatically.
+2. Restart Freya NLE. The plugin loads automatically, but its `Load` hook needs
+   permissions before it can log or read settings, so the first run reports
+   nothing.
 
-3. Grant permissions in the Package Manager if prompted.
+3. Open the Package Manager, press **Permissions** on `hello_mod`, and grant
+   `log.output`, `settings.read`, and `settings.write`.
 
-4. Check Tools -> Log: the `Load` hook reports the plugin there.
+4. Restart Freya NLE, then check Tools -> Log: the `Load` hook reports the plugin
+   there.
 
 ## Creating Your Own Plugin
 
