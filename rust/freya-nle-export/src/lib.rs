@@ -565,10 +565,15 @@ fn run_export_worker(
 ) {
     let result = match &job {
         ExportJob::Video { config, .. } => run_video_export(&job, config, &commands, &events),
-        ExportJob::ImageSequence { .. } => run_image_sequence_export(&job, &commands, &events),
+        ExportJob::ImageSequence { .. } => {
+            run_image_sequence_export(&job, &commands, &events).map(|()| String::new())
+        }
     };
     let (success, message) = match result {
-        Ok(()) => (true, "Export complete".to_owned()),
+        // A successful encode can still have dropped clip audio; saying so is
+        // the only way the operator learns the output is partly silent.
+        Ok(notice) if notice.is_empty() => (true, "Export complete".to_owned()),
+        Ok(notice) => (true, notice),
         Err(message) => (false, message),
     };
     let _ = events.send(WorkerEvent::Finished { success, message });
@@ -580,7 +585,7 @@ fn run_video_export(
     config: &VideoEncoderConfig,
     commands: &Receiver<WorkerCommand>,
     events: &Sender<WorkerEvent>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let ExportJob::Video {
         plan,
         fps,
@@ -613,7 +618,7 @@ fn run_video_export(
     temporary_config.output_path = temporary.to_path_buf();
     let encoder = open_video_encoder(&temporary_config)
         .map_err(|error| format!("Encoder error: initialization failed: {error}"))?;
-    encode_video_frames(
+    let notice = encode_video_frames(
         plan,
         *fps,
         *max_plugin_block_size,
@@ -626,7 +631,7 @@ fn run_video_export(
     temporary
         .persist(&config.output_path)
         .map_err(|error| format!("Output error: cannot publish video: {}", error.error))?;
-    Ok(())
+    Ok(notice)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -639,10 +644,14 @@ fn encode_video_frames(
     mut encoder: VideoEncoder,
     commands: &Receiver<WorkerCommand>,
     events: &Sender<WorkerEvent>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let mut mixer = TimelineAudioMixer::default();
     let mut next_frame = plan.start_frame;
     let timer = Instant::now();
+    // Clip audio that could not be decoded or resampled. The frame still encodes
+    // so the rest of the export is not lost, but the result must not claim a
+    // complete success.
+    let mut audio_warnings = Vec::new();
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Cancel) | Err(_) => return Err("Export cancelled".to_owned()),
@@ -676,6 +685,13 @@ fn encode_video_frames(
                         .map_err(|error| {
                             format!("Encoder error: audio timing failed: {error:?}")
                         })?;
+                    for warning in &audio.errors {
+                        // One bad clip repeats every frame; report each distinct
+                        // problem once instead of thousands of times.
+                        if !audio_warnings.contains(warning) {
+                            audio_warnings.push(warning.clone());
+                        }
+                    }
                     encoder.push_audio(&audio.samples).map_err(|error| {
                         format!("Encoder error: failed to queue audio: {error}")
                     })?;
@@ -686,12 +702,28 @@ fn encode_video_frames(
                     encoder
                         .finish()
                         .map_err(|error| format!("Encoder error: finalization failed: {error}"))?;
-                    return Ok(());
+                    return Ok(export_audio_notice(&audio_warnings));
                 }
                 next_frame += 1;
             }
         }
     }
+}
+
+/// The success message for a video export, naming any clip audio it lost.
+fn export_audio_notice(warnings: &[String]) -> String {
+    if warnings.is_empty() {
+        return String::new();
+    }
+    let mut message = format!(
+        "Export complete, but {} audio problem(s) left part of the mix silent:",
+        warnings.len()
+    );
+    for warning in warnings {
+        message.push('\n');
+        message.push_str(warning);
+    }
+    message
 }
 
 fn run_image_sequence_export(
@@ -1063,6 +1095,101 @@ mod tests {
             Err("Export cancelled".to_owned())
         );
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn video_worker_reports_clip_audio_it_could_not_decode() {
+        if !media_video_encoders().contains(&"libx264") || !media_audio_encoders().contains(&"aac")
+        {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("silent-clip.mp4");
+        let config = VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 60_000,
+            fps_den: 1_000,
+            bitrate: 500_000,
+            crf: Some(28),
+            gop_size: None,
+            codec_name: "libx264".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: path.clone(),
+            preset: "ultrafast".to_owned(),
+            profile: String::new(),
+        };
+        let job = ExportJob::Video {
+            plan: VideoExportPlan {
+                start_frame: 0,
+                end_frame: 1,
+                total_frames: 1,
+            },
+            config: config.clone(),
+            fps: 60.0,
+            max_plugin_block_size: 1_024,
+            progress_interval: 1,
+        };
+        // An audio clip whose file cannot be opened: the timeline still claims a
+        // source, so the mixer reports the clip instead of dropping it silently.
+        let missing = TimelineAudioSource {
+            path: temp.path().join("this-track-does-not-exist.wav"),
+            plan: AudioLayerPlan {
+                clip_id: 7,
+                nested_timing: None,
+                source_path: Some("this-track-does-not-exist.wav".to_owned()),
+                start_frame: 0,
+                duration_frames: 60,
+                source_start_time: 0.0,
+                playback_speed: 1.0,
+                direct_time: 0.0,
+                volume: 1.0,
+                master_volume: 1.0,
+                pan: 0.0,
+                fade_in_seconds: 0.0,
+                fade_out_seconds: 0.0,
+                mute: false,
+                solo: false,
+                limiter: true,
+                direct_mode: false,
+                plugins: Vec::new(),
+            },
+        };
+        let (command_sender, command_receiver) = mpsc::channel();
+        let (event_sender, _event_receiver) = mpsc::channel();
+        command_sender
+            .send(WorkerCommand::Frame(ExportFrame {
+                timeline_frame: 0,
+                frame: VideoFrame {
+                    width: 64,
+                    height: 64,
+                    rgba: [40, 80, 120, 255].repeat(64 * 64),
+                    timestamp_seconds: 0.0,
+                },
+                audio_sources: vec![missing],
+            }))
+            .expect("frame queues");
+
+        let notice = run_video_export(&job, &config, &command_receiver, &event_sender)
+            .expect("the video still publishes");
+        // The encode succeeds, but the result must not read as an unqualified
+        // success when part of the mix was silently dropped.
+        assert!(
+            notice.contains("audio problem") && notice.contains("clip #7"),
+            "the lost audio must be named: {notice}"
+        );
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn a_clean_export_has_no_audio_notice() {
+        assert_eq!(export_audio_notice(&[]), "");
+        let repeated = vec!["clip #1: missing".to_owned()];
+        let notice = export_audio_notice(&repeated);
+        assert!(notice.contains("clip #1: missing"));
+        assert!(!notice.trim().is_empty());
     }
 
     #[test]
