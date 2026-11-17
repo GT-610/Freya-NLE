@@ -1142,6 +1142,7 @@ struct BakePlan {
     scene_timing: HashMap<i32, (i32, f64)>,
     layer_settings: BTreeMap<i32, LayerSetting>,
     time_buckets: HashMap<i32, Vec<usize>>,
+    unindexed_clips: Vec<usize>,
     effect_count: usize,
 }
 
@@ -1227,11 +1228,22 @@ impl BakePlan {
         scene_timing: HashMap<i32, (i32, f64)>,
         layer_settings: BTreeMap<i32, LayerSetting>,
     ) -> Self {
+        // Bound the index independently of clip duration and project size.
+        // Clips that do not fit remain available through a linear fallback.
+        const MAX_BUCKET_ENTRIES: usize = 65_536;
         let mut time_buckets: HashMap<i32, Vec<usize>> = HashMap::new();
+        let mut unindexed_clips = Vec::new();
+        let mut bucket_entries = 0_usize;
         let effect_count = clips.iter().map(|clip| clip.effects.len()).sum();
         for (cached_index, cached) in clips.iter().enumerate() {
             let first_bucket = cached.start_frame / FRAME_BUCKET_SIZE;
             let last_bucket = cached.end_frame.max(cached.start_frame) / FRAME_BUCKET_SIZE;
+            let count = (i64::from(last_bucket) - i64::from(first_bucket) + 1) as usize;
+            if count > MAX_BUCKET_ENTRIES - bucket_entries {
+                unindexed_clips.push(cached_index);
+                continue;
+            }
+            bucket_entries += count;
             for bucket in first_bucket..=last_bucket {
                 time_buckets.entry(bucket).or_default().push(cached_index);
             }
@@ -1245,6 +1257,7 @@ impl BakePlan {
             scene_timing,
             layer_settings,
             time_buckets,
+            unindexed_clips,
             effect_count,
         }
     }
@@ -1255,22 +1268,25 @@ impl BakePlan {
         let first_bucket = range_start / FRAME_BUCKET_SIZE;
         let last_bucket = range_end / FRAME_BUCKET_SIZE;
         let mut seen = HashSet::new();
-        let mut selected = Vec::new();
+        let mut candidates = self.unindexed_clips.clone();
         for bucket in first_bucket..=last_bucket {
-            let Some(indices) = self.time_buckets.get(&bucket) else {
+            if let Some(indices) = self.time_buckets.get(&bucket) {
+                candidates.extend(indices);
+            }
+        }
+        // Preserve document order even when some clips use the fallback.
+        candidates.sort_unstable();
+        let mut selected = Vec::new();
+        for index in candidates {
+            let clip = &self.clips[index];
+            if !seen.insert(clip.clip_id) {
                 continue;
-            };
-            for &index in indices {
-                let clip = &self.clips[index];
-                if !seen.insert(clip.clip_id) {
-                    continue;
-                }
-                // Exclusive end, matching the render loop: a clip that ends on
-                // this frame is no longer drawn, so a reference must not read
-                // its value instead of the next layer's.
-                if clip.start_frame <= range_end && clip.end_frame > range_start {
-                    selected.push(index);
-                }
+            }
+            // Exclusive end, matching the render loop: a clip that ends on
+            // this frame is no longer drawn, so a reference must not read
+            // its value instead of the next layer's.
+            if clip.start_frame <= range_end && clip.end_frame > range_start {
+                selected.push(index);
             }
         }
         selected

@@ -361,6 +361,46 @@ fn nested_scene_converts_timebase_and_clamps_to_child_duration() {
 }
 
 #[test]
+fn very_long_clips_remain_selectable_without_unbounded_indexing() {
+    let mut document = project_document();
+    let clip = document
+        .clips
+        .iter_mut()
+        .find(|clip| clip.id == 10)
+        .unwrap();
+    clip.start = 10;
+    clip.duration = i32::MAX;
+    let mut plan = SceneRenderPlan::from_document(&document, 1).unwrap();
+
+    assert!(
+        !plan
+            .evaluate(9)
+            .layers
+            .iter()
+            .any(|layer| layer.clip_id == 10)
+    );
+    assert!(
+        plan.evaluate(10)
+            .layers
+            .iter()
+            .any(|layer| layer.clip_id == 10)
+    );
+    assert!(
+        plan.evaluate(i32::MAX - 1)
+            .layers
+            .iter()
+            .any(|layer| layer.clip_id == 10)
+    );
+    assert!(
+        !plan
+            .evaluate(i32::MAX)
+            .layers
+            .iter()
+            .any(|layer| layer.clip_id == 10)
+    );
+}
+
+#[test]
 fn excludes_inactive_layers_and_reports_a_missing_scene() {
     let document = project_document();
     assert!(SceneRenderPlan::from_document(&document, 99).is_err());
