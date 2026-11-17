@@ -591,22 +591,42 @@ fn run_video_export(
     else {
         return Err("internal error: video worker received a non-video job".to_owned());
     };
-    let encoder = open_video_encoder(config)
+    // Preserve an existing export until encoding and finalization both succeed.
+    // Keep the extension because FFmpeg chooses the container from the path.
+    let parent = config
+        .output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut suffix = std::ffi::OsString::new();
+    if let Some(extension) = config.output_path.extension() {
+        suffix.push(".");
+        suffix.push(extension);
+    }
+    let temporary = tempfile::Builder::new()
+        .prefix(".freya-nle-export-")
+        .suffix(&suffix)
+        .tempfile_in(parent)
+        .map_err(|error| format!("Output error: cannot create temporary file: {error}"))?
+        .into_temp_path();
+    let mut temporary_config = config.clone();
+    temporary_config.output_path = temporary.to_path_buf();
+    let encoder = open_video_encoder(&temporary_config)
         .map_err(|error| format!("Encoder error: initialization failed: {error}"))?;
-    let result = encode_video_frames(
+    encode_video_frames(
         plan,
         *fps,
         *max_plugin_block_size,
         *progress_interval,
-        config,
+        &temporary_config,
         encoder,
         commands,
         events,
-    );
-    if result.is_err() {
-        let _ = fs::remove_file(&config.output_path);
-    }
-    result
+    )?;
+    temporary
+        .persist(&config.output_path)
+        .map_err(|error| format!("Output error: cannot publish video: {}", error.error))?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -621,13 +641,13 @@ fn encode_video_frames(
     events: &Sender<WorkerEvent>,
 ) -> Result<(), String> {
     let mut mixer = TimelineAudioMixer::default();
+    let mut next_frame = plan.start_frame;
     let timer = Instant::now();
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Cancel) | Err(_) => return Err("Export cancelled".to_owned()),
             Ok(WorkerCommand::Frame(frame)) => {
-                if frame.timeline_frame < plan.start_frame || frame.timeline_frame >= plan.end_frame
-                {
+                if frame.timeline_frame != next_frame || frame.timeline_frame >= plan.end_frame {
                     return Err("Frame render error: unexpected export frame".to_owned());
                 }
                 let pts = i64::from(frame.timeline_frame - plan.start_frame);
@@ -668,6 +688,7 @@ fn encode_video_frames(
                         .map_err(|error| format!("Encoder error: finalization failed: {error}"))?;
                     return Ok(());
                 }
+                next_frame += 1;
             }
         }
     }
@@ -692,10 +713,10 @@ fn run_image_sequence_export(
         fs::create_dir_all(output_directory)
             .map_err(|_| "Output error: cannot create output directory".to_owned())?;
     }
-    let output_paths = (plan.start_frame..plan.end_frame)
+    if let Some(existing) = (plan.start_frame..plan.end_frame)
         .map(|frame| image_sequence_path(output_directory, frame, *plan))
-        .collect::<Vec<_>>();
-    if let Some(existing) = output_paths.iter().find(|path| path.exists()) {
+        .find(|path| path.exists())
+    {
         cleanup_image_sequence(&[], output_directory, created_directory);
         return Err(format!(
             "Output error: output file already exists: {}",
@@ -703,6 +724,7 @@ fn run_image_sequence_export(
         ));
     }
     let mut written = Vec::new();
+    let mut next_frame = plan.start_frame;
     let timer = Instant::now();
     loop {
         match commands.recv() {
@@ -711,8 +733,7 @@ fn run_image_sequence_export(
                 return Err("Export cancelled".to_owned());
             }
             Ok(WorkerCommand::Frame(frame)) => {
-                if frame.timeline_frame < plan.start_frame || frame.timeline_frame >= plan.end_frame
-                {
+                if frame.timeline_frame != next_frame || frame.timeline_frame >= plan.end_frame {
                     cleanup_image_sequence(&written, output_directory, created_directory);
                     return Err("Frame render error: unexpected export frame".to_owned());
                 }
@@ -736,6 +757,7 @@ fn run_image_sequence_export(
                 if done == plan.total_frames {
                     return Ok(());
                 }
+                next_frame += 1;
             }
         }
     }
@@ -1003,6 +1025,27 @@ mod tests {
     }
 
     #[test]
+    fn image_worker_rejects_missing_or_repeated_frames() {
+        for frames in [&[1][..], &[0, 0][..]] {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let directory = temp.path().join("out-of-order");
+            let job = image_job(directory.clone(), 2);
+            let (commands, receiver) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            for &frame in frames {
+                commands
+                    .send(WorkerCommand::Frame(solid_frame(frame)))
+                    .unwrap();
+            }
+            assert_eq!(
+                run_image_sequence_export(&job, &receiver, &events),
+                Err("Frame render error: unexpected export frame".to_owned())
+            );
+            assert!(!directory.exists());
+        }
+    }
+
+    #[test]
     fn image_worker_removes_partial_output_after_confirmed_cancellation() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let directory = temp.path().join("cancelled");
@@ -1023,13 +1066,14 @@ mod tests {
     }
 
     #[test]
-    fn video_worker_removes_partial_output_after_confirmed_cancellation() {
+    fn video_worker_preserves_previous_output_on_cancellation_and_publishes_success() {
         if !media_video_encoders().contains(&"libx264") || !media_audio_encoders().contains(&"aac")
         {
             return;
         }
         let temp = tempfile::tempdir().expect("temporary directory");
         let path = temp.path().join("cancelled-video.mp4");
+        fs::write(&path, b"previous export").expect("previous export writes");
         let config = VideoEncoderConfig {
             width: 64,
             height: 64,
@@ -1079,6 +1123,51 @@ mod tests {
             run_video_export(&job, &config, &command_receiver, &event_sender),
             Err("Export cancelled".to_owned())
         );
-        assert!(!path.exists());
+        assert_eq!(fs::read(&path).unwrap(), b"previous export");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+
+        let (commands, receiver) = mpsc::channel();
+        commands
+            .send(WorkerCommand::Frame(ExportFrame {
+                timeline_frame: 1,
+                frame: VideoFrame {
+                    width: 64,
+                    height: 64,
+                    rgba: [40, 80, 120, 255].repeat(64 * 64),
+                    timestamp_seconds: 0.0,
+                },
+                audio_sources: Vec::new(),
+            }))
+            .unwrap();
+        assert_eq!(
+            run_video_export(&job, &config, &receiver, &event_sender),
+            Err("Frame render error: unexpected export frame".to_owned())
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"previous export");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+
+        let (command_sender, command_receiver) = mpsc::channel();
+        for timeline_frame in 0..2 {
+            command_sender
+                .send(WorkerCommand::Frame(ExportFrame {
+                    timeline_frame,
+                    frame: VideoFrame {
+                        width: 64,
+                        height: 64,
+                        rgba: [40, 80, 120, 255].repeat(64 * 64),
+                        timestamp_seconds: 0.0,
+                    },
+                    audio_sources: Vec::new(),
+                }))
+                .expect("frame queues");
+        }
+        run_video_export(&job, &config, &command_receiver, &event_sender)
+            .expect("video export succeeds");
+        let mut decoder =
+            freya_nle_media::VideoDecoder::open(&path).expect("published video opens");
+        let frame = decoder.decode_at(0.0).expect("published video decodes");
+        assert_eq!((frame.width, frame.height), (64, 64));
+        assert!((frame.rgba[0] as i32 - 40).abs() < 15);
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
     }
 }
