@@ -104,7 +104,7 @@ impl RecoveryStore {
     }
 
     pub(crate) fn request_remove(&self, id: &str) -> Result<(), String> {
-        if !recovery_id_is_valid(id) {
+        if !recovery_id_is_valid(id) && recovery_id_from_snapshot_name(id).is_none() {
             return Err("invalid recovery identifier".to_owned());
         }
         self.sender
@@ -264,26 +264,31 @@ fn read_current_snapshot_name(root: &Path, id: &str) -> Option<String> {
 }
 
 fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
+    if let Some(owner) = recovery_id_from_snapshot_name(id) {
+        if read_current_snapshot_name(root, &owner).as_deref() == Some(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snapshot is referenced by recovery metadata",
+            ));
+        }
+        return match fs::remove_file(root.join(id)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
     if !recovery_id_is_valid(id) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid recovery identifier",
         ));
     }
-    match fs::read_dir(root) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name();
-                let Some(file_name) = file_name.to_str() else {
-                    continue;
-                };
-                if recovery_snapshot_name_is_valid(id, file_name) {
-                    let _ = fs::remove_file(entry.path());
-                }
-            }
+    if let Some(snapshot) = read_current_snapshot_name(root, id) {
+        match fs::remove_file(root.join(snapshot)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
     }
     let metadata = root.join(format!("{id}.json"));
     match fs::remove_file(metadata) {
@@ -294,6 +299,52 @@ fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
 }
 
 fn scan_recoveries(root: &Path) -> Vec<RecoveryEntry> {
+    let mut recoveries = scan_recovery_metadata(root);
+    let referenced: HashSet<PathBuf> = recoveries
+        .iter()
+        .filter_map(|entry| entry.snapshot_path.clone())
+        .collect();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(owner) = recovery_id_from_snapshot_name(name) else {
+                continue;
+            };
+            if referenced.contains(&path) {
+                continue;
+            }
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            let parent = recoveries
+                .iter()
+                .find(|entry| entry.id == owner && entry.is_valid());
+            let display_name = parent.map_or_else(
+                || "Interrupted recovery".to_owned(),
+                |entry| format!("{} (interrupted recovery)", entry.display_name),
+            );
+            recoveries.push(RecoveryEntry {
+                id: name.to_owned(),
+                snapshot_path: Some(path.clone()),
+                original_project_url: parent
+                    .map_or_else(String::new, |entry| entry.original_project_url.clone()),
+                display_name,
+                saved_at: metadata.modified().map(iso_timestamp).unwrap_or_default(),
+                error: None,
+            });
+        }
+    }
+    recoveries.sort_by(|left, right| right.saved_at.cmp(&left.saved_at));
+    recoveries
+}
+
+fn scan_recovery_metadata(root: &Path) -> Vec<RecoveryEntry> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
     };
@@ -359,7 +410,7 @@ fn scan_recoveries(root: &Path) -> Vec<RecoveryEntry> {
 fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Result<()> {
     let cutoff = now.checked_sub(maximum_age).unwrap_or(UNIX_EPOCH);
     let mut referenced_snapshots = HashSet::new();
-    for recovery in scan_recoveries(root) {
+    for recovery in scan_recovery_metadata(root) {
         let metadata_path = root.join(format!("{}.json", recovery.id));
         let is_stale = fs::symlink_metadata(&metadata_path)
             .and_then(|metadata| metadata.modified())
@@ -529,7 +580,7 @@ mod tests {
 
         cleanup_stale(&root, SystemTime::now(), DEFAULT_MAXIMUM_AGE)
             .expect("recent recoveries remain");
-        assert_eq!(scan_recoveries(&root).len(), 1);
+        assert_eq!(scan_recoveries(&root).len(), 2);
         assert!(orphan_path.exists());
 
         let future = SystemTime::now()
@@ -622,7 +673,13 @@ mod tests {
             vec![b'x'; MAX_RECOVERY_METADATA_BYTES as usize + 1],
         )
         .unwrap();
-        assert!(!scan_recoveries(&root)[0].is_valid());
+        let entries = scan_recoveries(&root);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.id == id && !entry.is_valid())
+        );
+        assert!(entries.iter().any(|entry| entry.is_valid()));
         assert!(read_current_snapshot_name(&root, &id).is_none());
         fs::remove_dir_all(root).unwrap();
     }
@@ -643,6 +700,22 @@ mod tests {
         );
         assert!(!scan_recoveries(&root)[0].is_valid());
         assert!(read_current_snapshot_name(&root, &id).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_symlinks_are_not_listed_and_referenced_snapshots_cannot_be_discarded_as_orphans() {
+        use std::os::unix::fs::symlink;
+        let root = test_root("orphan-symlink");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Original")).unwrap();
+        let snapshot = read_current_snapshot_name(&root, &id).unwrap();
+        let link = root.join(format!("{id}-{}.aviqtl", generate_recovery_id()));
+        symlink(root.join(&snapshot), &link).unwrap();
+        assert_eq!(scan_recoveries(&root).len(), 1);
+        assert!(remove_recovery(&root, &snapshot).is_err());
+        assert!(root.join(snapshot).exists());
         fs::remove_dir_all(root).unwrap();
     }
 
