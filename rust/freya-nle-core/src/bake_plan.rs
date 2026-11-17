@@ -208,6 +208,9 @@ pub struct RenderLayerPlan {
 pub struct NestedSceneRenderPlan {
     pub target_scene_id: i32,
     pub target_frame: i32,
+    /// Unclamped child-frame position, before integer frame sampling.
+    pub target_position: f64,
+    pub speed: f64,
     pub opacity: f32,
 }
 
@@ -388,10 +391,25 @@ pub struct LensFlareRenderPlan {
     pub opacity: f32,
 }
 
+/// Position and identity of an audio clip inside an embedded scene.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NestedAudioTiming {
+    pub instance_key: u64,
+    /// Continuous position in the clip's own scene, in that scene's frames.
+    pub frame: f64,
+    pub fps: f64,
+    /// Change in scene time for one unit of root timeline time.
+    pub rate: f64,
+    /// Active interval within the current root timeline frame, in [0, 1].
+    pub start_fraction: f64,
+    pub end_fraction: f64,
+}
+
 /// Evaluated audio state for one active audio or video clip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioLayerPlan {
     pub clip_id: i32,
+    pub nested_timing: Option<NestedAudioTiming>,
     pub source_path: Option<String>,
     pub start_frame: i32,
     pub duration_frames: i32,
@@ -2253,10 +2271,13 @@ fn nested_scene_render_plan(
         } else {
             1.0
         };
-    let target_frame = (f64::from(relative_frame) * speed * fps_ratio).floor() + offset;
+    let target_position = f64::from(relative_frame) * speed * fps_ratio + offset;
+    let target_frame = target_position.floor();
     Some(NestedSceneRenderPlan {
         target_scene_id,
         target_frame: target_frame.clamp(0.0, f64::from(duration.saturating_sub(1).max(0))) as i32,
+        target_position,
+        speed,
         opacity: value_as_f64(value("opacity"), 1.0).clamp(0.0, 1.0) as f32,
     })
 }
@@ -2347,6 +2368,7 @@ fn audio_layer_plan(
 ) -> AudioLayerPlan {
     AudioLayerPlan {
         clip_id: output.clip_id,
+        nested_timing: None,
         source_path,
         start_frame: output.start_frame,
         duration_frames: output.duration_frames,

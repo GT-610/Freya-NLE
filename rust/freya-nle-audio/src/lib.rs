@@ -51,7 +51,7 @@ struct DecodedTrack {
 #[derive(Default)]
 pub struct TimelineAudioMixer {
     decoders: HashMap<PathBuf, AudioDecoder>,
-    plugin_chains: HashMap<i32, AudioPluginChain>,
+    plugin_chains: HashMap<(Option<u64>, i32), AudioPluginChain>,
 }
 
 impl TimelineAudioMixer {
@@ -116,6 +116,122 @@ impl TimelineAudioMixer {
         timeline_rate: f64,
         sources: &[TimelineAudioSource],
     ) -> Result<TimelineAudioBlock, TimelineAudioError> {
+        let mut boundaries = vec![0, output_frames];
+        for source in sources {
+            if let Some(timing) = source.plan.nested_timing {
+                for fraction in [timing.start_fraction, timing.end_fraction] {
+                    if fraction.is_finite() {
+                        boundaries.push(
+                            (fraction.clamp(0.0, 1.0) * output_frames as f64).round() as usize
+                        );
+                    }
+                }
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let mut samples = Vec::with_capacity(output_frames.saturating_mul(2));
+        let mut meters = Vec::new();
+        let mut errors = Vec::new();
+        for pair in boundaries.windows(2) {
+            let (start, end) = (pair[0], pair[1]);
+            if start == end {
+                continue;
+            }
+            let interval_sources = sources
+                .iter()
+                .filter_map(|source| {
+                    let Some(timing) = source.plan.nested_timing else {
+                        let mut source = source.clone();
+                        let offset = start as f64 / output_frames as f64 / fps;
+                        source.plan.source_start_time +=
+                            (offset * f64::from(source.plan.playback_speed)) as f32;
+                        source.plan.direct_time += offset as f32;
+                        return Some(source);
+                    };
+                    let first = (timing.start_fraction.clamp(0.0, 1.0) * output_frames as f64)
+                        .round() as usize;
+                    let last = (timing.end_fraction.clamp(0.0, 1.0) * output_frames as f64).round()
+                        as usize;
+                    if first > start || last < end {
+                        return None;
+                    }
+                    let mut source = source.clone();
+                    if let Some(timing) = &mut source.plan.nested_timing {
+                        let offset =
+                            (start as f64 / output_frames as f64 - timing.start_fraction).max(0.0);
+                        timing.frame += offset * timing.rate * timing.fps / fps;
+                    }
+                    Some(source)
+                })
+                .collect::<Vec<_>>();
+            let mixed = self.mix_segment(
+                timeline_frame,
+                fps,
+                sample_rate,
+                start_sample.saturating_add(start as i64),
+                end - start,
+                max_plugin_block_size,
+                timeline_rate,
+                &interval_sources,
+            )?;
+            samples.extend(mixed.samples);
+            for meter in mixed.meters {
+                let weight = (end - start) as f32 / output_frames as f32;
+                if let Some(existing) = meters
+                    .iter_mut()
+                    .find(|existing: &&mut StereoTrackMeter| existing.clip_id == meter.clip_id)
+                {
+                    existing.mixed |= meter.mixed;
+                    existing.peak_left = existing.peak_left.max(meter.peak_left);
+                    existing.peak_right = existing.peak_right.max(meter.peak_right);
+                    existing.rms_left += meter.rms_left * meter.rms_left * weight;
+                    existing.rms_right += meter.rms_right * meter.rms_right * weight;
+                } else {
+                    meters.push(StereoTrackMeter {
+                        rms_left: meter.rms_left * meter.rms_left * weight,
+                        rms_right: meter.rms_right * meter.rms_right * weight,
+                        ..meter
+                    });
+                }
+            }
+            errors.extend(mixed.errors);
+        }
+        for meter in &mut meters {
+            meter.rms_left = meter.rms_left.sqrt();
+            meter.rms_right = meter.rms_right.sqrt();
+        }
+        self.plugin_chains.retain(|key, _| {
+            sources.iter().any(|source| {
+                (
+                    source.plan.nested_timing.map(|timing| timing.instance_key),
+                    source.plan.clip_id,
+                ) == *key
+                    && !source.plan.plugins.is_empty()
+            })
+        });
+        Ok(TimelineAudioBlock {
+            timeline_frame,
+            start_sample,
+            sample_rate,
+            samples,
+            meters,
+            errors,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mix_segment(
+        &mut self,
+        timeline_frame: i32,
+        fps: f64,
+        sample_rate: u32,
+        start_sample: i64,
+        output_frames: usize,
+        max_plugin_block_size: usize,
+        timeline_rate: f64,
+        sources: &[TimelineAudioSource],
+    ) -> Result<TimelineAudioBlock, TimelineAudioError> {
         let mut decoded_tracks = Vec::with_capacity(sources.len());
         let mut errors = Vec::new();
         for source in sources {
@@ -154,34 +270,30 @@ impl TimelineAudioMixer {
                     vec![0.0; output_frames.saturating_mul(2)]
                 }
             };
+            let plugin_key = (
+                source.plan.nested_timing.map(|timing| timing.instance_key),
+                source.plan.clip_id,
+            );
             if !source.plan.plugins.is_empty() {
-                self.plugin_chains
-                    .entry(source.plan.clip_id)
-                    .or_default()
-                    .process(
-                        &source.plan.plugins,
-                        AudioPluginProcessContext {
-                            timeline_frame,
-                            start_sample,
-                            sample_rate,
-                            max_block_size: max_plugin_block_size,
-                        },
-                        &mut samples,
-                        &mut errors,
-                    );
+                self.plugin_chains.entry(plugin_key).or_default().process(
+                    &source.plan.plugins,
+                    AudioPluginProcessContext {
+                        timeline_frame,
+                        start_sample,
+                        sample_rate,
+                        max_block_size: max_plugin_block_size,
+                    },
+                    &mut samples,
+                    &mut errors,
+                );
             } else {
-                self.plugin_chains.remove(&source.plan.clip_id);
+                self.plugin_chains.remove(&plugin_key);
             }
             decoded_tracks.push(DecodedTrack {
                 plan: source.plan.clone(),
                 samples,
             });
         }
-        self.plugin_chains.retain(|clip_id, _| {
-            sources
-                .iter()
-                .any(|source| source.plan.clip_id == *clip_id && !source.plan.plugins.is_empty())
-        });
 
         let tracks = decoded_tracks
             .iter()
@@ -229,10 +341,11 @@ impl TimelineAudioMixer {
 }
 
 fn playback_source_rate(plan: &AudioLayerPlan, timeline_rate: f64) -> f64 {
+    let nested_rate = plan.nested_timing.map_or(1.0, |timing| timing.rate);
     if plan.direct_mode {
-        timeline_rate
+        timeline_rate * nested_rate
     } else {
-        f64::from(plan.playback_speed) * timeline_rate
+        f64::from(plan.playback_speed) * timeline_rate * nested_rate
     }
 }
 
@@ -246,16 +359,28 @@ fn cumulative_samples(frame: i32, fps: f64, sample_rate: u32) -> Option<i64> {
 
 fn source_time_seconds(plan: &AudioLayerPlan, timeline_frame: i32, fps: f64) -> f64 {
     if plan.direct_mode {
-        return f64::from(plan.direct_time);
+        let fractional_time = plan.nested_timing.map_or(0.0, |timing| {
+            (timing.frame - timing.frame.floor()) / timing.fps
+        });
+        return f64::from(plan.direct_time) + fractional_time;
     }
-    let relative_frames = timeline_frame.saturating_sub(plan.start_frame).max(0);
-    f64::from(plan.source_start_time)
-        + f64::from(relative_frames) / fps * f64::from(plan.playback_speed)
+    let (frame, fps) = plan
+        .nested_timing
+        .map_or((f64::from(timeline_frame), fps), |timing| {
+            (timing.frame, timing.fps)
+        });
+    let relative_frames = (frame - f64::from(plan.start_frame)).max(0.0);
+    f64::from(plan.source_start_time) + relative_frames / fps * f64::from(plan.playback_speed)
 }
 
 fn mix_parameters(plan: &AudioLayerPlan, timeline_frame: i32, fps: f64) -> StereoMixParameters {
+    let (frame, fps) = plan
+        .nested_timing
+        .map_or((f64::from(timeline_frame), fps), |timing| {
+            (timing.frame, timing.fps)
+        });
     StereoMixParameters {
-        relative_time: f64::from(timeline_frame.saturating_sub(plan.start_frame).max(0)) / fps,
+        relative_time: (frame - f64::from(plan.start_frame)).max(0.0) / fps,
         duration: f64::from(plan.duration_frames.max(0)) / fps,
         fade_in_seconds: plan.fade_in_seconds,
         fade_out_seconds: plan.fade_out_seconds,
@@ -276,6 +401,7 @@ mod tests {
     fn plan(clip_id: i32) -> AudioLayerPlan {
         AudioLayerPlan {
             clip_id,
+            nested_timing: None,
             source_path: Some("missing.wav".to_owned()),
             start_frame: 0,
             duration_frames: 120,
@@ -317,6 +443,29 @@ mod tests {
     }
 
     #[test]
+    fn nested_audio_uses_child_timebase_and_composed_rate() {
+        let mut plan = plan(1);
+        plan.start_frame = 15;
+        plan.duration_frames = 60;
+        plan.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 42,
+            frame: 37.5,
+            fps: 30.0,
+            rate: 1.5,
+            start_fraction: 0.0,
+            end_fraction: 1.0,
+        });
+        assert_eq!(source_time_seconds(&plan, 120, 60.0), 2.5);
+        assert_eq!(playback_source_rate(&plan, 2.0), 6.0);
+        let parameters = mix_parameters(&plan, 120, 60.0);
+        assert_eq!(parameters.relative_time, 0.75);
+        assert_eq!(parameters.duration, 2.0);
+        plan.direct_mode = true;
+        assert!((source_time_seconds(&plan, 120, 60.0) - (3.0 + 0.5 / 30.0)).abs() < 1e-10);
+        assert_eq!(playback_source_rate(&plan, 2.0), 3.0);
+    }
+
+    #[test]
     fn export_sample_count_can_start_at_an_arbitrary_timeline_frame() {
         let fps = 60_000.0 / 1_001.0;
         let mut mixer = TimelineAudioMixer::default();
@@ -354,6 +503,80 @@ mod tests {
         assert_eq!(source_time_seconds(&plan, 30, 60.0), 2.0);
         plan.direct_mode = true;
         assert_eq!(source_time_seconds(&plan, 30, 60.0), 3.0);
+    }
+
+    #[test]
+    fn solo_only_silences_other_tracks_during_its_segment() {
+        use std::io::Write;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("freya-segment-{}-{nonce}.wav", std::process::id()));
+        let mut file = std::fs::File::create(&path).unwrap();
+        let sample_count = 4800_u32;
+        let bytes = sample_count * 2;
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + bytes).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&48000_u32.to_le_bytes()).unwrap();
+        file.write_all(&96000_u32.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&bytes.to_le_bytes()).unwrap();
+        for _ in 0..sample_count {
+            file.write_all(&8192_i16.to_le_bytes()).unwrap();
+        }
+        drop(file);
+        let mut base = plan(1);
+        base.source_start_time = 0.0;
+        base.playback_speed = 1.0;
+        let mut solo = base.clone();
+        solo.clip_id = 2;
+        solo.solo = true;
+        solo.volume = 0.5;
+        solo.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 7,
+            frame: 1.0,
+            fps: 120.0,
+            rate: 1.0,
+            start_fraction: 0.5,
+            end_fraction: 1.0,
+        });
+        let sources = [
+            TimelineAudioSource {
+                path: path.clone(),
+                plan: base,
+            },
+            TimelineAudioSource {
+                path: path.clone(),
+                plan: solo,
+            },
+        ];
+        let block = TimelineAudioMixer::default()
+            .mix_frame_with_sample_count_and_plugin_block_size(
+                0,
+                60.0,
+                48000,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                &sources,
+            )
+            .unwrap();
+        assert!(block.errors.is_empty(), "{:?}", block.errors);
+        let first = block.samples[200];
+        let second = block.samples[1200];
+        assert!(first > 0.1, "first interval: {first}");
+        assert!(
+            (second / first - 0.5).abs() < 0.02,
+            "first: {first}, second: {second}"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

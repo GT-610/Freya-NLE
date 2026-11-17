@@ -19,7 +19,7 @@ pub use crate::audio::{
 };
 pub use crate::bake_plan::{
     AudioLayerPlan, CameraRenderPlan, EvaluatedAudioPlugin, EvaluatedEffect, EvaluatedTransform,
-    LensFlareRenderPlan, MediaKind, MediaPlaybackPlan, NestedSceneRenderPlan,
+    LensFlareRenderPlan, MediaKind, MediaPlaybackPlan, NestedAudioTiming, NestedSceneRenderPlan,
     ParticleFieldRenderPlan, ProceduralObjectRenderPlan, RadialLinesRenderPlan, RenderLayerPlan,
     RgbaColor, SceneFramePlan, SceneRenderPlan, SceneRenderPlanError, ShapeGradientKind, ShapeKind,
     ShapeRenderPlan, TextAlignment, TextRenderPlan, TrackLineRenderPlan,
