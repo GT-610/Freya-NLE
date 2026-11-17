@@ -365,7 +365,14 @@ fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Res
             .and_then(|metadata| metadata.modified())
             .is_ok_and(|modified| modified < cutoff);
         if is_stale && recovery_id_is_valid(&recovery.id) {
-            remove_recovery(root, &recovery.id)?;
+            // A crash can leave a newer, unreferenced generation next to old
+            // metadata. Remove only the metadata here; each snapshot is aged
+            // independently below.
+            match fs::remove_file(&metadata_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         } else if let Some(snapshot_path) = recovery.snapshot_path {
             referenced_snapshots.insert(snapshot_path);
         }
@@ -532,6 +539,30 @@ mod tests {
         assert!(scan_recoveries(&root).is_empty());
         assert!(!orphan_path.exists());
         fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    fn stale_metadata_does_not_delete_a_newer_interrupted_snapshot() {
+        let root = test_root("interrupted-generation");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let old_snapshot = root.join(read_current_snapshot_name(&root, &id).unwrap());
+        let metadata = root.join(format!("{id}.json"));
+        let old_time = SystemTime::now() - DEFAULT_MAXIMUM_AGE - Duration::from_secs(60);
+        for path in [&metadata, &old_snapshot] {
+            fs::File::open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(old_time))
+                .unwrap();
+        }
+        let new_snapshot = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&new_snapshot, b"new snapshot").unwrap();
+
+        cleanup_stale(&root, SystemTime::now(), DEFAULT_MAXIMUM_AGE).unwrap();
+        assert!(!metadata.exists());
+        assert!(!old_snapshot.exists());
+        assert_eq!(fs::read(&new_snapshot).unwrap(), b"new snapshot");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
