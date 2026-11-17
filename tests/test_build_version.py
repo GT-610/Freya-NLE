@@ -199,6 +199,11 @@ class TestBuildScript(unittest.TestCase):
     def test_packagers_stage_the_executable_under_its_package_name(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
+            for name in ("LICENSE", "third-party-licenses.md", "licenses/GPL-2.0.txt",
+                         "licenses/GPL-3.0.txt", "licenses/LGPL-2.1.txt"):
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture", encoding="utf-8")
             builder = ArchBuilder(
                 config_for(source, target="arch"), Logger(lambda _message: None, lambda *_args: None)
             )
@@ -446,6 +451,23 @@ class TestArchiveContents(unittest.TestCase):
             self.assertEqual(provenance["version"], "946fcce")
             self.assertEqual(provenance["revision"], "946fcce07b6dcd0331c8cc609192aeff5e1924f8")
 
+    def test_custom_ffmpeg_prefix_does_not_claim_the_recipe_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            header = source / "ffmpeg" / "include" / "libavutil" / "ffversion.h"
+            header.parent.mkdir(parents=True)
+            header.write_text('#define FFMPEG_VERSION "9.0.1"\n', encoding="utf-8")
+            (source / "scripts").mkdir()
+            (source / "scripts" / "build-ffmpeg.sh").write_text(
+                'FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"\n', encoding="utf-8")
+            builder = PlatformBuilder(
+                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+            )
+            builder.env["FFMPEG_DIR"] = str(source / "ffmpeg")
+            provenance = builder.ffmpeg_provenance()
+            self.assertEqual(provenance["version"], "9.0.1")
+            self.assertNotIn("revision", provenance)
+
     def test_a_system_ffmpeg_is_recorded_when_no_prefix_was_used(self):
         with tempfile.TemporaryDirectory() as temporary:
             builder = PlatformBuilder(
@@ -456,46 +478,29 @@ class TestArchiveContents(unittest.TestCase):
             self.assertEqual(provenance["source"], "system")
             self.assertEqual(provenance["version"], "ffmpeg version 7.1.5 Copyright (c)")
 
-    def test_licences_are_staged_when_present(self):
-        # The application is AGPLv3 and bundles GPL FFmpeg, so an archive with no
-        # licence text is a compliance gap rather than a cosmetic omission.
+    def test_repository_licences_are_staged(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary)
-            (source / "LICENSE.md").write_text("AGPL", encoding="utf-8")
-            destination = source / "out"
+            destination = Path(temporary) / "out"
             builder = PlatformBuilder(
-                config_for(source), Logger(lambda _message: None, lambda *_args: None)
+                config_for(SOURCE_DIR), Logger(lambda _message: None, lambda *_args: None)
             )
             builder.copy_licenses(destination)
+            for name in ("LICENSE", "third-party-licenses.md", "GPL-2.0.txt",
+                         "GPL-3.0.txt", "LGPL-2.1.txt"):
+                self.assertTrue((destination / "licenses" / name).is_file(), name)
             self.assertEqual(
-                (destination / "licenses" / "LICENSE.md").read_text(encoding="utf-8"), "AGPL"
+                (destination / "licenses" / "LICENSE").read_bytes(),
+                (SOURCE_DIR / "LICENSE").read_bytes(),
             )
 
-    def test_the_vendored_copyleft_texts_are_staged(self):
-        # The notice says the archive carries the texts it names, and the Windows
-        # build has no FFmpeg source tree to copy them from.
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary)
-            (source / "LICENSE.md").write_text("AGPL", encoding="utf-8")
-            vendored = source / "licenses"
-            vendored.mkdir()
-            (vendored / "GPL-2.0.txt").write_text("GPL", encoding="utf-8")
-            destination = source / "out"
-            builder = PlatformBuilder(
-                config_for(source), Logger(lambda _message: None, lambda *_args: None)
-            )
-            builder.copy_licenses(destination)
-            self.assertEqual(
-                (destination / "licenses" / "GPL-2.0.txt").read_text(encoding="utf-8"), "GPL"
-            )
-
-    def test_missing_licences_do_not_fail_a_fixture_tree(self):
+    def test_missing_required_licences_fail_before_staging(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
             builder = PlatformBuilder(
                 config_for(source), Logger(lambda _message: None, lambda *_args: None)
             )
-            builder.copy_licenses(source / "out")
+            with self.assertRaisesRegex(FileNotFoundError, "Required licence files missing"):
+                builder.copy_licenses(source / "out")
             self.assertFalse((source / "out").exists())
 
 

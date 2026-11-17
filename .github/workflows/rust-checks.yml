@@ -2,6 +2,11 @@ name: Rust checks
 
 on:
   workflow_call:
+    inputs:
+      source_ref:
+        description: Commit to check out (defaults to the triggering revision)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,8 @@ jobs:
       image: docker.io/library/archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy

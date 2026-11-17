@@ -28,11 +28,15 @@ jobs:
       version: ${{ steps.read.outputs.version }}
       tag: ${{ steps.tag.outputs.tag }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
+      source_ref: ${{ steps.commit.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           # A tag build must read the tree the tag points at, not the branch tip.
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ format('refs/tags/{0}', inputs.tag || github.ref_name) }}
+      - name: Record the checked-out commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Determine the tag
         id: tag
         run: |
@@ -65,6 +69,7 @@ jobs:
     uses: ./.github/workflows/package.yml
     with:
       version: ${{ needs.resolve.outputs.version }}
+      source_ref: ${{ needs.resolve.outputs.source_ref }}
 
   publish:
     name: Publish
@@ -75,7 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.source_ref }}
       - name: Collect artifacts
         uses: actions/download-artifact@v4
         with:
@@ -118,6 +123,19 @@ jobs:
           # notes point at.
           sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
+      - name: Verify the tag still identifies the built commit
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          BUILT_COMMIT: ${{ needs.resolve.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          git fetch --no-tags --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          actual="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          if [ "$actual" != "$BUILT_COMMIT" ]; then
+            echo "Release tag changed after the build: expected $BUILT_COMMIT, got $actual" >&2
+            exit 1
+          fi
       # The tag already triggered this run, so the release is attached to it
       # rather than created here.
       - name: Publish

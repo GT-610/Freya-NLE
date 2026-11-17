@@ -513,7 +513,11 @@ class PlatformBuilder:
                 "path": ffmpeg_dir,
                 "version": self.ffmpeg_version_from_prefix(Path(ffmpeg_dir)),
             }
-            if revision := self.pinned_ffmpeg_revision():
+            revision = self.pinned_ffmpeg_revision()
+            version = info["version"].lower()
+            # A prefix may come from vcpkg or a custom FFmpeg build. Only attach
+            # the recipe's commit when the installed header identifies it.
+            if revision and re.fullmatch(r"[0-9a-f]{7,40}", version) and revision.startswith(version):
                 info["revision"] = revision
             return info
         output = self.command_output(["ffmpeg", "-version"])
@@ -561,30 +565,28 @@ class PlatformBuilder:
     def copy_licenses(self, destination: Path):
         """Ship the licence texts the archive owes its recipients.
 
-        The application is AGPLv3 and bundles FFmpeg (GPL) and x264, so an
-        archive with no licence text at all is a compliance gap rather than a
-        cosmetic omission. Missing optional files are skipped so a fixture tree
-        can still be packaged.
+        The project licence and the notices promised by the distribution are
+        required inputs; a partial archive must fail instead of silently shipping.
         """
         legal = destination / "licenses"
-        copied = False
         sources = [
-            self.config.source_dir / "LICENSE.md",
+            self.config.source_dir / "LICENSE",
             self.config.source_dir / "third-party-licenses.md",
+            *(self.config.source_dir / "licenses" / name for name in (
+                "GPL-2.0.txt", "GPL-3.0.txt", "LGPL-2.1.txt"
+            )),
         ]
-        # `third-party-licenses.md` says the archive carries the texts it names.
-        # The GPL and LGPL copies live in the repository so every platform ships
-        # them, including the Windows build, which has no FFmpeg source tree.
-        vendored = self.config.source_dir / "licenses"
-        if vendored.is_dir():
-            sources.extend(sorted(path for path in vendored.iterdir() if path.is_file()))
+        missing = [str(source) for source in sources if not source.is_file()]
+        if missing:
+            raise FileNotFoundError(f"Required licence files missing: {', '.join(missing)}")
+        sources.extend(
+            path for path in sorted((self.config.source_dir / "licenses").iterdir())
+            if path.is_file() and path not in sources
+        )
+        legal.mkdir(parents=True, exist_ok=True)
         for source in sources:
-            if source.is_file():
-                legal.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, legal / source.name)
-                copied = True
-        if copied:
-            self.logger.log("Bundled licence texts")
+            shutil.copy2(source, legal / source.name)
+        self.logger.log("Bundled licence texts")
 
     def command_output(self, command: List[str]) -> str:
         try:

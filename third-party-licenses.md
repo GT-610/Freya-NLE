@@ -1,23 +1,23 @@
 # Third-party licences
 
 Freya NLE is released under the GNU Affero General Public License version 3
-(see `LICENSE.md`). A packaged build also contains the components below, each
-under its own licence. Every release archive ships this file, `LICENSE.md`, and
-the GPL-2.0 and LGPL-2.1 texts under `licenses/`, because an archive that
-redistributes these binaries without their notices is not compliant.
+(see `LICENSE`). A packaged build also contains the components below, each
+under its own licence. Every release archive ships this file, `LICENSE`, and
+the GPL-2.0, GPL-3.0 and LGPL-2.1 texts under `licenses/`.
 
 ## Shipped as binaries
 
 | Component | Licence | Role in the build |
 | :--- | :--- | :--- |
-| FFmpeg | LGPL-2.1-or-later, built with `--enable-gpl` | Decoding, encoding, muxing, resampling. The GPL flag makes the shipped binaries GPL-2.0-or-later. |
+| FFmpeg | LGPL-2.1-or-later, built with GPL components | Decoding, encoding, muxing, resampling. The Linux AppImage and macOS recipe enables GPL and version 3; the Windows recipe enables GPL. The Arch archive uses the distribution's FFmpeg. |
 | x264 | GPL-2.0-or-later | H.264 encoder reachable through FFmpeg. |
 | x265 | GPL-2.0-or-later | HEVC encoder reachable through FFmpeg. |
 | Carla | GPL-2.0-or-later | Optional VST3/LV2 host. Only `carla-discovery-native` is bundled, and only when the build host provides it. |
 
 FFmpeg is linked dynamically on every platform, so a user may replace the
-bundled libraries with their own build. The source for the exact FFmpeg used by
-a release is identified by version and commit in `build-info.json`.
+bundled libraries with their own build. The linked FFmpeg version is recorded
+in `build-info.json`; a source revision is included when it can be established
+from the installed headers.
 
 ## Windows runtime
 
