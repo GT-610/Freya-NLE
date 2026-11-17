@@ -5,6 +5,14 @@ use std::path::Path;
 /// Enforce the byte limit on the opened stream, including files that grow
 /// between discovery and reading. Never allocate for the untrusted file size.
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    // Opening a FIFO for reading can block before File::metadata is reached.
+    // Check its type first, then re-check the opened handle in case it changed.
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a regular file",
+        ));
+    }
     let file = File::open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {

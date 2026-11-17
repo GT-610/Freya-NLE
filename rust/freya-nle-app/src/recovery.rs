@@ -1,3 +1,4 @@
+use crate::file_io::read_bounded;
 use crate::project_io::write_atomic;
 #[cfg(not(test))]
 use crate::settings::application_data_root;
@@ -17,6 +18,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_BACKUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAXIMUM_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+// Metadata holds only a few paths and labels, not the project document.
+const MAX_RECOVERY_METADATA_BYTES: u64 = 1024 * 1024;
 static RECOVERY_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +224,6 @@ fn write_recovery(root: &Path, request: &RecoveryWrite) -> io::Result<()> {
         ));
     }
     let previous_snapshot = read_current_snapshot_name(root, &request.id);
-    write_atomic(&root.join(&snapshot_file), &request.snapshot)?;
     let metadata = build_recovery_metadata(
         &request.id,
         &request.original_project_url,
@@ -232,6 +234,13 @@ fn write_recovery(root: &Path, request: &RecoveryWrite) -> io::Result<()> {
     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid recovery metadata"))?;
     let metadata_bytes = serde_json::to_vec_pretty(&metadata)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if metadata_bytes.len() as u64 > MAX_RECOVERY_METADATA_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "recovery metadata exceeds the size limit",
+        ));
+    }
+    write_atomic(&root.join(&snapshot_file), &request.snapshot)?;
     if let Err(error) = write_atomic(&root.join(format!("{}.json", request.id)), &metadata_bytes) {
         let _ = fs::remove_file(root.join(&snapshot_file));
         return Err(error);
@@ -243,7 +252,11 @@ fn write_recovery(root: &Path, request: &RecoveryWrite) -> io::Result<()> {
 }
 
 fn read_current_snapshot_name(root: &Path, id: &str) -> Option<String> {
-    let metadata = fs::read(root.join(format!("{id}.json"))).ok()?;
+    let metadata = read_bounded(
+        &root.join(format!("{id}.json")),
+        MAX_RECOVERY_METADATA_BYTES,
+    )
+    .ok()?;
     let inspection = inspect_recovery_metadata(id, &metadata)?;
     (inspection.status == "ok"
         && recovery_snapshot_name_is_valid(id, &inspection.metadata.snapshot_file))
@@ -312,7 +325,7 @@ fn scan_recoveries(root: &Path) -> Vec<RecoveryEntry> {
             recoveries.push(recovery);
             continue;
         }
-        let inspection = fs::read(&path)
+        let inspection = read_bounded(&path, MAX_RECOVERY_METADATA_BYTES)
             .ok()
             .and_then(|bytes| inspect_recovery_metadata(&id, &bytes));
         let Some(inspection) = inspection else {
@@ -558,6 +571,48 @@ mod tests {
 
         fs::remove_file(outside).expect("outside fixture removes");
         fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    fn oversized_metadata_is_rejected_without_replacing_a_valid_snapshot() {
+        let root = test_root("oversized");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "First")).unwrap();
+        let before = scan_recoveries(&root)[0].snapshot_path.clone();
+        let mut request = recovery_write(id.clone(), "Second");
+        request.display_name = "x".repeat(MAX_RECOVERY_METADATA_BYTES as usize);
+        assert_eq!(
+            write_recovery(&root, &request).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(scan_recoveries(&root)[0].snapshot_path, before);
+        fs::write(
+            root.join(format!("{id}.json")),
+            vec![b'x'; MAX_RECOVERY_METADATA_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(!scan_recoveries(&root)[0].is_valid());
+        assert!(read_current_snapshot_name(&root, &id).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_metadata_is_rejected_without_opening_it() {
+        let root = test_root("fifo");
+        fs::create_dir_all(&root).unwrap();
+        let id = generate_recovery_id();
+        let path = root.join(format!("{id}.json"));
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!scan_recoveries(&root)[0].is_valid());
+        assert!(read_current_snapshot_name(&root, &id).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
