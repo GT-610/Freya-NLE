@@ -1833,6 +1833,7 @@ dependencies = [
 name = "freya-nle-core"
 version = "0.8.1"
 dependencies = [
+ "clru",
  "luna-core",
  "semver",
  "serde",

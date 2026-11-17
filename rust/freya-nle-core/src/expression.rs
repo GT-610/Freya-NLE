@@ -14,11 +14,12 @@
 //! exposes the frame clock, and assignments to it have no effect on the
 //! object.
 
+use clru::CLruCache;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::{HostRootTicket, Vm};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 /// The Qt host rejected anything longer before it reached the parser.
 /// Longest expression the evaluator accepts. The edit path checks the same
@@ -452,7 +453,7 @@ struct Evaluator {
     vm: Vm,
     /// `None` records a source that failed to parse, so it is not retried on
     /// every frame.
-    compiled: HashMap<String, Option<HostRootTicket>>,
+    compiled: CLruCache<String, Option<HostRootTicket>>,
 }
 
 impl Evaluator {
@@ -493,7 +494,7 @@ impl Evaluator {
         );
         Self {
             vm,
-            compiled: HashMap::new(),
+            compiled: CLruCache::new(NonZeroUsize::new(MAX_COMPILED_EXPRESSIONS).unwrap()),
         }
     }
 
@@ -509,11 +510,14 @@ impl Evaluator {
             Some(Some(ticket)) => Some(ticket),
             Some(None) => None,
             None => {
-                if self.compiled.len() >= MAX_COMPILED_EXPRESSIONS {
-                    return None;
+                if self.compiled.len() >= MAX_COMPILED_EXPRESSIONS
+                    && let Some((_, Some(evicted))) = self.compiled.pop_back()
+                {
+                    // Cached functions are GC roots until explicitly released.
+                    let _ = self.vm.unpin(evicted);
                 }
                 let ticket = self.compile(expression);
-                self.compiled.insert(expression.to_owned(), ticket);
+                self.compiled.put(expression.to_owned(), ticket);
                 ticket
             }
         };
@@ -561,6 +565,32 @@ mod tests {
         assert_eq!(evaluate("sin(0)", 0.0, 0, 0.0), Some(0.0));
         assert_eq!(evaluate("m.floor(2.9)", 0.0, 0, 0.0), Some(2.0));
         assert_eq!(evaluate("math.max(2, 7)", 0.0, 0, 0.0), Some(7.0));
+    }
+
+    #[test]
+    fn expression_cache_evicts_old_entries_without_rejecting_new_ones() {
+        let mut evaluator = Evaluator::new();
+        for i in 0..MAX_COMPILED_EXPRESSIONS {
+            assert_eq!(
+                evaluator.evaluate(&i.to_string(), 0.0, 0, 0.0),
+                Some(i as f64)
+            );
+        }
+        // Recently used entries survive, and the oldest pinned function is released.
+        assert_eq!(evaluator.evaluate("0", 0.0, 0, 0.0), Some(0.0));
+        assert_eq!(evaluator.evaluate("1000", 0.0, 0, 0.0), Some(1000.0));
+        assert!(evaluator.compiled.peek("0").is_some());
+        assert!(evaluator.compiled.peek("1").is_none());
+        assert_eq!(evaluator.compiled.len(), MAX_COMPILED_EXPRESSIONS);
+        assert_eq!(evaluator.vm.host_root_count(), MAX_COMPILED_EXPRESSIONS);
+        assert_eq!(evaluator.evaluate("1", 0.0, 0, 0.0), Some(1.0));
+        for i in MAX_COMPILED_EXPRESSIONS + 1..MAX_COMPILED_EXPRESSIONS * 4 {
+            assert_eq!(
+                evaluator.evaluate(&i.to_string(), 0.0, 0, 0.0),
+                Some(i as f64)
+            );
+        }
+        assert_eq!(evaluator.vm.host_root_count(), MAX_COMPILED_EXPRESSIONS);
     }
 
     #[test]
