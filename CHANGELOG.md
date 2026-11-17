@@ -4,6 +4,20 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- A note of `99 %` or `101 %` in the audio speed field is now heard. Any speed
+  within 1 % of normal was treated as normal and played at 1x, so the two
+  nearest settings on AviUtl's percentage control did nothing
+- A deeply nested scene can no longer end the process while mixing audio. Scene
+  speeds multiply through every enclosing level, and the resulting rate was used
+  as a decode length for one frame, so a bad document asked for gigabytes. The
+  decode is now bounded, the clip is limited instead, and the log names it once
+- An export that could not decode a clip's audio no longer reports an unqualified
+  success. The video is still written, and the result names each clip left silent
+- The recovery and backup-history windows close on Escape, and their repeated
+  per-row buttons announce which snapshot or saved version they act on instead of
+  saying "Recover" or "Open" once per row
+
 ## [0.8.1] - 2026-11-13
 
 ### Added
