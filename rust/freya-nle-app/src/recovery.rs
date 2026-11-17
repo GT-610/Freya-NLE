@@ -20,6 +20,7 @@ pub const DEFAULT_BACKUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAXIMUM_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 // Metadata holds only a few paths and labels, not the project document.
 const MAX_RECOVERY_METADATA_BYTES: u64 = 1024 * 1024;
+const INVALID_METADATA_PREFIX: &str = "invalid-metadata:";
 static RECOVERY_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +37,19 @@ impl RecoveryEntry {
     pub fn is_valid(&self) -> bool {
         self.error.is_none() && self.snapshot_path.is_some()
     }
+}
+
+fn invalid_metadata_filename(id: &str) -> Option<&str> {
+    let name = id.strip_prefix(INVALID_METADATA_PREFIX)?;
+    let stem = name.strip_suffix(".json")?;
+    if stem.is_empty()
+        || name.contains(['/', '\\', '\0'])
+        || recovery_id_is_valid(stem)
+        || Path::new(name).file_name()?.to_str()? != name
+    {
+        return None;
+    }
+    Some(name)
 }
 
 pub(crate) struct RecoveryWrite {
@@ -104,7 +118,10 @@ impl RecoveryStore {
     }
 
     pub(crate) fn request_remove(&self, id: &str) -> Result<(), String> {
-        if !recovery_id_is_valid(id) && recovery_id_from_snapshot_name(id).is_none() {
+        if !recovery_id_is_valid(id)
+            && recovery_id_from_snapshot_name(id).is_none()
+            && invalid_metadata_filename(id).is_none()
+        {
             return Err("invalid recovery identifier".to_owned());
         }
         self.sender
@@ -264,6 +281,13 @@ fn read_current_snapshot_name(root: &Path, id: &str) -> Option<String> {
 }
 
 fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
+    if let Some(name) = invalid_metadata_filename(id) {
+        return match fs::remove_file(root.join(name)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
     if let Some(owner) = recovery_id_from_snapshot_name(id) {
         if read_current_snapshot_name(root, &owner).as_deref() == Some(id) {
             return Err(io::Error::new(
@@ -367,6 +391,14 @@ fn scan_recovery_metadata(root: &Path) -> Vec<RecoveryEntry> {
             error: None,
         };
         if !recovery_id_is_valid(&id) {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let discard_id = format!("{INVALID_METADATA_PREFIX}{name}");
+            if invalid_metadata_filename(&discard_id).is_none() {
+                continue;
+            }
+            recovery.id = discard_id;
             recovery.error = Some("Recovery identifier is invalid".to_owned());
             recoveries.push(recovery);
             continue;
@@ -411,11 +443,14 @@ fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Res
     let cutoff = now.checked_sub(maximum_age).unwrap_or(UNIX_EPOCH);
     let mut referenced_snapshots = HashSet::new();
     for recovery in scan_recovery_metadata(root) {
+        if !recovery_id_is_valid(&recovery.id) {
+            continue;
+        }
         let metadata_path = root.join(format!("{}.json", recovery.id));
         let is_stale = fs::symlink_metadata(&metadata_path)
             .and_then(|metadata| metadata.modified())
             .is_ok_and(|modified| modified < cutoff);
-        if is_stale && recovery_id_is_valid(&recovery.id) {
+        if is_stale {
             // A crash can leave a newer, unreferenced generation next to old
             // metadata. Remove only the metadata here; each snapshot is aged
             // independently below.

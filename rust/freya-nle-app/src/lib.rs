@@ -1542,6 +1542,35 @@ mod tests {
     }
 
     #[test]
+    fn invalid_recovery_metadata_can_be_discarded_without_touching_other_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let invalid = root.join("invalid.json");
+        let outside = temp.path().join("outside.json");
+        std::fs::write(&invalid, b"{}").unwrap();
+        std::fs::write(&outside, b"keep").unwrap();
+        let mut app = ApplicationModel::with_recovery_root(root.clone());
+        let entry = app.recovery_entries().pop().unwrap();
+        assert!(!entry.is_valid());
+        assert!(
+            app.discard_recovery("invalid-metadata:../outside.json")
+                .is_err()
+        );
+        app.discard_recovery(&entry.id).unwrap();
+        app.flush_recovery();
+        assert!(app.recovery_entries().is_empty());
+        drop(app);
+        assert!(!invalid.exists());
+        assert_eq!(std::fs::read(outside).unwrap(), b"keep");
+        assert!(
+            ApplicationModel::with_recovery_root(root)
+                .recovery_entries()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn interrupted_generations_can_be_recovered_and_discarded_independently() {
         for recover_orphan in [false, true] {
             let temp = tempfile::tempdir().unwrap();
