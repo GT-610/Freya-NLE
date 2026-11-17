@@ -30,6 +30,29 @@ export component BackupHistoryWindow inherits Window {
     callback save-version();
     callback close-window();
 
+    forward-focus: window-focus;
+
+    // Escape closes the window, matching every other dialog in the application.
+    // Taking focus while the window is being created re-enters the backend's
+    // accessibility borrow, so it waits for the next event-loop turn.
+    window-focus := FocusScope {
+        width: 100%;
+        height: 100%;
+        init => { window-focus-timer.start(); }
+        window-focus-timer := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => { self.stop(); window-focus.focus(); }
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-window();
+                accept
+            } else {
+                reject
+            }
+        }
+
     Rectangle {
         width: 100%;
         height: 100%;
@@ -121,12 +144,18 @@ export component BackupHistoryWindow inherits Window {
                                             font-size: 0.72rem;
                                         }
                                     }
+                                    // Every row repeats the same button text, so a
+                                    // reader would hear "Open" many times without
+                                    // knowing which version it opens; the saved
+                                    // time distinguishes them.
                                     Button {
                                         text: @tr("Open");
+                                        accessible-label: @tr("Open the version saved {}", entry.saved-at);
                                         clicked => { root.open-entry(project.key, entry.file-name); }
                                     }
                                     Button {
                                         text: @tr("Delete");
+                                        accessible-label: @tr("Delete the version saved {}", entry.saved-at);
                                         clicked => { root.delete-entry(project.key, entry.file-name); }
                                     }
                                 }
@@ -141,6 +170,7 @@ export component BackupHistoryWindow inherits Window {
                                     Rectangle { horizontal-stretch: 1; }
                                     Button {
                                         text: @tr("Clear Project History");
+                                        accessible-label: @tr("Clear the history of {}", project.label == "" ? project.key : project.label);
                                         clicked => { root.clear-project(project.key); }
                                     }
                                 }
@@ -193,5 +223,6 @@ export component BackupHistoryWindow inherits Window {
                 }
             }
         }
+    }
     }
 }

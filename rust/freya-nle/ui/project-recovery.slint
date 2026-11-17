@@ -19,6 +19,36 @@ export component ProjectRecoveryWindow inherits Window {
     callback discard-recovery(string);
     callback close-window();
 
+    forward-focus: window-focus;
+
+    // Escape closes the list, or the confirmation first when it is open, which
+    // is what every other dialog in the application does. Taking focus while the
+    // window is being created re-enters the backend's accessibility borrow, so
+    // it waits for the next event-loop turn.
+    window-focus := FocusScope {
+        width: 100%;
+        height: 100%;
+        init => { window-focus-timer.start(); }
+        window-focus-timer := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => { self.stop(); window-focus.focus(); }
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                if root.discard-confirmation-visible {
+                    root.pending-discard-id = "";
+                    root.pending-discard-name = "";
+                    root.discard-confirmation-visible = false;
+                } else {
+                    root.close-window();
+                }
+                accept
+            } else {
+                reject
+            }
+        }
+
     VerticalLayout {
         padding: 16px;
         spacing: 12px;
@@ -78,8 +108,12 @@ export component ProjectRecoveryWindow inherits Window {
                                 overflow: elide;
                             }
                         }
+                        // Every row repeats the same button text, so a reader
+                        // would hear "Recover" many times without knowing which
+                        // snapshot it opens.
                         Button {
                             text: @tr("Recover");
+                            accessible-label: @tr("Recover {}", recovery.name);
                             enabled: recovery.valid;
                             clicked => {
                                 root.error-message = "";
@@ -88,6 +122,7 @@ export component ProjectRecoveryWindow inherits Window {
                         }
                         Button {
                             text: @tr("Discard");
+                            accessible-label: @tr("Discard the recovery snapshot {}", recovery.name);
                             clicked => {
                                 root.pending-discard-id = recovery.id;
                                 root.pending-discard-name = recovery.name;
@@ -163,5 +198,6 @@ export component ProjectRecoveryWindow inherits Window {
                 }
             }
         }
+    }
     }
 }
