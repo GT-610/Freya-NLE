@@ -541,8 +541,9 @@ fn discover_in_root(root: &Path) -> Vec<DiscoveredCandidate> {
                 continue;
             }
             let manifest_path = path.join("manifest.lua");
-            let manifest = fs::read_to_string(&manifest_path)
-                .ok()
+            // The manifest comes from an installed package, so it goes through the
+            // same size and regular-file check as the script itself.
+            let manifest = read_bounded(&manifest_path)
                 .and_then(|text| parse_script_plugin_manifest(&text))
                 .unwrap_or(freya_nle_core::api::ScriptPluginManifest {
                     id: String::new(),
@@ -1034,6 +1035,50 @@ mod tests {
 
     fn test_settings(path: PathBuf) -> SettingsStore {
         SettingsStore::load_from(path, Map::new()).0
+    }
+
+    #[test]
+    fn an_oversized_plugin_manifest_is_not_read_into_memory() {
+        // The manifest comes from a package the user installed, so it gets the
+        // same bound as the script. A package that ships a huge manifest must be
+        // skipped rather than read in full.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let plugin = temp.path().join("oversized");
+        fs::create_dir_all(&plugin).expect("plugin directory");
+        fs::write(plugin.join("main.lua"), "function main() end").expect("script writes");
+        // Valid Lua whose metadata only appears past the bound: an unbounded read
+        // would find it, so this distinguishes the two implementations instead of
+        // failing to parse either way.
+        let manifest = plugin.join("manifest.lua");
+        let mut text = String::from("return {\n");
+        while text.len() < MAX_PLUGIN_SCRIPT_BYTES as usize {
+            text.push_str("    -- padding comment keeps the manifest large\n");
+        }
+        text.push_str("    id = \"com.aviqtl.example.oversized\",\n");
+        text.push_str("    name = \"Oversized Manifest\",\n");
+        text.push_str("    version = \"1.0.0\",\n");
+        text.push_str("}\n");
+        fs::write(&manifest, &text).expect("manifest writes");
+        assert!(text.len() as u64 > MAX_PLUGIN_SCRIPT_BYTES);
+        assert!(
+            parse_script_plugin_manifest(&text).is_some(),
+            "the fixture must be a valid manifest"
+        );
+
+        assert!(
+            read_bounded(&manifest).is_none(),
+            "an oversized manifest must not be read"
+        );
+        // The plugin is still discovered, just without the manifest's metadata, so
+        // the failure cannot hide the script from the package list.
+        let candidates = discover_in_root(temp.path());
+        assert_eq!(candidates.len(), 1);
+        assert!(
+            candidates[0].manifest.id.is_empty(),
+            "the oversized manifest's id must not be loaded: {:?}",
+            candidates[0].manifest.id
+        );
+        assert_eq!(candidates[0].manifest.name, "oversized");
     }
 
     #[test]
