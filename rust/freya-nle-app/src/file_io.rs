@@ -6,10 +6,17 @@ use std::path::Path;
 /// between discovery and reading. Never allocate for the untrusted file size.
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     let file = File::open(path)?;
-    if !file.metadata()?.is_file() {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "expected a regular file",
+        ));
+    }
+    if metadata.len() > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file exceeds the size limit",
         ));
     }
     let mut bytes = Vec::new();
