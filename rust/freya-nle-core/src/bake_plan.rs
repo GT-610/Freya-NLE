@@ -1139,7 +1139,7 @@ struct BakePlan {
     scene_height: i32,
     scene_id: i32,
     clips: Vec<CachedClip>,
-    scene_durations: HashMap<i32, i32>,
+    scene_timing: HashMap<i32, (i32, f64)>,
     layer_settings: BTreeMap<i32, LayerSetting>,
     time_buckets: HashMap<i32, Vec<usize>>,
     effect_count: usize,
@@ -1197,10 +1197,10 @@ impl BakePlan {
             .filter(|clip| clip.scene_id == scene_id)
             .map(|clip| CachedClip::from_document(clip, scene.fps))
             .collect();
-        let scene_durations = document
+        let scene_timing = document
             .scenes
             .iter()
-            .map(|scene| (scene.id, scene.duration))
+            .map(|scene| (scene.id, (scene.duration, scene.fps)))
             .collect();
         let layer_settings = scene
             .layer_settings
@@ -1213,7 +1213,7 @@ impl BakePlan {
             scene.height,
             scene.id,
             clips,
-            scene_durations,
+            scene_timing,
             layer_settings,
         ))
     }
@@ -1224,7 +1224,7 @@ impl BakePlan {
         scene_height: i32,
         scene_id: i32,
         clips: Vec<CachedClip>,
-        scene_durations: HashMap<i32, i32>,
+        scene_timing: HashMap<i32, (i32, f64)>,
         layer_settings: BTreeMap<i32, LayerSetting>,
     ) -> Self {
         let mut time_buckets: HashMap<i32, Vec<usize>> = HashMap::new();
@@ -1242,7 +1242,7 @@ impl BakePlan {
             scene_height,
             scene_id,
             clips,
-            scene_durations,
+            scene_timing,
             layer_settings,
             time_buckets,
             effect_count,
@@ -1541,7 +1541,8 @@ impl BakePlan {
                     &clip.clip_type,
                     relative_frame,
                     &evaluated_effects,
-                    &self.scene_durations,
+                    self.fps,
+                    &self.scene_timing,
                 );
                 frame_layers.push(RenderLayerPlan {
                     clip_id: clip.clip_id,
@@ -2217,7 +2218,8 @@ fn nested_scene_render_plan(
     clip_type: &str,
     relative_frame: i32,
     effects: &[EvaluatedEffect],
-    scene_durations: &HashMap<i32, i32>,
+    parent_fps: f64,
+    scene_timing: &HashMap<i32, (i32, f64)>,
 ) -> Option<NestedSceneRenderPlan> {
     if clip_type != "scene" {
         return None;
@@ -2225,10 +2227,17 @@ fn nested_scene_render_plan(
     let effect = effects.iter().find(|effect| effect.id == "scene")?;
     let value = |name| effect.params.get(name);
     let target_scene_id = value_as_f64(value("targetSceneId"), -1.0).round() as i32;
-    let duration = *scene_durations.get(&target_scene_id)?;
+    let (duration, target_fps) = *scene_timing.get(&target_scene_id)?;
     let speed = value_as_f64(value("speed"), 1.0);
     let offset = value_as_f64(value("offset"), 0.0).floor();
-    let target_frame = (f64::from(relative_frame) * speed).floor() + offset;
+    let fps_ratio =
+        if parent_fps.is_finite() && parent_fps > 0.0 && target_fps.is_finite() && target_fps > 0.0
+        {
+            target_fps / parent_fps
+        } else {
+            1.0
+        };
+    let target_frame = (f64::from(relative_frame) * speed * fps_ratio).floor() + offset;
     Some(NestedSceneRenderPlan {
         target_scene_id,
         target_frame: target_frame.clamp(0.0, f64::from(duration.saturating_sub(1).max(0))) as i32,

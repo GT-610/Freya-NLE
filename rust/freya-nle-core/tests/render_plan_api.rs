@@ -318,8 +318,46 @@ fn evaluates_keyframed_layers_and_normal_and_direct_video_positions() {
         .and_then(|layer| layer.nested_scene)
         .expect("nested scene plan");
     assert_eq!(nested.target_scene_id, 2);
-    assert_eq!(nested.target_frame, 89);
+    // One second in the 60 fps parent is 30 frames in the child; speed and
+    // the child-frame offset are applied after converting the timebase.
+    assert_eq!(nested.target_frame, 55);
     assert_eq!(nested.opacity, 0.75);
+}
+
+#[test]
+fn nested_scene_converts_timebase_and_clamps_to_child_duration() {
+    let mut document = project_document();
+    let mut plan = SceneRenderPlan::from_document(&document, 1).unwrap();
+    for (frame, expected) in [(0, 10), (1, 10), (2, 11), (60, 55)] {
+        let child = plan
+            .evaluate(frame)
+            .layers
+            .into_iter()
+            .find(|layer| layer.clip_id == 15)
+            .unwrap()
+            .nested_scene
+            .unwrap();
+        assert_eq!(child.target_frame, expected, "parent frame {frame}");
+    }
+
+    document
+        .scenes
+        .iter_mut()
+        .find(|scene| scene.id == 2)
+        .unwrap()
+        .fps = 120.0;
+    let mut plan = SceneRenderPlan::from_document(&document, 1).unwrap();
+    for (frame, expected) in [(0, 10), (1, 13), (30, 89)] {
+        let child = plan
+            .evaluate(frame)
+            .layers
+            .into_iter()
+            .find(|layer| layer.clip_id == 15)
+            .unwrap()
+            .nested_scene
+            .unwrap();
+        assert_eq!(child.target_frame, expected, "parent frame {frame}");
+    }
 }
 
 #[test]
