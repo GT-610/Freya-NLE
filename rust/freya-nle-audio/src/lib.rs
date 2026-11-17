@@ -8,7 +8,7 @@ use freya_nle_core::api::{
     StereoMixParameters, StereoMixTrack, mix_stereo_tracks, resample_stereo,
 };
 use freya_nle_media::AudioDecoder;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub use output::AudioOutput;
@@ -42,6 +42,22 @@ pub enum TimelineAudioError {
     InvalidTiming,
 }
 
+/// Upper bound for the number of source sample frames one source may decode for a
+/// single output block. At 48 kHz stereo this is about 22 seconds, 8 MiB of PCM.
+///
+/// A nested scene multiplies its speed into the rate of every enclosing scene and
+/// clip, so a deep or hand-edited scene graph can ask for an unbounded decode. The
+/// workspace builds with `panic = "abort"`, so such an allocation request would end
+/// the process instead of dropping one frame. The bound still leaves room for real
+/// documents: the editor caps clip speed at 400 % and scene speed at 4x per level,
+/// so a preview block only reaches it beyond roughly 1,000x.
+const MAX_DECODED_SOURCE_FRAMES: usize = 1_048_576;
+
+/// Source rates this close to unity are treated as unity, skipping resampling.
+/// The tolerance only absorbs floating-point noise from composing scene rates; the
+/// smallest speed the editor offers (1 %) is orders of magnitude larger.
+const UNITY_SOURCE_RATE_EPSILON: f64 = 1.0e-9;
+
 struct DecodedTrack {
     plan: AudioLayerPlan,
     samples: Vec<f32>,
@@ -52,6 +68,7 @@ struct DecodedTrack {
 pub struct TimelineAudioMixer {
     decoders: HashMap<PathBuf, AudioDecoder>,
     plugin_chains: HashMap<(Option<u64>, i32), AudioPluginChain>,
+    noted_rate_limits: HashSet<(Option<u64>, i32)>,
 }
 
 impl TimelineAudioMixer {
@@ -210,6 +227,14 @@ impl TimelineAudioMixer {
                     && !source.plan.plugins.is_empty()
             })
         });
+        self.noted_rate_limits.retain(|key| {
+            sources.iter().any(|source| {
+                (
+                    source.plan.nested_timing.map(|timing| timing.instance_key),
+                    source.plan.clip_id,
+                ) == *key
+            })
+        });
         Ok(TimelineAudioBlock {
             timeline_frame,
             start_sample,
@@ -235,12 +260,30 @@ impl TimelineAudioMixer {
         let mut decoded_tracks = Vec::with_capacity(sources.len());
         let mut errors = Vec::new();
         for source in sources {
+            let key = (
+                source.plan.nested_timing.map(|timing| timing.instance_key),
+                source.plan.clip_id,
+            );
             let source_rate = playback_source_rate(&source.plan, timeline_rate);
-            let resample = (source_rate - 1.0).abs() > 0.01;
+            let (source_rate, limited) = bounded_source_rate(source_rate, output_frames);
+            if limited {
+                // A malformed document would otherwise request a multi-gigabyte
+                // decode for one frame; say so once instead of every frame.
+                if self.noted_rate_limits.insert(key) {
+                    errors.push(format!(
+                        "clip #{} ({}): playback rate is out of range; audio is limited to {source_rate:.2}x",
+                        source.plan.clip_id,
+                        source.path.display()
+                    ));
+                }
+            }
+            let resample = (source_rate - 1.0).abs() > UNITY_SOURCE_RATE_EPSILON;
             let source_frames = if resample {
-                ((output_frames as f64 * source_rate).ceil() as usize)
+                let frames = ((output_frames as f64 * source_rate).ceil() as usize)
                     .saturating_add(2)
-                    .max(1)
+                    .max(1);
+                debug_assert!(frames <= MAX_DECODED_SOURCE_FRAMES);
+                frames.min(MAX_DECODED_SOURCE_FRAMES)
             } else {
                 output_frames
             };
@@ -337,6 +380,31 @@ impl TimelineAudioMixer {
             .decoders
             .get_mut(path)
             .expect("audio decoder was inserted above"))
+    }
+}
+
+/// Clamps a composed source rate so one output frame cannot request an unbounded
+/// decode. Returns the effective rate and whether it had to be limited.
+///
+/// A zero rate is a freeze frame and stays zero; negative and non-finite rates are
+/// unusable and fall back to unity so an affected clip still renders.
+fn bounded_source_rate(source_rate: f64, output_frames: usize) -> (f64, bool) {
+    if source_rate == 0.0 {
+        return (0.0, false);
+    }
+    if !source_rate.is_finite() || source_rate < 0.0 {
+        return (1.0, true);
+    }
+    if output_frames == 0 {
+        return (source_rate, false);
+    }
+    // The decode request adds two guard frames and rounds up, so leave room for both
+    // or the bounded rate could still ask for slightly more than the limit.
+    let ceiling = (MAX_DECODED_SOURCE_FRAMES.saturating_sub(4)) as f64 / output_frames as f64;
+    if source_rate > ceiling {
+        (ceiling, true)
+    } else {
+        (source_rate, false)
     }
 }
 
@@ -503,6 +571,235 @@ mod tests {
         assert_eq!(source_time_seconds(&plan, 30, 60.0), 2.0);
         plan.direct_mode = true;
         assert_eq!(source_time_seconds(&plan, 30, 60.0), 3.0);
+    }
+
+    #[test]
+    fn near_unity_speeds_still_resample() {
+        // AviUtl's speed control is a percentage, so 101 % arrives as 1.01 and lands
+        // within a hair of unity. Treating it as unity would silently ignore the
+        // speed, so even a 1 % change must take the resampling path.
+        let mut plan_a = plan(1);
+        plan_a.playback_speed = 1.01;
+        let rate = playback_source_rate(&plan_a, 1.0);
+        assert!(
+            (rate - 1.0).abs() > UNITY_SOURCE_RATE_EPSILON,
+            "a 1 % speed change must resample, got rate {rate}"
+        );
+        // Only floating-point noise from composing scene rates skips resampling.
+        let noisy = 1.0 + UNITY_SOURCE_RATE_EPSILON / 4.0;
+        assert!((noisy - 1.0).abs() <= UNITY_SOURCE_RATE_EPSILON);
+
+        let mut plan_b = plan(2);
+        plan_b.playback_speed = 0.99;
+        assert!((playback_source_rate(&plan_b, 1.0) - 1.0).abs() > UNITY_SOURCE_RATE_EPSILON);
+    }
+
+    #[test]
+    fn extreme_composed_rates_are_bounded_before_decoding() {
+        // Three nested levels at the editor's maximum scene speed, the maximum clip
+        // speed, and the maximum preview rate compose to a real but large rate.
+        let mut plan_a = plan(1);
+        plan_a.playback_speed = 4.0;
+        plan_a.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 3,
+            frame: 0.0,
+            fps: 60.0,
+            rate: 64.0,
+            start_fraction: 0.0,
+            end_fraction: 1.0,
+        });
+        let rate = playback_source_rate(&plan_a, 4.0);
+        assert!((rate - 1_024.0).abs() < 0.01, "composed rate: {rate}");
+        // A minute-long export block is where the composed rate stops being safe.
+        let output_frames = 60 * 48_000;
+        let (bounded, limited) = bounded_source_rate(rate, output_frames);
+        assert!(limited, "1,024x over a minute must be bounded");
+        assert!(bounded * output_frames as f64 <= MAX_DECODED_SOURCE_FRAMES as f64);
+
+        // A hand-edited document can compose to infinity, NaN, or a negative speed.
+        for impossible in [f64::INFINITY, f64::NAN, -2.0] {
+            let (bounded, limited) = bounded_source_rate(impossible, 800);
+            assert!(limited, "{impossible} must be reported as limited");
+            assert_eq!(bounded, 1.0, "{impossible} must fall back to unity");
+        }
+
+        // A freeze frame stays silent instead of being reported as out of range.
+        assert_eq!(bounded_source_rate(0.0, 800), (0.0, false));
+    }
+
+    #[test]
+    fn ordinary_rates_are_not_reported_as_limited() {
+        for rate in [0.01, 0.5, 1.0, 1.01, 4.0, 64.0] {
+            let (bounded, limited) = bounded_source_rate(rate, 800);
+            assert_eq!(bounded, rate);
+            assert!(!limited, "{rate} must not be limited");
+        }
+    }
+
+    /// Writes a mono 16-bit ramp over the first 1,000 samples, then silence, so a
+    /// speed change moves the value read at a fixed output position.
+    fn write_ramp_wav(path: &Path) -> u32 {
+        use std::io::Write;
+        const RAMP: u32 = 1_000;
+        let sample_count = 48_000_u32;
+        let bytes = sample_count * 2;
+        let mut file = std::fs::File::create(path).expect("ramp fixture creates");
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + bytes).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&48_000_u32.to_le_bytes()).unwrap();
+        file.write_all(&96_000_u32.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&bytes.to_le_bytes()).unwrap();
+        for index in 0..sample_count {
+            // A 1 in 1,000 rise keeps neighbouring samples distinct, so a 1 % speed
+            // change visibly shifts where the output lands on the ramp.
+            let value = if index < RAMP {
+                (f64::from(index) / f64::from(RAMP) * 24_000.0) as i16
+            } else {
+                0
+            };
+            file.write_all(&value.to_le_bytes()).unwrap();
+        }
+        sample_count
+    }
+
+    #[test]
+    fn a_one_percent_speed_change_moves_the_decoded_samples() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "freya-near-unity-{}-{nonce}.wav",
+            std::process::id()
+        ));
+        write_ramp_wav(&path);
+
+        let mix = |speed: f32| {
+            let mut layer = plan(11);
+            layer.source_start_time = 0.0;
+            layer.playback_speed = speed;
+            let source = TimelineAudioSource {
+                path: path.clone(),
+                plan: layer,
+            };
+            TimelineAudioMixer::default()
+                .mix_frame_with_sample_count_and_plugin_block_size(
+                    0,
+                    60.0,
+                    48_000,
+                    800,
+                    DEFAULT_PLUGIN_BLOCK_SIZE,
+                    &[source],
+                )
+                .expect("a valid frame mixes")
+        };
+
+        let nominal = mix(1.0);
+        let faster = mix(1.01);
+        let slower = mix(0.99);
+        assert!(nominal.errors.is_empty(), "{:?}", nominal.errors);
+        assert!(faster.errors.is_empty(), "{:?}", faster.errors);
+        assert!(slower.errors.is_empty(), "{:?}", slower.errors);
+
+        // Skipping resampling near unity would make all three mixes identical, which
+        // is what silently ignored AviUtl's 99 % and 101 % speeds. The ramp rises one
+        // step per source sample, so a 1 % speed change over 800 frames moves the
+        // landing point by eight steps.
+        let sample = |block: &TimelineAudioBlock| block.samples[block.samples.len() - 2];
+        let last_nominal = sample(&nominal);
+        let last_faster = sample(&faster);
+        let last_slower = sample(&slower);
+        assert!(
+            (last_faster - last_nominal).abs() > 1.0e-4,
+            "101 % must advance further through the source: {last_faster} vs {last_nominal}"
+        );
+        assert!(
+            (last_slower - last_nominal).abs() > 1.0e-4,
+            "99 % must advance less through the source: {last_slower} vs {last_nominal}"
+        );
+        assert!(
+            last_faster > last_nominal && last_nominal > last_slower,
+            "a ramp must stay monotonic in speed: {last_faster} > {last_nominal} > {last_slower}"
+        );
+
+        std::fs::remove_file(&path).expect("ramp fixture removes");
+    }
+
+    #[test]
+    fn a_limited_rate_still_mixes_and_reports_once() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "freya-limited-rate-{}-{nonce}.wav",
+            std::process::id()
+        ));
+        write_ramp_wav(&path);
+
+        let mut layer = plan(12);
+        layer.source_start_time = 0.0;
+        // A hand-edited document can nest scenes until the composed rate is absurd.
+        layer.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 5,
+            frame: 0.0,
+            fps: 60.0,
+            rate: 1.0e9,
+            start_fraction: 0.0,
+            end_fraction: 1.0,
+        });
+        let source = TimelineAudioSource {
+            path: path.clone(),
+            plan: layer,
+        };
+
+        let mut mixer = TimelineAudioMixer::default();
+        let first = mixer
+            .mix_frame_with_sample_count_and_plugin_block_size(
+                0,
+                60.0,
+                48_000,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                std::slice::from_ref(&source),
+            )
+            .expect("the frame still mixes at a bounded rate");
+        assert_eq!(first.samples.len(), 1_600);
+        assert!(
+            first
+                .errors
+                .iter()
+                .any(|error| error.contains("out of range")),
+            "a limited rate must be reported: {:?}",
+            first.errors
+        );
+
+        // The diagnostic is a one-off; repeating it every frame would flood the log.
+        let second = mixer
+            .mix_frame_with_sample_count_and_plugin_block_size(
+                1,
+                60.0,
+                48_000,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                &[source],
+            )
+            .expect("the next frame still mixes");
+        assert_eq!(second.samples.len(), 1_600);
+        assert!(
+            second.errors.is_empty(),
+            "the rate warning must not repeat: {:?}",
+            second.errors
+        );
+
+        std::fs::remove_file(&path).expect("ramp fixture removes");
     }
 
     #[test]
