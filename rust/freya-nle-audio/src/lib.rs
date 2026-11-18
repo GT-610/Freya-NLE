@@ -594,6 +594,45 @@ mod tests {
     }
 
     #[test]
+    fn a_fractional_fps_export_stays_contiguous_from_a_nonzero_start() {
+        // The export worker sizes each block with `plan_export_audio_frame`, whose
+        // counts are the difference between two absolute sample positions. When it
+        // passed the export-relative index instead, the first block of an export
+        // starting at frame 1 covered 800..1599 while the next began at 1601, so a
+        // stateful plugin saw a seek on most frames.
+        let (fps_num, fps_den) = (60_000, 1_001);
+        let fps = f64::from(fps_num) / f64::from(fps_den);
+        let sample_rate = 48_000;
+        let start = 1;
+        let mut previous_end: Option<i64> = None;
+        let mut mixer = TimelineAudioMixer::default();
+        for frame in start..start + 12 {
+            let plan =
+                freya_nle_core::api::plan_export_audio_frame(frame, sample_rate, fps_num, fps_den)
+                    .expect("the export frame plans");
+            let block = mixer
+                .mix_frame_with_timeline_rate(
+                    frame,
+                    fps,
+                    sample_rate as u32,
+                    plan.samples_for_frame as usize,
+                    DEFAULT_PLUGIN_BLOCK_SIZE,
+                    1.0,
+                    &[],
+                )
+                .expect("the frame mixes");
+            if let Some(end) = previous_end {
+                assert_eq!(
+                    block.start_sample, end,
+                    "frame {frame} must continue the stream: {} != {end}",
+                    block.start_sample
+                );
+            }
+            previous_end = Some(block.start_sample + i64::from(plan.samples_for_frame));
+        }
+    }
+
+    #[test]
     fn export_sample_count_can_start_at_an_arbitrary_timeline_frame() {
         let fps = 60_000.0 / 1_001.0;
         let mut mixer = TimelineAudioMixer::default();

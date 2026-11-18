@@ -684,21 +684,14 @@ fn encode_video_frames(
                     format!("Encoder error: failed to queue video frame: {error}")
                 })?;
                 let done = frame.timeline_frame - plan.start_frame + 1;
-                let audio_plan = plan_export_audio_frame(
-                    done - 1,
-                    i32::try_from(config.sample_rate)
-                        .map_err(|_| "Encoder error: audio sample rate is invalid".to_owned())?,
-                    config.fps_num,
-                    config.fps_den,
-                )
-                .ok_or_else(|| "Encoder error: audio timing failed".to_owned())?;
-                if audio_plan.samples_for_frame > 0 {
+                let samples_for_frame = export_frame_samples(frame.timeline_frame, config)?;
+                if samples_for_frame > 0 {
                     let audio = mixer
                         .mix_frame_with_sample_count_and_plugin_block_size(
                             frame.timeline_frame,
                             fps,
                             config.sample_rate,
-                            audio_plan.samples_for_frame as usize,
+                            samples_for_frame as usize,
                             max_plugin_block_size,
                             &frame.audio_sources,
                         )
@@ -813,6 +806,21 @@ fn run_image_sequence_export(
             }
         }
     }
+}
+
+/// Sample frames the audio encoder owes for one exported timeline frame.
+///
+/// Indexed by the absolute timeline frame: the plan's counts are the difference
+/// between two absolute sample positions, so consecutive frames join exactly. An
+/// export-relative index would instead leave a one-sample gap on most frames of a
+/// fractional-fps export that does not begin at frame 0, and a stateful plugin
+/// chain reads that gap as a seek.
+fn export_frame_samples(timeline_frame: i32, config: &VideoEncoderConfig) -> Result<i32, String> {
+    let sample_rate = i32::try_from(config.sample_rate)
+        .map_err(|_| "Encoder error: audio sample rate is invalid".to_owned())?;
+    plan_export_audio_frame(timeline_frame, sample_rate, config.fps_num, config.fps_den)
+        .map(|plan| plan.samples_for_frame)
+        .ok_or_else(|| "Encoder error: audio timing failed".to_owned())
 }
 
 fn open_video_encoder(config: &VideoEncoderConfig) -> Result<VideoEncoder, String> {
@@ -955,6 +963,45 @@ mod tests {
             start_frame: 0,
             end_frame: 300,
         }
+    }
+
+    #[test]
+    fn exported_audio_blocks_join_exactly_from_a_nonzero_start() {
+        // The worker asks for the samples of the frame it just rendered, and the
+        // mixer places that block at the same absolute frame. Both have to agree,
+        // or a fractional-fps export starting at frame 1 leaves a gap on most
+        // frames and a stateful plugin sees a seek each time.
+        let config = VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 60_000,
+            fps_den: 1_001,
+            bitrate: 500_000,
+            crf: Some(28),
+            gop_size: None,
+            codec_name: "libx264".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: PathBuf::from("unused.mp4"),
+            preset: "ultrafast".to_owned(),
+            profile: String::new(),
+        };
+        let fps = 60_000.0 / 1_001.0;
+        let mut previous_end: Option<i64> = None;
+        for frame in 1..12 {
+            let samples = export_frame_samples(frame, &config).expect("the frame plans");
+            let start = (f64::from(frame) * 48_000.0 / fps).floor() as i64;
+            if let Some(end) = previous_end {
+                assert_eq!(start, end, "frame {frame} must continue the stream");
+            }
+            previous_end = Some(start + i64::from(samples));
+        }
+        // A fresh export still starts on its own frame.
+        assert_eq!(
+            export_frame_samples(0, &config).expect("frame zero plans"),
+            800
+        );
     }
 
     #[test]
