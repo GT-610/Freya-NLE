@@ -37,6 +37,15 @@ jobs:
       - name: Validate build helpers
         run: python -m unittest tests.test_build_version tests.test_logging_hygiene tests.test_release_contents
       - name: Format, lint, and test workspace
+        # The whole workspace is built twice here (clippy, then the test
+        # binaries) inside a container, and the job was killed with signal 9
+        # while linking the Slint test backend. Neither the compile jobs nor the
+        # incremental cache is useful without a restored `target/`, so cap the
+        # parallelism and turn incremental off: both lower the peak footprint
+        # without narrowing what is checked.
+        env:
+          CARGO_BUILD_JOBS: 2
+          CARGO_INCREMENTAL: 0
         run: |
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
           cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
