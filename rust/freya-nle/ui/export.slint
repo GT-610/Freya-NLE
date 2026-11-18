@@ -481,11 +481,13 @@ export component ExportWindow inherits Window {
                 Text { text: root.result-success ? @tr("Complete") : @tr("Error"); color: AppTheme.foreground; font-size: 1.1rem; font-weight: 700; }
                 Rectangle {
                     vertical-stretch: 1;
-                    ScrollView {
+                    message-scroll := ScrollView {
+                        width: 100%;
+                        height: 100%;
                         viewport-width: self.visible-width;
                         viewport-height: result-message-text.preferred-height;
                         result-message-text := Text {
-                            width: parent.width;
+                            width: message-scroll.visible-width;
                             text: root.result-message;
                             color: AppTheme.muted-foreground;
                             wrap: word-wrap;
