@@ -8,6 +8,19 @@ edition = "2024"
 rust-version = "1.99.1"
 publish = false
 
+# `truce-rack-clap` 1.1.5 declares the buffer behind `value_to_text` as
+# `[i8; ...]`, but `c_char` is `u8` on AArch64 Linux, so the Linux arm64 build
+# does not compile. The vendored copy uses `c_char`.
+#
+# `truce-rack-vst3` 1.1.5 has the same assumption in its `char8` helpers and its
+# platform-type strings. The vendored copy uses `c_char` there too.
+#
+# Drop these patches once an upstream release carries the fix (1.1.5 is the
+# newest on crates.io).
+[patch.crates-io]
+truce-rack-clap = { path = "../vendor/truce-rack-clap" }
+truce-rack-vst3 = { path = "../vendor/truce-rack-vst3" }
+
 [profile.dev]
 panic = "abort"
 

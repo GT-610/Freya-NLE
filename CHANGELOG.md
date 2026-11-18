@@ -4,6 +4,14 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- The portable Linux AppImage is also built for arm64, as
+  `Freya-NLE-<version>-linux-arm64.AppImage`. It is produced natively on an arm64
+  Ubuntu 22.04 runner rather than cross-compiled, so it links the pinned FFmpeg
+  and the same glibc 2.35 floor as the x86_64 image. `BUILD.py --appimage
+  --target aarch64-unknown-linux-gnu` builds it locally, and the release refuses
+  to publish without it
+
 ### Fixed
 - A note of `99 %` or `101 %` in the audio speed field is now heard. Any speed
   within 1 % of normal was treated as normal and played at 1x, so the two
@@ -17,6 +25,10 @@ All notable changes to Freya NLE are documented in this file.
 - The recovery and backup-history windows close on Escape, and their repeated
   per-row buttons announce which snapshot or saved version they act on instead of
   saying "Recover" or "Open" once per row
+- The Linux arm64 build compiles. AArch64 passes `va_list` by value, which the
+  FFmpeg log bridge did not accept, and two audio-plugin crates spell `c_char` as
+  `i8` where AArch64 Linux defines it as `u8`. The crates are patched from
+  `vendor/`, and the patch notes say when each can be dropped
 
 ## [0.8.1] - 2026-11-13
 

@@ -23,6 +23,7 @@ from BUILD import (
     PlatformBuilder,
     XcodeBuilder,
     determine_target,
+    normalize_linux_architecture,
     normalize_macos_architecture,
     numeric_version,
     parse_semver,
@@ -528,6 +529,51 @@ class TestAppImage(unittest.TestCase):
             )
             self.assertEqual(builder.archive_extension, ".AppImage")
 
+    def test_an_unqualified_build_stays_x86_64_on_every_host(self):
+        # The image is produced in a container pinned to linux/amd64, so the
+        # machine running the build decides nothing. A default that followed the
+        # host would rename the artifact on an Apple Silicon machine while still
+        # producing an x86_64 payload.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            self.assertEqual(builder.platform_architecture(), "x86_64")
+            self.assertEqual(builder.appimage_architecture(), "x86_64")
+            self.assertEqual(builder.container_platform(), "linux/amd64")
+
+    def test_the_arm64_build_is_named_for_its_architecture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            builder.config.target_triple = "aarch64-unknown-linux-gnu"
+            self.assertEqual(
+                builder.get_archive_name(), "Freya-NLE-0.7.0-rc.1-linux-arm64"
+            )
+            self.assertEqual(builder.platform_architecture(), "arm64")
+            # Artifact names say `arm64`, the two tools that consume the value
+            # say `aarch64` and `arm64` respectively. Neither accepts the other's
+            # spelling, which is why the mapping is not folded into one string.
+            self.assertEqual(builder.appimage_architecture(), "aarch64")
+            self.assertEqual(builder.container_platform(), "linux/arm64")
+            self.assertEqual(builder.ffmpeg_target(), "aarch64-unknown-linux-gnu")
+
+    def test_the_arm64_ffmpeg_prefix_does_not_collide_with_the_x86_64_one(self):
+        # One checkout builds both images, and packaging reads `FFMPEG_DIR`. A
+        # shared prefix would bundle x86_64 libraries into the arm64 image, which
+        # links and then fails to load on the machine it was built for.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            prefixes = {}
+            for triple in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
+                builder.config.target_triple = triple
+                prefixes[triple] = builder.ffmpeg_target()
+            self.assertEqual(set(prefixes.values()),
+                             {"x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"})
+
+    def test_an_unknown_linux_architecture_is_rejected(self):
+        # Silently building the host architecture would label the artifact with an
+        # architecture it does not have.
+        with self.assertRaises(RuntimeError):
+            normalize_linux_architecture("riscv64")
+
     def test_appdir_staging_puts_resources_next_to_the_executable(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
@@ -678,20 +724,46 @@ class TestAppImage(unittest.TestCase):
         # part of the source and a mismatch has to stop the build.
         with tempfile.TemporaryDirectory() as temporary:
             builder = self.builder(Path(temporary))
-            self.assertRegex(builder.IMAGE_TOOL_SHA256, r"^[0-9a-f]{64}$")
-            self.assertTrue(builder.IMAGE_TOOL_URL.startswith("https://"))
+            for architecture, spec in builder.IMAGE_TOOLS.items():
+                with self.subTest(architecture=architecture):
+                    self.assertRegex(spec["sha256"], r"^[0-9a-f]{64}$")
+                    # The tool is an AppImage itself, so the name has to say which
+                    # architecture it runs on; one pin cannot serve both builds.
+                    self.assertIn(architecture, spec["name"])
+            self.assertTrue(builder.image_tool_url().startswith("https://"))
             # A tagged release cannot be swapped under the pinned digest the way
             # the rolling `continuous` asset can.
-            self.assertNotIn("/continuous/", builder.IMAGE_TOOL_URL)
+            self.assertNotIn("/continuous/", builder.image_tool_url())
+
+    def test_each_architecture_packs_with_its_own_tool(self):
+        # An x86_64 appimagetool cannot run in the arm64 container, and using the
+        # wrong one would either fail to start or embed the wrong runtime.
+        with tempfile.TemporaryDirectory() as temporary:
+            builder = self.builder(Path(temporary))
+            chosen = {}
+            for triple in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
+                builder.config.target_triple = triple
+                chosen[triple] = (builder.appimage_architecture(),
+                                  builder.image_tool()["name"],
+                                  builder.image_tool_url())
+            self.assertEqual(chosen["x86_64-unknown-linux-gnu"][:2],
+                             ("x86_64", "appimagetool-x86_64.AppImage"))
+            self.assertEqual(chosen["aarch64-unknown-linux-gnu"][:2],
+                             ("aarch64", "appimagetool-aarch64.AppImage"))
+            # Two digests, so a swapped asset can never satisfy the other build.
+            self.assertNotEqual(chosen["x86_64-unknown-linux-gnu"][2],
+                                chosen["aarch64-unknown-linux-gnu"][2])
 
     def test_a_corrupt_tool_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
             builder = self.builder(source)
-            tool = source / ".build_tmp" / builder.IMAGE_TOOL
+            tool = source / ".build_tmp" / builder.image_tool()["name"]
             tool.parent.mkdir(parents=True)
             tool.write_text("not an appimage", encoding="utf-8")
-            builder.IMAGE_TOOL_SHA256 = "0" * 64
+            builder.IMAGE_TOOLS = {
+                "x86_64": dict(builder.IMAGE_TOOLS["x86_64"], sha256="0" * 64)
+            }
             builder.download = lambda url, destination: destination.write_text("x", encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 builder.appimagetool_path()
@@ -1258,6 +1330,7 @@ class TestReleasePipeline(unittest.TestCase):
         # One release asset per target the scheme defines.
         for target in (
             "-linux-x86_64.AppImage",
+            "-linux-arm64.AppImage",
             "-linux-x86_64-archlinux.tar.zst",
             "-macos-arm64.zip",
             "-macos-x86_64.zip",
@@ -1336,10 +1409,50 @@ class TestReleasePipeline(unittest.TestCase):
         # built on the oldest Ubuntu the CI still hosts. Building it on the
         # default 24.04 runner would ask for glibc 2.39.
         job = self.job_block("linux-appimage")
-        self.assertIn("runs-on: ubuntu-22.04", job)
+        # Both architectures come from the same image version, so neither may
+        # drift to a newer runner and raise its own glibc floor.
+        self.assertEqual(
+            re.findall(r"runner: (ubuntu-[0-9.]+(?:-arm)?)", job),
+            ["ubuntu-22.04", "ubuntu-22.04-arm"],
+        )
         # The job installs its own dependencies on the runner; a container would
         # only reintroduce a second place for the toolchain to disagree.
         self.assertNotIn("container:", job)
+
+    def test_each_appimage_architecture_is_built_on_its_own_runner(self):
+        # Crossing architectures would need emulation for the whole FFmpeg and
+        # Slint build, and an emulated build is the one place a mistyped
+        # architecture would go unnoticed: the payload would still be the host's.
+        job = self.job_block("linux-appimage")
+        for arch, runner in (("x86_64", "ubuntu-22.04"), ("arm64", "ubuntu-22.04-arm")):
+            with self.subTest(arch=arch):
+                self.assertRegex(job, rf"- arch: {arch}\n\s+runner: {runner}\n")
+        # A build that failed on one architecture must not cancel the other; both
+        # are release requirements, so both verdicts are wanted.
+        self.assertIn("fail-fast: false", job)
+        # The artifact a job uploads is per architecture, or `download-artifact`
+        # would merge the two images under one name and keep whichever arrived last.
+        self.assertIn("name: linux-appimage-${{ matrix.arch }}", job)
+        self.assertIn("--target ${{ matrix.triple }}", job)
+
+    def test_the_arm64_image_is_published_and_smoke_tested_on_arm64(self):
+        # An x86_64 runner cannot start the arm64 image, and the mistake this
+        # guards against -- an arm64 name around an x86_64 payload -- looks
+        # perfectly fine from an x86_64 host.
+        release = self.workflow("release.yml")
+        self.assertIn("-linux-arm64.AppImage", release)
+        publish = release[release.index("  publish:"):]
+        needs = publish[publish.index("needs:"):publish.index("runs-on:")]
+        self.assertIn("smoke-arm64", needs)
+        arm = release[release.index("  smoke-arm64:"):release.index("  smoke-arch:")]
+        self.assertIn("ubuntu-24.04-arm", arm)
+        self.assertIn("linux-arm64.AppImage", arm)
+        # `--version` proves the runtime starts; the unpacked tree proves which
+        # architecture the payload is. The job must check out the built commit
+        # for the licence comparison the script performs.
+        self.assertIn("scripts/verify-release-contents.py", arm)
+        self.assertIn("linux arm64", arm)
+        self.assertIn("needs.resolve.outputs.source_ref", arm)
 
     def test_pacman_runs_without_sudo_in_the_podman_container(self):
         # The pinned Arch image has no sudo, and the podman fallback executes as
@@ -1469,6 +1582,75 @@ class TestCrossBuildTargets(unittest.TestCase):
                 config_for(Path(temporary)), Logger(lambda _m: None, lambda *_a: None)
             )
             self.assertNotIn("--target", builder.get_cargo_build_cmd())
+
+
+class TestLinuxArm64Recipe(unittest.TestCase):
+    """The FFmpeg recipe has to know the arm64 Linux target.
+
+    `build-ffmpeg.sh` rejects an unknown `--target` outright, so an arm64 image
+    whose triple the script does not list fails before anything compiles. The x264
+    `--host` matters just as much: it decides which assembly kernels are built,
+    and the x86_64 one silently produces an archive that cannot link on arm64.
+    """
+
+    def setUp(self):
+        self.script = (SOURCE_DIR / "scripts" / "build-ffmpeg.sh").read_text(encoding="utf-8")
+
+    def test_the_arm64_linux_triple_is_a_supported_case(self):
+        self.assertIn("aarch64-unknown-linux-gnu)", self.script)
+        # armv8-a, not `native`: the image has to run on any ARMv8.0 system, and
+        # `native` would bake in the build machine's extensions.
+        self.assertIn("--arch=aarch64 --cpu=armv8-a", self.script)
+
+    def test_it_documents_the_arm64_triple(self):
+        # The usage block is what a maintainer reads before running the script.
+        self.assertIn("aarch64-unknown-linux-gnu", self.script.split("set -euo")[0])
+
+    def test_x264_is_built_for_the_target_it_is_asked_for(self):
+        # A hard-coded `--host=x86_64-linux-gnu` selects the x86 assembly kernels
+        # for every non-Apple target, arm64 included.
+        self.assertNotIn("--host=x86_64-linux-gnu", self.script)
+        self.assertIn('"--host=$TARGET"', self.script)
+
+
+class TestVendoredCrates(unittest.TestCase):
+    """Two crates assume `c_char` is signed, which AArch64 Linux contradicts.
+
+    Every other dependency compiled for arm64; these two were the failures, and
+    crates.io has no newer release of either. The patches are asserted here
+    because removing one would only surface as a release failure on an
+    architecture a normal test run never uses.
+    """
+
+    CRATES = ("truce-rack-clap", "truce-rack-vst3")
+
+    def test_the_patched_crates_are_selected_from_the_workspace(self):
+        manifest = (SOURCE_DIR / "rust" / "Cargo.toml").read_text(encoding="utf-8")
+        for crate in self.CRATES:
+            with self.subTest(crate=crate):
+                self.assertIn(f'{crate} = {{ path = "../vendor/{crate}" }}', manifest)
+                self.assertTrue(
+                    (SOURCE_DIR / "vendor" / crate / "Cargo.toml").is_file()
+                )
+                # A path patch with no `source` in the lock is what makes
+                # `--locked` use it instead of the registry copy.
+                lock = (SOURCE_DIR / "rust" / "Cargo.lock").read_text(encoding="utf-8")
+                entry = lock[lock.index(f'name = "{crate}"'):]
+                entry = entry.split("[[package]]", 1)[0]
+                self.assertNotIn('source = "registry+', entry)
+
+    def test_the_patches_use_c_char_where_the_releases_used_i8(self):
+        clap = (SOURCE_DIR / "vendor" / "truce-rack-clap" / "src" / "lib.rs").read_text(
+            encoding="utf-8"
+        )
+        vst3 = (SOURCE_DIR / "vendor" / "truce-rack-vst3" / "src" / "lib.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("0 as c_char", clap)
+        self.assertNotIn("0i8;", clap)
+        self.assertIn("fn char8_array_to_string(array: &[c_char])", vst3)
+        self.assertIn("fn tuid_to_hex(cid: &[c_char; 16])", vst3)
+        self.assertIn("*const c_char", vst3)
 
 
 class TestReleaseVersionBaseline(unittest.TestCase):

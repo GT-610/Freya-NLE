@@ -5731,8 +5731,6 @@ dependencies = [
 [[package]]
 name = "truce-rack-clap"
 version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "818030f21f39f73823e04dc3a04e9a5dd9449525564e538e88cb50c38612f36b"
 dependencies = [
  "clap-sys",
  "libloading",
@@ -5755,8 +5753,6 @@ dependencies = [
 [[package]]
 name = "truce-rack-vst3"
 version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a97688ff4fc56de5b0c652a4b8f8f087cfc3d91e165cc5bf86e65ccce7c55ed"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
