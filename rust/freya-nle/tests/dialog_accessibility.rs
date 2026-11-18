@@ -62,6 +62,44 @@ fn recovery_window_closes_on_escape() {
 }
 
 #[test]
+fn closing_the_discard_confirmation_gives_the_keyboard_back() {
+    // A keyboard user can reach the confirmation, and dismissing it must return
+    // the focus to the window. When the focused button was removed instead, the
+    // next Escape reached nothing and the window could not be closed at all.
+    i_slint_backend_testing::init_no_event_loop();
+    let window = ProjectRecoveryWindow::new().unwrap();
+    let closes = Rc::new(Cell::new(0));
+    let count = closes.clone();
+    window.on_close_window(move || count.set(count.get() + 1));
+    window.show().unwrap();
+    settle_focus();
+    assert!(
+        window.get_window_has_focus(),
+        "the window starts with the keyboard"
+    );
+    assert!(!window.get_dialog_has_focus());
+
+    window.set_discard_confirmation_visible(true);
+    settle_focus();
+    assert!(
+        window.get_dialog_has_focus(),
+        "the confirmation takes the keyboard when it opens"
+    );
+    assert!(!window.get_window_has_focus());
+
+    press_escape(&window);
+    assert!(!window.get_discard_confirmation_visible());
+    assert!(!window.get_dialog_has_focus());
+    assert!(
+        window.get_window_has_focus(),
+        "dismissing the confirmation must return the keyboard to the window"
+    );
+
+    press_escape(&window);
+    assert_eq!(closes.get(), 1, "the window still closes from the keyboard");
+}
+
+#[test]
 fn escape_dismisses_the_discard_confirmation_before_the_window() {
     i_slint_backend_testing::init_no_event_loop();
     let window = ProjectRecoveryWindow::new().unwrap();

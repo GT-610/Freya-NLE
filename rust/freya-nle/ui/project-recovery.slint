@@ -40,6 +40,7 @@ export component ProjectRecoveryWindow inherits Window {
                     root.pending-discard-id = "";
                     root.pending-discard-name = "";
                     root.discard-confirmation-visible = false;
+                    root.dialog-has-focus = false;
                     // The confirmation owned the focus; without taking it back the
                     // next Escape has nowhere to go and the window cannot close.
                     window-focus.focus();
@@ -145,13 +146,23 @@ export component ProjectRecoveryWindow inherits Window {
         }
     }
 
-    if root.discard-confirmation-visible : Rectangle {
+    if root.discard-confirmation-visible : discard-focus := FocusScope {
         z: 1000;
         width: 100%;
         height: 100%;
-        background: AppTheme.scrim;
-
-        TouchArea { }
+        // Take the keyboard so Escape and the buttons work without tabbing in.
+        // The timer waits for the next event-loop turn: taking focus while this
+        // overlay is being created re-enters the backend's accessibility borrow.
+        init => { discard-focus-timer.start(); }
+        discard-focus-timer := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => {
+                self.stop();
+                discard-focus.focus();
+                root.dialog-has-focus = true;
+            }
+        }
 
         Rectangle {
             width: min(parent.width - 32px, 470px);
@@ -188,6 +199,7 @@ export component ProjectRecoveryWindow inherits Window {
                             root.pending-discard-id = "";
                             root.pending-discard-name = "";
                             root.discard-confirmation-visible = false;
+                            root.dialog-has-focus = false;
                             window-focus.focus();
                         }
                     }
@@ -197,6 +209,7 @@ export component ProjectRecoveryWindow inherits Window {
                             root.pending-discard-id = "";
                             root.pending-discard-name = "";
                             root.discard-confirmation-visible = false;
+                            root.dialog-has-focus = false;
                             window-focus.focus();
                         }
                     }
@@ -205,4 +218,11 @@ export component ProjectRecoveryWindow inherits Window {
         }
     }
     }
+
+    // Whether the window owns the keyboard, exposed so the interaction test can
+    // tell that dismissal returned the focus instead of losing it.
+    out property <bool> window-has-focus: window-focus.has-focus;
+    // Whether the discard confirmation owns it. An id inside an `if` is not
+    // visible outside its branch, so the overlay reports the state instead.
+    out property <bool> dialog-has-focus: false;
 }
