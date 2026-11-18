@@ -29,6 +29,8 @@ pub struct TimelineAudioSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineAudioBlock {
     pub timeline_frame: i32,
+    /// Position of this block's first sample in the output stream, which advances
+    /// at `sample_rate` regardless of the timeline's playback rate.
     pub start_sample: i64,
     pub sample_rate: u32,
     pub samples: Vec<f32>,
@@ -103,12 +105,18 @@ impl TimelineAudioMixer {
         timeline_rate: f64,
         sources: &[TimelineAudioSource],
     ) -> Result<TimelineAudioBlock, TimelineAudioError> {
-        let Some(start_sample) = cumulative_samples(timeline_frame, fps, sample_rate) else {
-            return Err(TimelineAudioError::InvalidTiming);
-        };
         if !timeline_rate.is_finite() || timeline_rate <= 0.0 {
             return Err(TimelineAudioError::InvalidTiming);
         }
+        // The block's length is measured on the timeline scaled by the playback
+        // rate, so its start must be scaled the same way. Otherwise consecutive
+        // frames are not contiguous in the output stream at any rate but 1x, and
+        // a stateful plugin chain sees a seek on every frame.
+        let Some(start_sample) =
+            cumulative_samples(timeline_frame, fps * timeline_rate, sample_rate)
+        else {
+            return Err(TimelineAudioError::InvalidTiming);
+        };
         self.mix_planned_frame(
             timeline_frame,
             fps,
@@ -530,6 +538,59 @@ mod tests {
         plan.direct_mode = true;
         assert!((source_time_seconds(&plan, 120, 60.0) - (3.0 + 0.5 / 30.0)).abs() < 1e-10);
         assert_eq!(playback_source_rate(&plan, 2.0), 3.0);
+    }
+
+    #[test]
+    fn non_unity_rates_keep_output_sample_positions_contiguous() {
+        // Preview at 2x asks for half as many samples per frame, so the next
+        // block must start where the previous one ended. When the start came from
+        // the unscaled frame position it advanced twice as fast as the audio, and
+        // the plugin chain treated every frame as a seek.
+        let (fps, sample_rate, rate) = (60.0, 48_000, 2.0);
+        let frames = 400; // 48_000 / (60 * 2)
+        let mut mixer = TimelineAudioMixer::default();
+        let first = mixer
+            .mix_frame_with_timeline_rate(
+                0,
+                fps,
+                sample_rate,
+                frames,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                rate,
+                &[],
+            )
+            .expect("first frame mixes");
+        let second = mixer
+            .mix_frame_with_timeline_rate(
+                1,
+                fps,
+                sample_rate,
+                frames,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                rate,
+                &[],
+            )
+            .expect("second frame mixes");
+        assert_eq!(first.start_sample, 0);
+        assert_eq!(
+            second.start_sample,
+            first.start_sample + frames as i64,
+            "the second frame must continue the output stream"
+        );
+
+        // Unity playback keeps the values it always had.
+        let unity = mixer
+            .mix_frame_with_timeline_rate(
+                1,
+                fps,
+                sample_rate,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                1.0,
+                &[],
+            )
+            .expect("unity frame mixes");
+        assert_eq!(unity.start_sample, 800);
     }
 
     #[test]
