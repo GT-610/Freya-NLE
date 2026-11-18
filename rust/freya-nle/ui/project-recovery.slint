@@ -40,6 +40,9 @@ export component ProjectRecoveryWindow inherits Window {
                     root.pending-discard-id = "";
                     root.pending-discard-name = "";
                     root.discard-confirmation-visible = false;
+                    // The confirmation owned the focus; without taking it back the
+                    // next Escape has nowhere to go and the window cannot close.
+                    window-focus.focus();
                 } else {
                     root.close-window();
                 }
@@ -185,6 +188,7 @@ export component ProjectRecoveryWindow inherits Window {
                             root.pending-discard-id = "";
                             root.pending-discard-name = "";
                             root.discard-confirmation-visible = false;
+                            window-focus.focus();
                         }
                     }
                     Button {
@@ -193,6 +197,7 @@ export component ProjectRecoveryWindow inherits Window {
                             root.pending-discard-id = "";
                             root.pending-discard-name = "";
                             root.discard-confirmation-visible = false;
+                            window-focus.focus();
                         }
                     }
                 }
