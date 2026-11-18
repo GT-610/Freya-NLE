@@ -300,7 +300,10 @@ fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         };
-        remove_generation_origin(root, id);
+        // A snapshot that could not be deleted still needs its provenance.
+        if result.is_ok() {
+            remove_generation_origin(root, id);
+        }
         return result;
     }
     if !recovery_id_is_valid(id) {
@@ -312,7 +315,9 @@ fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
     let current = read_current_snapshot_name(root, id);
     // Newer unreferenced generations outlive this metadata, so record where the
     // project came from before the metadata that holds that answer is deleted.
-    preserve_surviving_generations(root, id, current.as_deref());
+    // If that cannot be written, keep everything: the discard can be retried, and
+    // deleting the metadata now would lose the only copy of the answer.
+    preserve_surviving_generations(root, id, current.as_deref())?;
     if let Some(snapshot) = current {
         match fs::remove_file(root.join(&snapshot)) {
             Ok(()) => {}
@@ -400,9 +405,17 @@ fn remove_generation_origin(root: &Path, snapshot_file: &str) {
 
 /// Records the owner's provenance on every generation that will outlive its
 /// metadata, so discarding one recovery does not orphan the others.
-fn preserve_surviving_generations(root: &Path, owner: &str, current: Option<&str>) {
+///
+/// `current` is the snapshot the caller is about to delete and needs no sidecar.
+/// Fails when a sidecar could not be written, so the caller can keep the metadata
+/// whose provenance it failed to preserve.
+fn preserve_surviving_generations(
+    root: &Path,
+    owner: &str,
+    current: Option<&str>,
+) -> io::Result<()> {
     let Ok(entries) = fs::read_dir(root) else {
-        return;
+        return Ok(());
     };
     let metadata = read_bounded(
         &root.join(format!("{owner}.json")),
@@ -412,7 +425,7 @@ fn preserve_surviving_generations(root: &Path, owner: &str, current: Option<&str
     .and_then(|bytes| inspect_recovery_metadata(owner, &bytes))
     .filter(|inspection| inspection.status == "ok");
     let Some(inspection) = metadata else {
-        return;
+        return Ok(());
     };
     for entry in entries.flatten() {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -423,18 +436,19 @@ fn preserve_surviving_generations(root: &Path, owner: &str, current: Option<&str
         {
             continue;
         }
-        if generation_origin_path(root, &name).exists() {
+        // Only a real file counts as already recorded; anything else at that
+        // path must fail loudly rather than look like preserved provenance.
+        if generation_origin_path(root, &name).is_file() {
             continue;
         }
-        // A failed write only means this generation keeps the old behaviour, so
-        // it must not stop the discard the user asked for.
-        let _ = write_generation_origin(
+        write_generation_origin(
             root,
             &name,
             &inspection.metadata.original_project_url,
             &inspection.metadata.display_name,
-        );
+        )?;
     }
+    Ok(())
 }
 
 fn scan_recoveries(root: &Path) -> Vec<RecoveryEntry> {
@@ -581,17 +595,14 @@ fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Res
         if is_stale {
             // A crash can leave a newer, unreferenced generation next to old
             // metadata. Remove only the metadata here; each snapshot is aged
-            // independently below, and the surviving generations keep the
-            // provenance the metadata used to hold.
-            preserve_surviving_generations(
-                root,
-                &recovery.id,
-                recovery
-                    .snapshot_path
-                    .as_ref()
-                    .and_then(|path| path.file_name())
-                    .and_then(|name| name.to_str()),
-            );
+            // independently below. Every generation that survives needs the
+            // provenance this metadata holds — including the referenced one,
+            // which outlives its stale metadata when its own timestamp is newer.
+            if preserve_surviving_generations(root, &recovery.id, None).is_err() {
+                // Without the sidecar the snapshot would lose its project
+                // directory; leave the metadata for the next run instead.
+                continue;
+            }
             match fs::remove_file(&metadata_path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -863,12 +874,102 @@ mod tests {
         cleanup_stale(&root, SystemTime::now(), DEFAULT_MAXIMUM_AGE).expect("stale cleanup runs");
         assert!(!metadata.exists());
 
+        let expected = generated.file_name().unwrap().to_str().unwrap();
         let entries = scan_recoveries(&root);
         let orphan = entries
             .iter()
-            .find(|entry| entry.id.ends_with(".aviqtl"))
+            .find(|entry| entry.id == expected)
             .expect("the surviving generation is listed");
         assert_eq!(orphan.original_project_url, "/tmp/original.aviqtl");
+        assert!(
+            generation_origin_path(&root, expected).exists(),
+            "the sidecar belongs to the generation it describes"
+        );
+        fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    /// Creates a directory where the sidecar must go, so writing it fails.
+    #[cfg(unix)]
+    fn block_generation_origin(root: &Path, snapshot_file: &str) {
+        fs::create_dir(generation_origin_path(root, snapshot_file)).unwrap();
+    }
+
+    #[test]
+    fn stale_cleanup_keeps_the_origin_of_the_snapshot_it_still_keeps() {
+        // The referenced snapshot outlives stale metadata when its own timestamp
+        // is newer, which a restored clock or a copied directory can produce. It
+        // needs the sidecar as much as an unreferenced generation does.
+        let root = test_root("cleanup-keeps-current-origin");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Current")).unwrap();
+        let current = root.join(read_current_snapshot_name(&root, &id).unwrap());
+        let metadata = root.join(format!("{id}.json"));
+        let old_time = SystemTime::now() - DEFAULT_MAXIMUM_AGE - Duration::from_secs(60);
+        aged_fixture(&metadata)
+            .set_times(fs::FileTimes::new().set_modified(old_time))
+            .unwrap();
+
+        cleanup_stale(&root, SystemTime::now(), DEFAULT_MAXIMUM_AGE).expect("stale cleanup runs");
+        assert!(!metadata.exists());
+        assert!(current.exists(), "the newer snapshot survives");
+
+        let entries = scan_recoveries(&root);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].original_project_url, "/tmp/original.aviqtl",
+            "the surviving snapshot keeps its project directory"
+        );
+        fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_sidecar_that_cannot_be_written_keeps_the_metadata() {
+        // Losing the metadata would lose the only record of where the surviving
+        // generation came from, so the discard fails and can be retried instead.
+        let root = test_root("unwritable-sidecar");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let generated = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&generated, b"newer generation").unwrap();
+        let metadata = root.join(format!("{id}.json"));
+        block_generation_origin(&root, generated.file_name().unwrap().to_str().unwrap());
+
+        assert!(
+            remove_recovery(&root, &id).is_err(),
+            "the discard must report that it could not record the provenance"
+        );
+        assert!(
+            metadata.exists(),
+            "the metadata survives so the provenance is not lost"
+        );
+        assert!(generated.exists());
+        fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_snapshot_that_cannot_be_deleted_keeps_its_sidecar() {
+        // The sidecar describes the snapshot; deleting it while the snapshot stays
+        // would leave the file without any record of its project directory.
+        let root = test_root("keep-sidecar");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let generated = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&generated, b"newer generation").unwrap();
+        remove_recovery(&root, &id).expect("the recovery is discarded");
+        let name = generated.file_name().unwrap().to_str().unwrap().to_owned();
+        assert!(generation_origin_path(&root, &name).exists());
+
+        // A directory at the snapshot path cannot be removed as a file, so the
+        // sidecar must survive the failed attempt.
+        fs::remove_file(&generated).unwrap();
+        fs::create_dir(&generated).unwrap();
+        assert!(remove_recovery(&root, &name).is_err());
+        assert!(
+            generation_origin_path(&root, &name).exists(),
+            "the sidecar stays with the snapshot it describes"
+        );
         fs::remove_dir_all(root).expect("test recovery root removes");
     }
 
