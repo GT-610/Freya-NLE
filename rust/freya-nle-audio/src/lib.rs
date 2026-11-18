@@ -798,6 +798,9 @@ mod tests {
             second.errors
         );
 
+        // Windows keeps the decoder's handle on the file, and refuses to delete a
+        // file that is still open, so the mixer has to go first.
+        drop(mixer);
         std::fs::remove_file(&path).expect("ramp fixture removes");
     }
 
