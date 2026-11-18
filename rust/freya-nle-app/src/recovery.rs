@@ -788,8 +788,9 @@ mod tests {
         let metadata = root.join(format!("{id}.json"));
         let old_time = SystemTime::now() - DEFAULT_MAXIMUM_AGE - Duration::from_secs(60);
         for path in [&metadata, &old_snapshot] {
-            fs::File::open(path)
-                .unwrap()
+            // `File::open` is read-only; Windows refuses `SetFileTime` on that
+            // handle, so ask for write access. The file keeps its contents.
+            aged_fixture(path)
                 .set_times(fs::FileTimes::new().set_modified(old_time))
                 .unwrap();
         }
