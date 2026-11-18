@@ -321,7 +321,6 @@ impl TimelineAudioMixer {
                 self.plugin_chains.entry(plugin_key).or_default().process(
                     &source.plan.plugins,
                     AudioPluginProcessContext {
-                        timeline_frame,
                         start_sample,
                         sample_rate,
                         max_block_size: max_plugin_block_size,
