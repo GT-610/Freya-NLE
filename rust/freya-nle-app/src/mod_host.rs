@@ -594,15 +594,15 @@ fn canonical_identity(path: &Path) -> String {
         .unwrap_or_else(|_| path.display().to_string())
 }
 
+/// Reads a plugin file, refusing anything that is not a regular file of an
+/// acceptable size.
+///
+/// The shared helper re-checks the size on the opened handle and reads one byte
+/// past the limit, so a file that grows between discovery and reading cannot be
+/// loaded in full. The script and the manifest both come from an installed
+/// package and both go through here.
 fn read_bounded(path: &Path) -> Option<String> {
-    let metadata = fs::metadata(path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_PLUGIN_SCRIPT_BYTES {
-        return None;
-    }
-    let bytes = fs::read(path).ok()?;
-    if bytes.len() as u64 > MAX_PLUGIN_SCRIPT_BYTES {
-        return None;
-    }
+    let bytes = crate::file_io::read_bounded(path, MAX_PLUGIN_SCRIPT_BYTES).ok()?;
     String::from_utf8(bytes).ok()
 }
 
