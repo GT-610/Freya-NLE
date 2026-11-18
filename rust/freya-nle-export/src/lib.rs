@@ -76,6 +76,11 @@ impl Default for ExportRuntimeSettings {
 pub struct ExportResult {
     pub success: bool,
     pub message: String,
+    /// A warning about a successful export, such as clip audio it had to drop.
+    ///
+    /// Absent for a clean success, so a consumer can tell "nothing to report"
+    /// from "the file is not what was asked for" without matching message text.
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +179,7 @@ enum WorkerEvent {
     Finished {
         success: bool,
         message: String,
+        notice: Option<String>,
     },
 }
 
@@ -359,19 +365,24 @@ impl ExportManager {
                         active.next_frame = active.job.start_frame().saturating_add(done);
                         active.ready_for_frame = active.next_frame < active.job.end_frame();
                     }
-                    Ok(WorkerEvent::Finished { success, message }) => {
-                        finished = Some((success, message));
+                    Ok(WorkerEvent::Finished {
+                        success,
+                        message,
+                        notice,
+                    }) => {
+                        finished = Some((success, message, notice));
                         break;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        finished = Some((false, "Export worker stopped unexpectedly".to_owned()));
+                        finished =
+                            Some((false, "Export worker stopped unexpectedly".to_owned(), None));
                         break;
                     }
                 }
             }
         }
-        let Some((mut success, mut message)) = finished else {
+        let Some((mut success, mut message, notice)) = finished else {
             return public_events;
         };
         if let Some(mut active) = self.active.take() {
@@ -384,7 +395,11 @@ impl ExportManager {
             }
         }
         self.media_preview.reset();
-        public_events.push(ExportEvent::Finished(ExportResult { success, message }));
+        public_events.push(ExportEvent::Finished(ExportResult {
+            success,
+            message,
+            notice,
+        }));
         public_events
     }
 }
@@ -569,14 +584,19 @@ fn run_export_worker(
             run_image_sequence_export(&job, &commands, &events).map(|()| String::new())
         }
     };
-    let (success, message) = match result {
-        // A successful encode can still have dropped clip audio; saying so is
-        // the only way the operator learns the output is partly silent.
-        Ok(notice) if notice.is_empty() => (true, "Export complete".to_owned()),
-        Ok(notice) => (true, notice),
-        Err(message) => (false, message),
+    // A successful encode can still have dropped clip audio; saying so is the
+    // only way the operator learns the output is partly silent. The notice is
+    // kept separate from the message so a clean success is not mistaken for one.
+    let (success, message, notice) = match result {
+        Ok(notice) if notice.is_empty() => (true, "Export complete".to_owned(), None),
+        Ok(notice) => (true, notice.clone(), Some(notice)),
+        Err(message) => (false, message, None),
     };
-    let _ = events.send(WorkerEvent::Finished { success, message });
+    let _ = events.send(WorkerEvent::Finished {
+        success,
+        message,
+        notice,
+    });
     (wake)();
 }
 
@@ -1190,6 +1210,44 @@ mod tests {
         let notice = export_audio_notice(&repeated);
         assert!(notice.contains("clip #1: missing"));
         assert!(!notice.trim().is_empty());
+    }
+
+    #[test]
+    fn a_clean_run_reports_no_notice_and_a_warned_one_does() {
+        // The consumer decides whether an export needs review from this field, so
+        // it has to be absent for a clean run and present for a warned one.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let directory = temp.path().join("notice-flow");
+        let job = image_job(directory.clone(), 1);
+        let (command_sender, command_receiver) = mpsc::channel();
+        let (event_sender, event_receiver) = mpsc::channel();
+        command_sender
+            .send(WorkerCommand::Frame(solid_frame(0)))
+            .expect("frame queues");
+
+        run_export_worker(job, command_receiver, event_sender, Arc::new(|| {}));
+
+        let mut clean = None;
+        while let Ok(event) = event_receiver.try_recv() {
+            if let WorkerEvent::Finished {
+                success,
+                message,
+                notice,
+            } = event
+            {
+                clean = Some((success, message, notice));
+            }
+        }
+        let (success, message, notice) = clean.expect("the worker reports completion");
+        assert!(success);
+        assert_eq!(message, "Export complete");
+        assert_eq!(notice, None, "a clean export has nothing to report");
+
+        // The same worker keeps the audio warning it collected, so the field is
+        // what distinguishes the two outcomes.
+        assert_eq!(export_audio_notice(&[]), "");
+        assert!(!export_audio_notice(&["clip #7 (a.wav): missing".to_owned()]).is_empty());
+        fs::remove_dir_all(directory).expect("generated sequence removes");
     }
 
     #[test]
