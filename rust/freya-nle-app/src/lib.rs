@@ -86,7 +86,7 @@ struct ProjectRecoveryState {
     id: String,
     original_project_url: Option<String>,
     display_name: Option<String>,
-    claimed: bool,
+    claimed_id: Option<String>,
     last_backup: Instant,
 }
 
@@ -96,17 +96,21 @@ impl ProjectRecoveryState {
             id: generate_recovery_id(),
             original_project_url: None,
             display_name: None,
-            claimed: false,
+            claimed_id: None,
             last_backup: Instant::now(),
         }
     }
 
     fn recovered(entry: &RecoveryEntry, display_name: String) -> Self {
         Self {
-            id: entry.id.clone(),
+            id: if freya_nle_core::api::recovery_id_is_valid(&entry.id) {
+                entry.id.clone()
+            } else {
+                generate_recovery_id()
+            },
             original_project_url: Some(entry.original_project_url.clone()),
             display_name: Some(display_name),
-            claimed: true,
+            claimed_id: Some(entry.id.clone()),
             last_backup: Instant::now(),
         }
     }
@@ -197,8 +201,14 @@ impl ApplicationModel {
         let claimed = self
             .projects
             .iter()
-            .filter(|project| project.recovery.claimed)
-            .map(|project| project.recovery.id.as_str())
+            .filter(|project| project.recovery.claimed_id.is_some())
+            .flat_map(|project| {
+                [
+                    Some(project.recovery.id.as_str()),
+                    project.recovery.claimed_id.as_deref(),
+                ]
+            })
+            .flatten()
             .collect::<HashSet<_>>();
         self.recovery_store
             .entries()
@@ -212,10 +222,11 @@ impl ApplicationModel {
 
     pub fn recover_project(&mut self, id: &str) -> Result<usize, String> {
         if self.suppressed_recovery_ids.contains(id)
-            || self
-                .projects
-                .iter()
-                .any(|project| project.recovery.claimed && project.recovery.id == id)
+            || self.projects.iter().any(|project| {
+                project.recovery.claimed_id.is_some()
+                    && (project.recovery.claimed_id.as_deref() == Some(id)
+                        || project.recovery.id == id)
+            })
         {
             return Err("the recovery snapshot is already in use".to_owned());
         }
@@ -856,11 +867,17 @@ impl ApplicationModel {
             return;
         };
         let previous = std::mem::replace(&mut project.recovery, ProjectRecoveryState::new());
-        self.suppressed_recovery_ids.insert(previous.id.clone());
-        if let Err(error) = self.recovery_store.request_remove(&previous.id) {
-            self.suppressed_recovery_ids.remove(&previous.id);
-            self.recovery_errors
-                .push(format!("Could not queue project recovery cleanup: {error}"));
+        let mut ids = vec![previous.id];
+        if let Some(claimed_id) = previous.claimed_id.filter(|id| id != &ids[0]) {
+            ids.push(claimed_id);
+        }
+        for id in ids {
+            self.suppressed_recovery_ids.insert(id.clone());
+            if let Err(error) = self.recovery_store.request_remove(&id) {
+                self.suppressed_recovery_ids.remove(&id);
+                self.recovery_errors
+                    .push(format!("Could not queue project recovery cleanup: {error}"));
+            }
         }
     }
 
@@ -1522,6 +1539,92 @@ mod tests {
         drop(clean_restart);
         std::fs::remove_file(save_path).expect("saved project removes");
         std::fs::remove_dir_all(root).expect("recovery root removes");
+    }
+
+    #[test]
+    fn invalid_recovery_metadata_can_be_discarded_without_touching_other_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let invalid = root.join("invalid.json");
+        let outside = temp.path().join("outside.json");
+        std::fs::write(&invalid, b"{}").unwrap();
+        std::fs::write(&outside, b"keep").unwrap();
+        let mut app = ApplicationModel::with_recovery_root(root.clone());
+        let entry = app.recovery_entries().pop().unwrap();
+        assert!(!entry.is_valid());
+        assert!(
+            app.discard_recovery("invalid-metadata:../outside.json")
+                .is_err()
+        );
+        app.discard_recovery(&entry.id).unwrap();
+        app.flush_recovery();
+        assert!(app.recovery_entries().is_empty());
+        drop(app);
+        assert!(!invalid.exists());
+        assert_eq!(std::fs::read(outside).unwrap(), b"keep");
+        assert!(
+            ApplicationModel::with_recovery_root(root)
+                .recovery_entries()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn interrupted_generations_can_be_recovered_and_discarded_independently() {
+        for recover_orphan in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("recovery");
+            let mut app = ApplicationModel::with_recovery_root(root.clone());
+            let index = app.create_project(ProjectDefaults::default());
+            app.workspace_mut(index).unwrap().project_mut().dirty = true;
+            assert_eq!(app.request_recovery_backup(index), Ok(true));
+            app.flush_recovery();
+            let normal = app.recovery_entries().pop().unwrap();
+            let orphan_name = format!("{}-{}.aviqtl", normal.id, generate_recovery_id());
+            let orphan_path = root.join(&orphan_name);
+            let mut snapshot: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(normal.snapshot_path.unwrap()).unwrap())
+                    .unwrap();
+            snapshot["scenes"][0]["name"] = serde_json::json!("Interrupted version");
+            std::fs::write(&orphan_path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+            drop(app);
+
+            let mut app = ApplicationModel::with_recovery_root(root.clone());
+            assert_eq!(app.recovery_entries().len(), 2);
+            let (chosen, other) = if recover_orphan {
+                (&orphan_name, &normal.id)
+            } else {
+                (&normal.id, &orphan_name)
+            };
+            let index = app.recover_project(chosen).unwrap();
+            let scene_name = &app.workspace(index).unwrap().project().document.scenes[0].name;
+            assert_eq!(scene_name == "Interrupted version", recover_orphan);
+            assert!(app.recover_project(chosen).is_err());
+            assert_eq!(app.recovery_entries().len(), 1);
+            assert_eq!(app.request_recovery_backup(index), Ok(true));
+            app.flush_recovery();
+            if recover_orphan {
+                let new_id = app.projects[index].recovery.id.clone();
+                assert!(app.recover_project(&new_id).is_err());
+            }
+            assert!(
+                app.recovery_entries()
+                    .iter()
+                    .any(|entry| &entry.id == other)
+            );
+            app.discard_recovery(other).unwrap();
+            app.flush_recovery();
+            drop(app);
+
+            let app = ApplicationModel::with_recovery_root(root);
+            assert!(app.recovery_entries().iter().any(|entry| entry.is_valid()));
+            assert!(
+                !app.recovery_entries()
+                    .iter()
+                    .any(|entry| &entry.id == other)
+            );
+        }
     }
 
     #[test]

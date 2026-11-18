@@ -5,11 +5,26 @@ use std::path::Path;
 /// Enforce the byte limit on the opened stream, including files that grow
 /// between discovery and reading. Never allocate for the untrusted file size.
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
-    let file = File::open(path)?;
-    if !file.metadata()?.is_file() {
+    // Opening a FIFO for reading can block before File::metadata is reached.
+    // Check its type first, then re-check the opened handle in case it changed.
+    if !std::fs::metadata(path)?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "expected a regular file",
+        ));
+    }
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a regular file",
+        ));
+    }
+    if metadata.len() > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file exceeds the size limit",
         ));
     }
     let mut bytes = Vec::new();

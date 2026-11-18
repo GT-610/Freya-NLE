@@ -857,23 +857,29 @@ fn fail_batch_item(
         if queue.running_index() != Some(index) {
             queue.begin(index);
         }
-        queue.finish_running(BatchOutcome::Failed(message.clone()));
+        queue.finish_running(BatchOutcome::Failed(message.clone()), None);
         queue.set_message(message);
         (index + 1, queue.items().len(), queue.pause_requested())
     };
     if next >= total {
         let (succeeded, failed) = batch.borrow().summary();
-        batch.borrow_mut().set_message(format!(
-            "{}: {succeeded} {} · {failed} {}",
-            localized("Batch finished", "批次完成", "バッチ完了"),
-            localized("succeeded", "成功", "成功"),
-            localized("failed", "失败", "失敗")
-        ));
+        let notices = batch.borrow().notices();
+        let summary = batch_summary_message(succeeded, failed, &notices);
+        batch.borrow_mut().set_message(&summary);
         sync_batch(window, &batch.borrow());
         // The success path returns to the user's scene when the last item
         // finishes; a failure has to do the same or the batch leaves them on
         // whichever scene it was exporting.
         restore_batch_scene(model, batch);
+        // A failure ends the run here, so it has to report the warnings that
+        // earlier items collected; otherwise only their rows remember them.
+        if !notices.is_empty() {
+            show_export_result(
+                window,
+                false,
+                &format!("{summary}\n\n{}", batch_notice_message(&notices)),
+            );
+        }
         return;
     }
     if pause {
@@ -894,6 +900,25 @@ fn restore_batch_scene(model: &Rc<RefCell<ApplicationModel>>, batch: &Rc<RefCell
     {
         let _ = workspace.switch_scene(scene);
     }
+}
+
+/// The line the batch list shows once the run is over.
+fn batch_summary_message(succeeded: usize, failed: usize, notices: &[(String, String)]) -> String {
+    let mut message = format!(
+        "{}: {succeeded} {} · {failed} {}",
+        localized("Batch finished", "批次完成", "バッチ完了"),
+        localized("succeeded", "成功", "成功"),
+        localized("failed", "失败", "失敗")
+    );
+    if !notices.is_empty() {
+        message.push_str(" · ");
+        message.push_str(localized(
+            "some exports need review",
+            "部分导出需要复查",
+            "確認が必要な書き出しがあります",
+        ));
+    }
+    message
 }
 
 fn batch_progress_label(number: usize, count: usize, done: i32, total: i32) -> String {
@@ -1097,7 +1122,14 @@ pub(super) fn update_export(
                 } else {
                     BatchOutcome::Failed(result.message.clone())
                 };
-                let Some(index) = batch.borrow_mut().finish_running(outcome) else {
+                // A successful export can still carry a note, such as clip audio
+                // it had to drop; keep it so the batch does not report a clean
+                // success over a partly silent file. The result states it
+                // explicitly, so a clean "Export complete" is not a notice.
+                let Some(index) = batch
+                    .borrow_mut()
+                    .finish_running(outcome, result.notice.clone())
+                else {
                     continue;
                 };
                 let (next, total, pause) = {
@@ -1106,16 +1138,17 @@ pub(super) fn update_export(
                 };
                 if next >= total {
                     let (succeeded, failed) = batch.borrow().summary();
-                    batch.borrow_mut().set_message(format!(
-                        "{}: {succeeded} {} · {failed} {}",
-                        localized("Batch finished", "批次完成", "バッチ完了"),
-                        localized("succeeded", "成功", "成功"),
-                        localized("failed", "失败", "失敗")
-                    ));
+                    // Successful exports can still carry a note, so the summary
+                    // says so and the details follow in the result overlay.
+                    let notices = batch.borrow().notices();
+                    let summary = batch_summary_message(succeeded, failed, &notices);
+                    batch.borrow_mut().set_message(&summary);
                     sync_batch(&window, &batch.borrow());
                     restore_batch_scene(model, batch);
                     if window.get_batch_completion_index() == 1 {
                         let _ = slint::quit_event_loop();
+                    } else if !notices.is_empty() {
+                        show_export_result(&window, true, &batch_notice_message(&notices));
                     }
                 } else if pause {
                     batch.borrow_mut().pause_after(next);
@@ -1243,6 +1276,23 @@ fn export_progress_label(progress: freya_nle_export::ExportProgressPlan) -> Stri
         localized("frames", "帧", "フレーム"),
         eta
     )
+}
+
+/// The overlay text for a batch whose exports succeeded with notices.
+fn batch_notice_message(notices: &[(String, String)]) -> String {
+    let mut message = localized(
+        "The batch finished, but these exports are not what was asked for:",
+        "批次已完成，但以下导出与预期不符：",
+        "バッチは完了しましたが、次の書き出しは意図した内容と異なります:",
+    )
+    .to_owned();
+    for (label, notice) in notices {
+        message.push_str("\n\n");
+        message.push_str(label);
+        message.push('\n');
+        message.push_str(notice);
+    }
+    message
 }
 
 fn show_export_result(window: &ExportWindow, success: bool, message: &str) {

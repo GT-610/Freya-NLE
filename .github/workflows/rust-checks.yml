@@ -2,6 +2,11 @@ name: Rust checks
 
 on:
   workflow_call:
+    inputs:
+      source_ref:
+        description: Commit to check out (defaults to the triggering revision)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,8 @@ jobs:
       image: docker.io/library/archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
@@ -24,12 +31,25 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman -Syu --noconfirm archlinux-keyring
+          # `fontconfig` and a face are needed because the window-event tests
+          # create real Slint windows: without any installed font, fontique
+          # answers `NoMatch` and the window cannot be built.
           pacman -S --needed --noconfirm \
             alsa-lib base-devel clang python pkgconf ffmpeg mesa vulkan-devel \
+            fontconfig ttf-dejavu \
             libx11 libxcursor libxi libxrandr libxkbcommon wayland wayland-protocols
       - name: Validate build helpers
-        run: python -m unittest tests.test_build_version tests.test_logging_hygiene
+        run: python -m unittest tests.test_build_version tests.test_logging_hygiene tests.test_release_contents
       - name: Format, lint, and test workspace
+        # The whole workspace is built twice here (clippy, then the test
+        # binaries) inside a container, and the job was killed with signal 9
+        # while linking the Slint test backend. Neither the compile jobs nor the
+        # incremental cache is useful without a restored `target/`, so cap the
+        # parallelism and turn incremental off: both lower the peak footprint
+        # without narrowing what is checked.
+        env:
+          CARGO_BUILD_JOBS: 2
+          CARGO_INCREMENTAL: 0
         run: |
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
           cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings

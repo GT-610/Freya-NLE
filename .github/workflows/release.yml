@@ -28,11 +28,15 @@ jobs:
       version: ${{ steps.read.outputs.version }}
       tag: ${{ steps.tag.outputs.tag }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
+      source_ref: ${{ steps.commit.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           # A tag build must read the tree the tag points at, not the branch tip.
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ format('refs/tags/{0}', inputs.tag || github.ref_name) }}
+      - name: Record the checked-out commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Determine the tag
         id: tag
         run: |
@@ -65,6 +69,7 @@ jobs:
     uses: ./.github/workflows/package.yml
     with:
       version: ${{ needs.resolve.outputs.version }}
+      source_ref: ${{ needs.resolve.outputs.source_ref }}
 
   publish:
     name: Publish
@@ -75,7 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.source_ref }}
       - name: Collect artifacts
         uses: actions/download-artifact@v4
         with:
@@ -110,6 +115,34 @@ jobs:
               *) echo "Unexpected file in the release: $file" >&2; exit 1 ;;
             esac
           done
+      - name: Verify downloaded artifact contents
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          BUILT_COMMIT: ${{ needs.resolve.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends zstd unzip
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          verify="$GITHUB_WORKSPACE/scripts/verify-release-contents.py"
+          image="$GITHUB_WORKSPACE/dist/Freya-NLE-$VERSION-linux-x86_64.AppImage"
+          chmod +x "$image"
+          (cd "$work" && "$image" --appimage-extract > /dev/null)
+          python3 "$verify" "$work/squashfs-root/usr/bin" "$VERSION" "$BUILT_COMMIT" linux x86_64
+          rm -rf "$work/squashfs-root"
+          tar --zstd -xf "dist/Freya-NLE-$VERSION-linux-x86_64-archlinux.tar.zst" -C "$work"
+          python3 "$verify" "$work" "$VERSION" "$BUILT_COMMIT" linux x86_64 --variant archlinux
+          rm -rf "$work"
+          mkdir -p "$work"
+          for arch in arm64 x86_64; do
+            unzip -q "dist/Freya-NLE-$VERSION-macos-$arch.zip" -d "$work"
+            python3 "$verify" "$work/Freya NLE.app/Contents/Resources" "$VERSION" "$BUILT_COMMIT" macos "$arch"
+            rm -rf "$work"
+            mkdir -p "$work"
+          done
+          unzip -q "dist/Freya-NLE-$VERSION-windows-x86_64.zip" -d "$work"
+          python3 "$verify" "$work" "$VERSION" "$BUILT_COMMIT" windows x86_64
       - name: Write checksums
         run: |
           set -euo pipefail
@@ -118,6 +151,19 @@ jobs:
           # notes point at.
           sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
+      - name: Verify the tag still identifies the built commit
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          BUILT_COMMIT: ${{ needs.resolve.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          git fetch --no-tags --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          actual="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          if [ "$actual" != "$BUILT_COMMIT" ]; then
+            echo "Release tag changed after the build: expected $BUILT_COMMIT, got $actual" >&2
+            exit 1
+          fi
       # The tag already triggered this run, so the release is attached to it
       # rather than created here.
       - name: Publish

@@ -1,5 +1,6 @@
 use freya_nle_core::api::{ProjectDocument, TimelineState};
 use serde_json::{Map, Value};
+#[cfg(test)]
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -231,15 +232,13 @@ impl ProjectSession {
 }
 
 fn read_document(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
-    let metadata = fs::metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if metadata.len() > limit {
-        return Err(document_too_large(path, limit));
-    }
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if bytes.len() as u64 > limit {
-        return Err(document_too_large(path, limit));
-    }
-    Ok(bytes)
+    crate::file_io::read_bounded(path, limit).map_err(|error| {
+        if error.kind() == io::ErrorKind::InvalidData {
+            document_too_large(path, limit)
+        } else {
+            format!("{}: {error}", path.display())
+        }
+    })
 }
 
 fn document_too_large(path: &Path, limit: u64) -> String {
@@ -704,6 +703,14 @@ mod tests {
             Value::String(video.to_string_lossy().replace('\\', "/")),
             "a later save does not fall back to a missing file"
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn special_files_are_not_opened_as_projects() {
+        let error =
+            read_document(Path::new("/dev/zero"), 16).expect_err("a special file is refused");
+        assert!(error.contains("expected a regular file"), "{error}");
     }
 
     #[test]

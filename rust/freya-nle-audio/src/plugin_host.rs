@@ -548,12 +548,18 @@ pub(crate) struct AudioPluginChain {
     slots: Vec<PluginSlot>,
     sample_rate: u32,
     max_block_size: usize,
-    last_timeline_frame: Option<i32>,
+    /// Start sample the next block must have to continue the same stream.
+    ///
+    /// Continuity is measured in samples, not in timeline frames: a nested scene
+    /// whose frame rate is higher than the root timeline's is planned as several
+    /// contiguous segments of one output frame, so two blocks can share a
+    /// `timeline_frame` while still being consecutive audio.
+    next_sample: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct AudioPluginProcessContext {
-    pub(crate) timeline_frame: i32,
+    /// Sample position of the block, which is what makes continuity measurable.
     pub(crate) start_sample: i64,
     pub(crate) sample_rate: u32,
     pub(crate) max_block_size: usize,
@@ -566,7 +572,32 @@ impl Default for AudioPluginChain {
             slots: Vec::new(),
             sample_rate: 0,
             max_block_size: DEFAULT_PLUGIN_BLOCK_SIZE,
-            last_timeline_frame: None,
+            next_sample: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl AudioPluginChain {
+    /// Builds a chain whose only slot already holds `processor`.
+    ///
+    /// Continuity has to be observable without loading a real plugin: a rebuild
+    /// tries to activate the plugin from its path, which is not installed in a
+    /// test, so the slot fails and stops processing.
+    fn with_test_processor(
+        identity: PluginIdentity,
+        processor: Box<dyn AudioPluginProcessor>,
+    ) -> Self {
+        Self {
+            identities: vec![identity.clone()],
+            slots: vec![PluginSlot {
+                identity,
+                processor: Ok(processor),
+                parameters: BTreeMap::new(),
+            }],
+            sample_rate: 48_000,
+            max_block_size: DEFAULT_PLUGIN_BLOCK_SIZE,
+            next_sample: None,
         }
     }
 }
@@ -592,9 +623,10 @@ impl AudioPluginChain {
                 return;
             }
         };
+        let block_frames = samples.len() / 2;
         let discontinuous = self
-            .last_timeline_frame
-            .is_some_and(|previous| context.timeline_frame != previous.saturating_add(1));
+            .next_sample
+            .is_some_and(|expected| context.start_sample != expected);
         if self.identities != identities
             || self.sample_rate != context.sample_rate
             || self.max_block_size != max_block_size
@@ -602,7 +634,7 @@ impl AudioPluginChain {
         {
             self.rebuild(identities, context.sample_rate, max_block_size);
         }
-        self.last_timeline_frame = Some(context.timeline_frame);
+        self.next_sample = Some(context.start_sample.saturating_add(block_frames as i64));
 
         for (plugin, slot) in plugins.iter().zip(&mut self.slots) {
             if !plugin.enabled {
@@ -647,14 +679,14 @@ impl AudioPluginChain {
         self.identities = identities;
         self.sample_rate = sample_rate;
         self.max_block_size = max_block_size;
-        self.last_timeline_frame = None;
+        self.next_sample = None;
     }
 
     fn clear(&mut self) {
         self.identities.clear();
         self.slots.clear();
         self.sample_rate = 0;
-        self.last_timeline_frame = None;
+        self.next_sample = None;
     }
 }
 
@@ -819,6 +851,106 @@ mod tests {
     }
 
     #[test]
+    fn contiguous_segments_of_one_timeline_frame_keep_the_plugin_state() {
+        // A 120 fps nested scene under a 60 fps root plans one output frame as
+        // two contiguous segments that share a `timeline_frame`. The chain must
+        // treat that as one stream: a rebuild would drop the effect's history and
+        // reload the plugin twice per output frame.
+        let identity = PluginIdentity::from_plan(&plugin(json!(0.5))).expect("valid identity");
+        let mut chain = AudioPluginChain::with_test_processor(
+            identity,
+            Box::new(GainProcessor {
+                gain: 0.5,
+                calls: Vec::new(),
+            }),
+        );
+        let plugins = [plugin(json!(0.5))];
+        let mut errors = Vec::new();
+
+        let mut first = vec![0.5, -0.5, 0.5, -0.5, 0.5, -0.5, 0.5, -0.5];
+        chain.process(
+            &plugins,
+            AudioPluginProcessContext {
+                start_sample: 0,
+                sample_rate: 48_000,
+                max_block_size: DEFAULT_PLUGIN_BLOCK_SIZE,
+            },
+            &mut first,
+            &mut errors,
+        );
+        let mut second = first.clone();
+        second.fill(0.5);
+        chain.process(
+            &plugins,
+            AudioPluginProcessContext {
+                // Same output frame as the block above, immediately following it
+                // in samples: a 120 fps scene under a 60 fps root plans two
+                // segments for one output frame.
+                start_sample: 4,
+                sample_rate: 48_000,
+                max_block_size: DEFAULT_PLUGIN_BLOCK_SIZE,
+            },
+            &mut second,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty(), "the chain must not reload: {errors:?}");
+        assert!(
+            first
+                .iter()
+                .all(|sample| (sample.abs() - 0.25).abs() < 1.0e-6),
+            "first segment processed: {first:?}"
+        );
+        assert!(
+            second
+                .iter()
+                .all(|sample| (sample.abs() - 0.25).abs() < 1.0e-6),
+            "second segment processed: {second:?}"
+        );
+    }
+
+    #[test]
+    fn a_sample_gap_rebuilds_the_plugin_chain() {
+        // A seek restarts the stream, so the effect must not carry state across it.
+        let identity = PluginIdentity::from_plan(&plugin(json!(0.5))).expect("valid identity");
+        let mut chain = AudioPluginChain::with_test_processor(
+            identity,
+            Box::new(GainProcessor {
+                gain: 0.5,
+                calls: Vec::new(),
+            }),
+        );
+        let plugins = [plugin(json!(0.5))];
+        let mut errors = Vec::new();
+        let mut samples = vec![0.5, -0.5, 0.5, -0.5];
+        chain.process(
+            &plugins,
+            AudioPluginProcessContext {
+                start_sample: 0,
+                sample_rate: 48_000,
+                max_block_size: DEFAULT_PLUGIN_BLOCK_SIZE,
+            },
+            &mut samples,
+            &mut errors,
+        );
+        let mut after_seek = vec![0.5, -0.5, 0.5, -0.5];
+        chain.process(
+            &plugins,
+            AudioPluginProcessContext {
+                start_sample: 9_600,
+                sample_rate: 48_000,
+                max_block_size: DEFAULT_PLUGIN_BLOCK_SIZE,
+            },
+            &mut after_seek,
+            &mut errors,
+        );
+        assert!(
+            !errors.is_empty(),
+            "a discontinuous block must rebuild and report the reload failure"
+        );
+    }
+
+    #[test]
     fn block_processing_clamps_parameters_and_preserves_transport_offsets() {
         let mut processor = GainProcessor {
             gain: 1.0,
@@ -841,7 +973,6 @@ mod tests {
             &mut processor,
             &mut samples,
             AudioPluginProcessContext {
-                timeline_frame: 0,
                 start_sample: 100,
                 sample_rate: 48_000,
                 max_block_size: 3,
@@ -892,7 +1023,6 @@ mod tests {
             &mut FailedProcessor,
             &mut samples,
             AudioPluginProcessContext {
-                timeline_frame: 0,
                 start_sample: 0,
                 sample_rate: 48_000,
                 max_block_size: 64,

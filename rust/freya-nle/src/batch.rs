@@ -31,6 +31,12 @@ pub(super) struct BatchItem {
     pub(super) scene: i32,
     pub(super) request: ExportRequest,
     pub(super) outcome: Option<BatchOutcome>,
+    /// A note from a successful export, such as clip audio it had to drop.
+    ///
+    /// The outcome alone cannot carry this: a partly silent export is still a
+    /// success, but the operator has to learn that the file is not what they
+    /// asked for.
+    pub(super) notice: Option<String>,
 }
 
 impl BatchItem {
@@ -114,6 +120,7 @@ impl BatchQueue {
             scene,
             request,
             outcome: None,
+            notice: None,
         });
         Some(self.items.len() - 1)
     }
@@ -170,12 +177,28 @@ impl BatchQueue {
         true
     }
 
-    pub(super) fn finish_running(&mut self, outcome: BatchOutcome) -> Option<usize> {
+    pub(super) fn finish_running(
+        &mut self,
+        outcome: BatchOutcome,
+        notice: Option<String>,
+    ) -> Option<usize> {
         let index = self.running.take()?;
         if let Some(item) = self.items.get_mut(index) {
             item.outcome = Some(outcome);
+            item.notice = notice;
         }
         Some(index)
+    }
+
+    /// The successful exports that carried a notice, with the row they belong to.
+    pub(super) fn notices(&self) -> Vec<(String, String)> {
+        self.items
+            .iter()
+            .filter_map(|item| {
+                let notice = item.notice.as_ref()?;
+                Some((item.display_label(), notice.clone()))
+            })
+            .collect()
     }
 
     pub(super) fn stop(&mut self) {
@@ -227,6 +250,9 @@ impl BatchQueue {
                 let status = match &item.outcome {
                     None if self.running == Some(index) => " · running",
                     None => "",
+                    Some(BatchOutcome::Succeeded) if item.notice.is_some() => {
+                        " · done, needs review"
+                    }
                     Some(BatchOutcome::Succeeded) => " · done",
                     Some(BatchOutcome::Failed(_)) => " · failed",
                 };
@@ -495,7 +521,7 @@ mod tests {
         queue.push("second".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
         assert!(queue.begin(0));
         assert_eq!(
-            queue.finish_running(BatchOutcome::Succeeded),
+            queue.finish_running(BatchOutcome::Succeeded, None),
             Some(0),
             "the finished index is reported so the runner can advance"
         );
@@ -507,12 +533,44 @@ mod tests {
     }
 
     #[test]
+    fn a_successful_item_keeps_the_notice_its_export_reported() {
+        // A partly silent export still succeeds, so the outcome cannot carry the
+        // warning; the item has to keep it for the batch summary.
+        let mut queue = BatchQueue::default();
+        queue.push("scene 1".to_owned(), 1, request("/tmp/a.mkv", 0, 10));
+        queue.push("scene 2".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
+        queue.begin(0);
+        queue.finish_running(
+            BatchOutcome::Succeeded,
+            Some("clip #7 is silent".to_owned()),
+        );
+        queue.begin(1);
+        queue.finish_running(BatchOutcome::Succeeded, None);
+
+        assert_eq!(queue.summary(), (2, 0), "both exports succeeded");
+        let notices = queue.notices();
+        assert_eq!(
+            notices.len(),
+            1,
+            "only the export with a notice reports one"
+        );
+        assert!(notices[0].0.contains("/tmp/a.mkv"), "{notices:?}");
+        assert_eq!(notices[0].1, "clip #7 is silent");
+        assert!(
+            queue.rows()[0].text.contains("needs review"),
+            "the row must not read as a clean success: {}",
+            queue.rows()[0].text
+        );
+        assert!(!queue.rows()[1].text.contains("needs review"));
+    }
+
+    #[test]
     fn pausing_resumes_at_the_next_item() {
         let mut queue = BatchQueue::default();
         queue.push("first".to_owned(), 1, request("/tmp/a.mkv", 0, 10));
         queue.push("second".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
         queue.begin(0);
-        queue.finish_running(BatchOutcome::Failed("codec missing".to_owned()));
+        queue.finish_running(BatchOutcome::Failed("codec missing".to_owned()), None);
         queue.pause_after(1);
         assert!(queue.is_paused());
         assert_eq!(queue.summary(), (0, 1));

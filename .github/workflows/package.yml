@@ -20,6 +20,10 @@ on:
       - "tests/test_build_version.py"
   workflow_call:
     inputs:
+      source_ref:
+        description: Commit to build (defaults to the triggering revision)
+        required: false
+        type: string
       version:
         description: Version to stamp into the artifacts; must match rust/Cargo.toml
         required: true
@@ -62,6 +66,8 @@ jobs:
     # every packaging PR. The release path has no other gate, so it keeps this.
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/rust-checks.yml
+    with:
+      source_ref: ${{ inputs.source_ref || github.sha }}
 
   linux-appimage:
     name: Linux AppImage (portable)
@@ -77,6 +83,8 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - name: Determine version
         id: version
         uses: ./.github/actions/resolve-version
@@ -152,6 +160,8 @@ jobs:
           pacman -Syu --noconfirm archlinux-keyring
           pacman -S --needed --noconfirm base-devel git python zstd nasm
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - uses: dtolnay/rust-toolchain@1.99.1
       - name: Install build dependencies
         run: |
@@ -195,6 +205,8 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - name: Install dependencies
         run: |
           brew install pkgconf nasm
@@ -312,6 +324,8 @@ jobs:
       VCPKG_DOWNLOADS: ${{ github.workspace }}\.build_tmp\vcpkg-downloads
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

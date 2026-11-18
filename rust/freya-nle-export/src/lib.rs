@@ -76,6 +76,11 @@ impl Default for ExportRuntimeSettings {
 pub struct ExportResult {
     pub success: bool,
     pub message: String,
+    /// A warning about a successful export, such as clip audio it had to drop.
+    ///
+    /// Absent for a clean success, so a consumer can tell "nothing to report"
+    /// from "the file is not what was asked for" without matching message text.
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +179,7 @@ enum WorkerEvent {
     Finished {
         success: bool,
         message: String,
+        notice: Option<String>,
     },
 }
 
@@ -359,19 +365,24 @@ impl ExportManager {
                         active.next_frame = active.job.start_frame().saturating_add(done);
                         active.ready_for_frame = active.next_frame < active.job.end_frame();
                     }
-                    Ok(WorkerEvent::Finished { success, message }) => {
-                        finished = Some((success, message));
+                    Ok(WorkerEvent::Finished {
+                        success,
+                        message,
+                        notice,
+                    }) => {
+                        finished = Some((success, message, notice));
                         break;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        finished = Some((false, "Export worker stopped unexpectedly".to_owned()));
+                        finished =
+                            Some((false, "Export worker stopped unexpectedly".to_owned(), None));
                         break;
                     }
                 }
             }
         }
-        let Some((mut success, mut message)) = finished else {
+        let Some((mut success, mut message, notice)) = finished else {
             return public_events;
         };
         if let Some(mut active) = self.active.take() {
@@ -384,7 +395,11 @@ impl ExportManager {
             }
         }
         self.media_preview.reset();
-        public_events.push(ExportEvent::Finished(ExportResult { success, message }));
+        public_events.push(ExportEvent::Finished(ExportResult {
+            success,
+            message,
+            notice,
+        }));
         public_events
     }
 }
@@ -565,13 +580,23 @@ fn run_export_worker(
 ) {
     let result = match &job {
         ExportJob::Video { config, .. } => run_video_export(&job, config, &commands, &events),
-        ExportJob::ImageSequence { .. } => run_image_sequence_export(&job, &commands, &events),
+        ExportJob::ImageSequence { .. } => {
+            run_image_sequence_export(&job, &commands, &events).map(|()| String::new())
+        }
     };
-    let (success, message) = match result {
-        Ok(()) => (true, "Export complete".to_owned()),
-        Err(message) => (false, message),
+    // A successful encode can still have dropped clip audio; saying so is the
+    // only way the operator learns the output is partly silent. The notice is
+    // kept separate from the message so a clean success is not mistaken for one.
+    let (success, message, notice) = match result {
+        Ok(notice) if notice.is_empty() => (true, "Export complete".to_owned(), None),
+        Ok(notice) => (true, notice.clone(), Some(notice)),
+        Err(message) => (false, message, None),
     };
-    let _ = events.send(WorkerEvent::Finished { success, message });
+    let _ = events.send(WorkerEvent::Finished {
+        success,
+        message,
+        notice,
+    });
     (wake)();
 }
 
@@ -580,7 +605,7 @@ fn run_video_export(
     config: &VideoEncoderConfig,
     commands: &Receiver<WorkerCommand>,
     events: &Sender<WorkerEvent>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let ExportJob::Video {
         plan,
         fps,
@@ -591,43 +616,72 @@ fn run_video_export(
     else {
         return Err("internal error: video worker received a non-video job".to_owned());
     };
-    let encoder = open_video_encoder(config)
+    // Preserve an existing export until encoding and finalization both succeed.
+    // Keep the extension because FFmpeg chooses the container from the path.
+    let parent = config
+        .output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut suffix = std::ffi::OsString::new();
+    if let Some(extension) = config.output_path.extension() {
+        suffix.push(".");
+        suffix.push(extension);
+    }
+    let temporary = tempfile::Builder::new()
+        .prefix(".freya-nle-export-")
+        .suffix(&suffix)
+        .tempfile_in(parent)
+        .map_err(|error| format!("Output error: cannot create temporary file: {error}"))?
+        .into_temp_path();
+    let mut temporary_config = config.clone();
+    temporary_config.output_path = temporary.to_path_buf();
+    let encoder = open_video_encoder(&temporary_config)
         .map_err(|error| format!("Encoder error: initialization failed: {error}"))?;
-    let result = encode_video_frames(
+    let notice = encode_video_frames(
         plan,
         *fps,
         *max_plugin_block_size,
         *progress_interval,
-        config,
+        &temporary_config,
         encoder,
         commands,
         events,
-    );
-    if result.is_err() {
-        let _ = fs::remove_file(&config.output_path);
-    }
-    result
+    )?;
+    temporary
+        .persist(&config.output_path)
+        .map_err(|error| format!("Output error: cannot publish video: {}", error.error))?;
+    Ok(notice)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn encode_video_frames(
     plan: &VideoExportPlan,
-    fps: f64,
+    job_fps: f64,
     max_plugin_block_size: usize,
     progress_interval: i32,
     config: &VideoEncoderConfig,
     mut encoder: VideoEncoder,
     commands: &Receiver<WorkerCommand>,
     events: &Sender<WorkerEvent>,
-) -> Result<(), String> {
+) -> Result<String, String> {
+    // The encoder is configured with the integer rational, so the audio blocks
+    // must be placed on that same clock. A rounded job rate such as 29.97 is a
+    // hair faster than 30000/1001, which moves a block's start by one sample
+    // against the planner's length every few frames.
+    let fps = audio_frame_rate(job_fps, config);
     let mut mixer = TimelineAudioMixer::default();
+    let mut next_frame = plan.start_frame;
     let timer = Instant::now();
+    // Clip audio that could not be decoded or resampled. The frame still encodes
+    // so the rest of the export is not lost, but the result must not claim a
+    // complete success.
+    let mut audio_warnings = Vec::new();
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Cancel) | Err(_) => return Err("Export cancelled".to_owned()),
             Ok(WorkerCommand::Frame(frame)) => {
-                if frame.timeline_frame < plan.start_frame || frame.timeline_frame >= plan.end_frame
-                {
+                if frame.timeline_frame != next_frame || frame.timeline_frame >= plan.end_frame {
                     return Err("Frame render error: unexpected export frame".to_owned());
                 }
                 let pts = i64::from(frame.timeline_frame - plan.start_frame);
@@ -635,27 +689,27 @@ fn encode_video_frames(
                     format!("Encoder error: failed to queue video frame: {error}")
                 })?;
                 let done = frame.timeline_frame - plan.start_frame + 1;
-                let audio_plan = plan_export_audio_frame(
-                    done - 1,
-                    i32::try_from(config.sample_rate)
-                        .map_err(|_| "Encoder error: audio sample rate is invalid".to_owned())?,
-                    config.fps_num,
-                    config.fps_den,
-                )
-                .ok_or_else(|| "Encoder error: audio timing failed".to_owned())?;
-                if audio_plan.samples_for_frame > 0 {
+                let samples_for_frame = export_frame_samples(frame.timeline_frame, config)?;
+                if samples_for_frame > 0 {
                     let audio = mixer
                         .mix_frame_with_sample_count_and_plugin_block_size(
                             frame.timeline_frame,
                             fps,
                             config.sample_rate,
-                            audio_plan.samples_for_frame as usize,
+                            samples_for_frame as usize,
                             max_plugin_block_size,
                             &frame.audio_sources,
                         )
                         .map_err(|error| {
                             format!("Encoder error: audio timing failed: {error:?}")
                         })?;
+                    for warning in &audio.errors {
+                        // One bad clip repeats every frame; report each distinct
+                        // problem once instead of thousands of times.
+                        if !audio_warnings.contains(warning) {
+                            audio_warnings.push(warning.clone());
+                        }
+                    }
                     encoder.push_audio(&audio.samples).map_err(|error| {
                         format!("Encoder error: failed to queue audio: {error}")
                     })?;
@@ -666,11 +720,28 @@ fn encode_video_frames(
                     encoder
                         .finish()
                         .map_err(|error| format!("Encoder error: finalization failed: {error}"))?;
-                    return Ok(());
+                    return Ok(export_audio_notice(&audio_warnings));
                 }
+                next_frame += 1;
             }
         }
     }
+}
+
+/// The success message for a video export, naming any clip audio it lost.
+fn export_audio_notice(warnings: &[String]) -> String {
+    if warnings.is_empty() {
+        return String::new();
+    }
+    let mut message = format!(
+        "Export complete, but {} audio problem(s) left part of the mix silent:",
+        warnings.len()
+    );
+    for warning in warnings {
+        message.push('\n');
+        message.push_str(warning);
+    }
+    message
 }
 
 fn run_image_sequence_export(
@@ -692,10 +763,10 @@ fn run_image_sequence_export(
         fs::create_dir_all(output_directory)
             .map_err(|_| "Output error: cannot create output directory".to_owned())?;
     }
-    let output_paths = (plan.start_frame..plan.end_frame)
+    if let Some(existing) = (plan.start_frame..plan.end_frame)
         .map(|frame| image_sequence_path(output_directory, frame, *plan))
-        .collect::<Vec<_>>();
-    if let Some(existing) = output_paths.iter().find(|path| path.exists()) {
+        .find(|path| path.exists())
+    {
         cleanup_image_sequence(&[], output_directory, created_directory);
         return Err(format!(
             "Output error: output file already exists: {}",
@@ -703,6 +774,7 @@ fn run_image_sequence_export(
         ));
     }
     let mut written = Vec::new();
+    let mut next_frame = plan.start_frame;
     let timer = Instant::now();
     loop {
         match commands.recv() {
@@ -711,8 +783,7 @@ fn run_image_sequence_export(
                 return Err("Export cancelled".to_owned());
             }
             Ok(WorkerCommand::Frame(frame)) => {
-                if frame.timeline_frame < plan.start_frame || frame.timeline_frame >= plan.end_frame
-                {
+                if frame.timeline_frame != next_frame || frame.timeline_frame >= plan.end_frame {
                     cleanup_image_sequence(&written, output_directory, created_directory);
                     return Err("Frame render error: unexpected export frame".to_owned());
                 }
@@ -736,9 +807,40 @@ fn run_image_sequence_export(
                 if done == plan.total_frames {
                     return Ok(());
                 }
+                next_frame += 1;
             }
         }
     }
+}
+
+/// Frame rate the audio side must use for a video export.
+///
+/// `fps_rational` rounds the job's rate into the integer pair the encoder takes,
+/// and both numbers then describe the same nominal rate slightly differently. The
+/// encoder and the audio clock have to agree, so the rational wins; `job_fps` is
+/// only a fallback for a configuration that cannot express one.
+fn audio_frame_rate(job_fps: f64, config: &VideoEncoderConfig) -> f64 {
+    let rational = f64::from(config.fps_num) / f64::from(config.fps_den);
+    if rational.is_finite() && rational > 0.0 {
+        rational
+    } else {
+        job_fps
+    }
+}
+
+/// Sample frames the audio encoder owes for one exported timeline frame.
+///
+/// Indexed by the absolute timeline frame: the plan's counts are the difference
+/// between two absolute sample positions, so consecutive frames join exactly. An
+/// export-relative index would instead leave a one-sample gap on most frames of a
+/// fractional-fps export that does not begin at frame 0, and a stateful plugin
+/// chain reads that gap as a seek.
+fn export_frame_samples(timeline_frame: i32, config: &VideoEncoderConfig) -> Result<i32, String> {
+    let sample_rate = i32::try_from(config.sample_rate)
+        .map_err(|_| "Encoder error: audio sample rate is invalid".to_owned())?;
+    plan_export_audio_frame(timeline_frame, sample_rate, config.fps_num, config.fps_den)
+        .map(|plan| plan.samples_for_frame)
+        .ok_or_else(|| "Encoder error: audio timing failed".to_owned())
 }
 
 fn open_video_encoder(config: &VideoEncoderConfig) -> Result<VideoEncoder, String> {
@@ -884,6 +986,103 @@ mod tests {
     }
 
     #[test]
+    fn exported_audio_blocks_join_exactly_from_a_nonzero_start() {
+        // The worker asks for the samples of the frame it just rendered, and the
+        // mixer places that block at the same absolute frame. Both have to agree,
+        // or a fractional-fps export starting at frame 1 leaves a gap on most
+        // frames and a stateful plugin sees a seek each time.
+        let config = VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 60_000,
+            fps_den: 1_001,
+            bitrate: 500_000,
+            crf: Some(28),
+            gop_size: None,
+            codec_name: "libx264".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: PathBuf::from("unused.mp4"),
+            preset: "ultrafast".to_owned(),
+            profile: String::new(),
+        };
+        let fps = 60_000.0 / 1_001.0;
+        let mut previous_end: Option<i64> = None;
+        for frame in 1..12 {
+            let samples = export_frame_samples(frame, &config).expect("the frame plans");
+            let start = (f64::from(frame) * 48_000.0 / fps).floor() as i64;
+            if let Some(end) = previous_end {
+                assert_eq!(start, end, "frame {frame} must continue the stream");
+            }
+            previous_end = Some(start + i64::from(samples));
+        }
+        // A fresh export still starts on its own frame.
+        assert_eq!(
+            export_frame_samples(0, &config).expect("frame zero plans"),
+            800
+        );
+    }
+
+    #[test]
+    fn the_audio_clock_uses_the_encoder_rational() {
+        // `build_job` keeps 29.97 in the job and hands 30000/1001 to the encoder.
+        // Mixing at the job's rounded rate moved block starts off the planner's
+        // lengths: at frame 128 the block ran to 206607 while frame 129 began at
+        // 206606, which the plugin chain reads as a seek.
+        let config = VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 30_000,
+            fps_den: 1_001,
+            bitrate: 500_000,
+            crf: Some(28),
+            gop_size: None,
+            codec_name: "libx264".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: PathBuf::from("unused.mp4"),
+            preset: "ultrafast".to_owned(),
+            profile: String::new(),
+        };
+        let fps = audio_frame_rate(29.97, &config);
+        assert_eq!(
+            fps,
+            30_000.0 / 1_001.0,
+            "the encoder's rational is the clock both sides must share"
+        );
+        assert!(
+            (fps - 29.97).abs() > 0.0,
+            "the rounded job rate is a different number, which is the trap"
+        );
+
+        let mut mixer = freya_nle_audio::TimelineAudioMixer::default();
+        let mut previous_end: Option<i64> = None;
+        for frame in 128..131 {
+            let samples = export_frame_samples(frame, &config).expect("the frame plans");
+            let block = mixer
+                .mix_frame_with_timeline_rate(
+                    frame,
+                    fps,
+                    config.sample_rate,
+                    samples as usize,
+                    1_024,
+                    1.0,
+                    &[],
+                )
+                .expect("the frame mixes");
+            if let Some(end) = previous_end {
+                assert_eq!(
+                    block.start_sample, end,
+                    "frame {frame} must continue the stream at 29.97 fps"
+                );
+            }
+            previous_end = Some(block.start_sample + i64::from(samples));
+        }
+    }
+
+    #[test]
     fn qt_fps_rational_is_preserved() {
         assert_eq!(fps_rational(60.0), (60_000, 1_000));
         assert_eq!(fps_rational(60_000.0 / 1_001.0), (60_000, 1_001));
@@ -1003,6 +1202,27 @@ mod tests {
     }
 
     #[test]
+    fn image_worker_rejects_missing_or_repeated_frames() {
+        for frames in [&[1][..], &[0, 0][..]] {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let directory = temp.path().join("out-of-order");
+            let job = image_job(directory.clone(), 2);
+            let (commands, receiver) = mpsc::channel();
+            let (events, _) = mpsc::channel();
+            for &frame in frames {
+                commands
+                    .send(WorkerCommand::Frame(solid_frame(frame)))
+                    .unwrap();
+            }
+            assert_eq!(
+                run_image_sequence_export(&job, &receiver, &events),
+                Err("Frame render error: unexpected export frame".to_owned())
+            );
+            assert!(!directory.exists());
+        }
+    }
+
+    #[test]
     fn image_worker_removes_partial_output_after_confirmed_cancellation() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let directory = temp.path().join("cancelled");
@@ -1023,13 +1243,147 @@ mod tests {
     }
 
     #[test]
-    fn video_worker_removes_partial_output_after_confirmed_cancellation() {
+    fn video_worker_reports_clip_audio_it_could_not_decode() {
+        if !media_video_encoders().contains(&"libx264") || !media_audio_encoders().contains(&"aac")
+        {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("silent-clip.mp4");
+        let config = VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 60_000,
+            fps_den: 1_000,
+            bitrate: 500_000,
+            crf: Some(28),
+            gop_size: None,
+            codec_name: "libx264".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: path.clone(),
+            preset: "ultrafast".to_owned(),
+            profile: String::new(),
+        };
+        let job = ExportJob::Video {
+            plan: VideoExportPlan {
+                start_frame: 0,
+                end_frame: 1,
+                total_frames: 1,
+            },
+            config: config.clone(),
+            fps: 60.0,
+            max_plugin_block_size: 1_024,
+            progress_interval: 1,
+        };
+        // An audio clip whose file cannot be opened: the timeline still claims a
+        // source, so the mixer reports the clip instead of dropping it silently.
+        let missing = TimelineAudioSource {
+            path: temp.path().join("this-track-does-not-exist.wav"),
+            plan: AudioLayerPlan {
+                clip_id: 7,
+                nested_timing: None,
+                source_path: Some("this-track-does-not-exist.wav".to_owned()),
+                start_frame: 0,
+                duration_frames: 60,
+                source_start_time: 0.0,
+                playback_speed: 1.0,
+                direct_time: 0.0,
+                volume: 1.0,
+                master_volume: 1.0,
+                pan: 0.0,
+                fade_in_seconds: 0.0,
+                fade_out_seconds: 0.0,
+                mute: false,
+                solo: false,
+                limiter: true,
+                direct_mode: false,
+                plugins: Vec::new(),
+            },
+        };
+        let (command_sender, command_receiver) = mpsc::channel();
+        let (event_sender, _event_receiver) = mpsc::channel();
+        command_sender
+            .send(WorkerCommand::Frame(ExportFrame {
+                timeline_frame: 0,
+                frame: VideoFrame {
+                    width: 64,
+                    height: 64,
+                    rgba: [40, 80, 120, 255].repeat(64 * 64),
+                    timestamp_seconds: 0.0,
+                },
+                audio_sources: vec![missing],
+            }))
+            .expect("frame queues");
+
+        let notice = run_video_export(&job, &config, &command_receiver, &event_sender)
+            .expect("the video still publishes");
+        // The encode succeeds, but the result must not read as an unqualified
+        // success when part of the mix was silently dropped.
+        assert!(
+            notice.contains("audio problem") && notice.contains("clip #7"),
+            "the lost audio must be named: {notice}"
+        );
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn a_clean_export_has_no_audio_notice() {
+        assert_eq!(export_audio_notice(&[]), "");
+        let repeated = vec!["clip #1: missing".to_owned()];
+        let notice = export_audio_notice(&repeated);
+        assert!(notice.contains("clip #1: missing"));
+        assert!(!notice.trim().is_empty());
+    }
+
+    #[test]
+    fn a_clean_run_reports_no_notice_and_a_warned_one_does() {
+        // The consumer decides whether an export needs review from this field, so
+        // it has to be absent for a clean run and present for a warned one.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let directory = temp.path().join("notice-flow");
+        let job = image_job(directory.clone(), 1);
+        let (command_sender, command_receiver) = mpsc::channel();
+        let (event_sender, event_receiver) = mpsc::channel();
+        command_sender
+            .send(WorkerCommand::Frame(solid_frame(0)))
+            .expect("frame queues");
+
+        run_export_worker(job, command_receiver, event_sender, Arc::new(|| {}));
+
+        let mut clean = None;
+        while let Ok(event) = event_receiver.try_recv() {
+            if let WorkerEvent::Finished {
+                success,
+                message,
+                notice,
+            } = event
+            {
+                clean = Some((success, message, notice));
+            }
+        }
+        let (success, message, notice) = clean.expect("the worker reports completion");
+        assert!(success);
+        assert_eq!(message, "Export complete");
+        assert_eq!(notice, None, "a clean export has nothing to report");
+
+        // The same worker keeps the audio warning it collected, so the field is
+        // what distinguishes the two outcomes.
+        assert_eq!(export_audio_notice(&[]), "");
+        assert!(!export_audio_notice(&["clip #7 (a.wav): missing".to_owned()]).is_empty());
+        fs::remove_dir_all(directory).expect("generated sequence removes");
+    }
+
+    #[test]
+    fn video_worker_preserves_previous_output_on_cancellation_and_publishes_success() {
         if !media_video_encoders().contains(&"libx264") || !media_audio_encoders().contains(&"aac")
         {
             return;
         }
         let temp = tempfile::tempdir().expect("temporary directory");
         let path = temp.path().join("cancelled-video.mp4");
+        fs::write(&path, b"previous export").expect("previous export writes");
         let config = VideoEncoderConfig {
             width: 64,
             height: 64,
@@ -1079,6 +1433,51 @@ mod tests {
             run_video_export(&job, &config, &command_receiver, &event_sender),
             Err("Export cancelled".to_owned())
         );
-        assert!(!path.exists());
+        assert_eq!(fs::read(&path).unwrap(), b"previous export");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+
+        let (commands, receiver) = mpsc::channel();
+        commands
+            .send(WorkerCommand::Frame(ExportFrame {
+                timeline_frame: 1,
+                frame: VideoFrame {
+                    width: 64,
+                    height: 64,
+                    rgba: [40, 80, 120, 255].repeat(64 * 64),
+                    timestamp_seconds: 0.0,
+                },
+                audio_sources: Vec::new(),
+            }))
+            .unwrap();
+        assert_eq!(
+            run_video_export(&job, &config, &receiver, &event_sender),
+            Err("Frame render error: unexpected export frame".to_owned())
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"previous export");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+
+        let (command_sender, command_receiver) = mpsc::channel();
+        for timeline_frame in 0..2 {
+            command_sender
+                .send(WorkerCommand::Frame(ExportFrame {
+                    timeline_frame,
+                    frame: VideoFrame {
+                        width: 64,
+                        height: 64,
+                        rgba: [40, 80, 120, 255].repeat(64 * 64),
+                        timestamp_seconds: 0.0,
+                    },
+                    audio_sources: Vec::new(),
+                }))
+                .expect("frame queues");
+        }
+        run_video_export(&job, &config, &command_receiver, &event_sender)
+            .expect("video export succeeds");
+        let mut decoder =
+            freya_nle_media::VideoDecoder::open(&path).expect("published video opens");
+        let frame = decoder.decode_at(0.0).expect("published video decodes");
+        assert_eq!((frame.width, frame.height), (64, 64));
+        assert!((frame.rgba[0] as i32 - 40).abs() < 15);
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
     }
 }

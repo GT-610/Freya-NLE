@@ -827,7 +827,7 @@ export component TimelineWindow inherits Window {
         width: 100%;
         height: 100%;
         key-pressed(event) => {
-            if root.keyboard-shortcut(
+            if !root.save-confirmation-visible && root.menu-accelerators-enabled && root.keyboard-shortcut(
                 event.text,
                 event.modifiers.alt,
                 event.modifiers.control,

@@ -36,6 +36,9 @@ slint = { version = "1.17.1", default-features = false, features = ["accessibili
 sys-locale = "0.3.2"
 webbrowser = "1.2.4"
 
+[dev-dependencies]
+i-slint-backend-testing = "=1.17.1"
+
 [build-dependencies]
 serde_json = "1.0"
 slint-build = "1.17.1"

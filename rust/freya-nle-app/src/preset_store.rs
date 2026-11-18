@@ -7,6 +7,14 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Upper bound for one preset definition.
+///
+/// A preset holds one effect's parameters, keyframes, and expressions, so it stays
+/// far below this even with a long keyframe track. Presets live in a directory the
+/// user shares with packages, so a preset is not necessarily a file this process
+/// wrote; reading it must not allocate for whatever the file claims to be.
+const MAX_PRESET_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct PresetStore {
     root: PathBuf,
@@ -48,7 +56,16 @@ impl PresetStore {
 
     pub fn load_preset(&self, effect_id: &str, name: &str) -> Result<EffectPreset, String> {
         let path = self.preset_path(effect_id, name, false)?;
-        let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let bytes = crate::file_io::read_bounded(&path, MAX_PRESET_BYTES).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                format!(
+                    "{}: preset exceeds the maximum allowed size of {MAX_PRESET_BYTES} bytes",
+                    path.display()
+                )
+            } else {
+                format!("{}: {error}", path.display())
+            }
+        })?;
         parse_effect_preset(&bytes, effect_id, name).map_err(|error| error.to_string())
     }
 
@@ -64,6 +81,14 @@ impl PresetStore {
         let path = self.preset_path(effect_id, name, true)?;
         let bytes = build_effect_preset(effect_id, name, enabled, params, keyframes, expressions)
             .map_err(|error| error.to_string())?;
+        // Refuse before replacing anything: a preset this large would be rejected
+        // on the next load, so writing it would only hide the problem.
+        if bytes.len() as u64 > MAX_PRESET_BYTES {
+            return Err(format!(
+                "{}: preset exceeds the maximum allowed size of {MAX_PRESET_BYTES} bytes",
+                path.display()
+            ));
+        }
         write_atomic(&path, &bytes).map_err(|error| format!("{}: {error}", path.display()))
     }
 
@@ -168,6 +193,69 @@ mod tests {
         assert!(store.load_preset("mosaic", "Warm").is_err());
         store.delete("blur", "Warm").expect("delete preset");
         assert!(store.names("blur").is_empty());
+        fs::remove_dir_all(root).expect("remove temporary preset root");
+    }
+
+    #[test]
+    fn oversized_presets_are_rejected_before_the_allocation() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("presets");
+        let store = PresetStore::from_root(root.clone());
+        let directory = root.join("blur");
+        fs::create_dir_all(&directory).expect("preset directory");
+
+        // A preset is not necessarily written by this process: the preset root is
+        // a directory the user shares with packaged effects, so the size is
+        // checked before the file is read rather than after.
+        let oversized = directory.join("Huge.json");
+        let file = fs::File::create(&oversized).expect("oversized preset");
+        file.set_len(MAX_PRESET_BYTES + 1).expect("preset grows");
+        drop(file);
+        let error = store
+            .load_preset("blur", "Huge")
+            .expect_err("an oversized preset is rejected");
+        assert!(
+            error.contains("maximum allowed size"),
+            "the failure must name the limit: {error}"
+        );
+
+        // A file that is not a file at all would block a plain read.
+        let fifo = directory.join("Pipe.json");
+        #[cfg(unix)]
+        {
+            let status = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .expect("mkfifo runs");
+            assert!(status.success());
+            assert!(store.load_preset("blur", "Pipe").is_err());
+            fs::remove_file(&fifo).expect("fifo removes");
+        }
+        #[cfg(not(unix))]
+        let _ = fifo;
+
+        // The bound must not reject a preset that fits.
+        store
+            .save(
+                "blur",
+                "Small",
+                serde_json::json!({"size": 3})
+                    .as_object()
+                    .cloned()
+                    .expect("params"),
+                Map::new(),
+                Map::new(),
+                true,
+            )
+            .expect("small preset saves");
+        assert_eq!(
+            store
+                .load_preset("blur", "Small")
+                .expect("small preset loads")
+                .params["size"],
+            3
+        );
+
         fs::remove_dir_all(root).expect("remove temporary preset root");
     }
 }

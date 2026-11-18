@@ -208,6 +208,9 @@ pub struct RenderLayerPlan {
 pub struct NestedSceneRenderPlan {
     pub target_scene_id: i32,
     pub target_frame: i32,
+    /// Unclamped child-frame position, before integer frame sampling.
+    pub target_position: f64,
+    pub speed: f64,
     pub opacity: f32,
 }
 
@@ -388,10 +391,25 @@ pub struct LensFlareRenderPlan {
     pub opacity: f32,
 }
 
+/// Position and identity of an audio clip inside an embedded scene.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NestedAudioTiming {
+    pub instance_key: u64,
+    /// Continuous position in the clip's own scene, in that scene's frames.
+    pub frame: f64,
+    pub fps: f64,
+    /// Change in scene time for one unit of root timeline time.
+    pub rate: f64,
+    /// Active interval within the current root timeline frame, in [0, 1].
+    pub start_fraction: f64,
+    pub end_fraction: f64,
+}
+
 /// Evaluated audio state for one active audio or video clip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioLayerPlan {
     pub clip_id: i32,
+    pub nested_timing: Option<NestedAudioTiming>,
     pub source_path: Option<String>,
     pub start_frame: i32,
     pub duration_frames: i32,
@@ -1139,9 +1157,10 @@ struct BakePlan {
     scene_height: i32,
     scene_id: i32,
     clips: Vec<CachedClip>,
-    scene_durations: HashMap<i32, i32>,
+    scene_timing: HashMap<i32, (i32, f64)>,
     layer_settings: BTreeMap<i32, LayerSetting>,
     time_buckets: HashMap<i32, Vec<usize>>,
+    unindexed_clips: Vec<usize>,
     effect_count: usize,
 }
 
@@ -1197,10 +1216,10 @@ impl BakePlan {
             .filter(|clip| clip.scene_id == scene_id)
             .map(|clip| CachedClip::from_document(clip, scene.fps))
             .collect();
-        let scene_durations = document
+        let scene_timing = document
             .scenes
             .iter()
-            .map(|scene| (scene.id, scene.duration))
+            .map(|scene| (scene.id, (scene.duration, scene.fps)))
             .collect();
         let layer_settings = scene
             .layer_settings
@@ -1213,7 +1232,7 @@ impl BakePlan {
             scene.height,
             scene.id,
             clips,
-            scene_durations,
+            scene_timing,
             layer_settings,
         ))
     }
@@ -1224,14 +1243,25 @@ impl BakePlan {
         scene_height: i32,
         scene_id: i32,
         clips: Vec<CachedClip>,
-        scene_durations: HashMap<i32, i32>,
+        scene_timing: HashMap<i32, (i32, f64)>,
         layer_settings: BTreeMap<i32, LayerSetting>,
     ) -> Self {
+        // Bound the index independently of clip duration and project size.
+        // Clips that do not fit remain available through a linear fallback.
+        const MAX_BUCKET_ENTRIES: usize = 65_536;
         let mut time_buckets: HashMap<i32, Vec<usize>> = HashMap::new();
+        let mut unindexed_clips = Vec::new();
+        let mut bucket_entries = 0_usize;
         let effect_count = clips.iter().map(|clip| clip.effects.len()).sum();
         for (cached_index, cached) in clips.iter().enumerate() {
             let first_bucket = cached.start_frame / FRAME_BUCKET_SIZE;
             let last_bucket = cached.end_frame.max(cached.start_frame) / FRAME_BUCKET_SIZE;
+            let count = (i64::from(last_bucket) - i64::from(first_bucket) + 1) as usize;
+            if count > MAX_BUCKET_ENTRIES - bucket_entries {
+                unindexed_clips.push(cached_index);
+                continue;
+            }
+            bucket_entries += count;
             for bucket in first_bucket..=last_bucket {
                 time_buckets.entry(bucket).or_default().push(cached_index);
             }
@@ -1242,9 +1272,10 @@ impl BakePlan {
             scene_height,
             scene_id,
             clips,
-            scene_durations,
+            scene_timing,
             layer_settings,
             time_buckets,
+            unindexed_clips,
             effect_count,
         }
     }
@@ -1255,22 +1286,25 @@ impl BakePlan {
         let first_bucket = range_start / FRAME_BUCKET_SIZE;
         let last_bucket = range_end / FRAME_BUCKET_SIZE;
         let mut seen = HashSet::new();
-        let mut selected = Vec::new();
+        let mut candidates = self.unindexed_clips.clone();
         for bucket in first_bucket..=last_bucket {
-            let Some(indices) = self.time_buckets.get(&bucket) else {
+            if let Some(indices) = self.time_buckets.get(&bucket) {
+                candidates.extend(indices);
+            }
+        }
+        // Preserve document order even when some clips use the fallback.
+        candidates.sort_unstable();
+        let mut selected = Vec::new();
+        for index in candidates {
+            let clip = &self.clips[index];
+            if !seen.insert(clip.clip_id) {
                 continue;
-            };
-            for &index in indices {
-                let clip = &self.clips[index];
-                if !seen.insert(clip.clip_id) {
-                    continue;
-                }
-                // Exclusive end, matching the render loop: a clip that ends on
-                // this frame is no longer drawn, so a reference must not read
-                // its value instead of the next layer's.
-                if clip.start_frame <= range_end && clip.end_frame > range_start {
-                    selected.push(index);
-                }
+            }
+            // Exclusive end, matching the render loop: a clip that ends on
+            // this frame is no longer drawn, so a reference must not read
+            // its value instead of the next layer's.
+            if clip.start_frame <= range_end && clip.end_frame > range_start {
+                selected.push(index);
             }
         }
         selected
@@ -1541,7 +1575,8 @@ impl BakePlan {
                     &clip.clip_type,
                     relative_frame,
                     &evaluated_effects,
-                    &self.scene_durations,
+                    self.fps,
+                    &self.scene_timing,
                 );
                 frame_layers.push(RenderLayerPlan {
                     clip_id: clip.clip_id,
@@ -2217,7 +2252,8 @@ fn nested_scene_render_plan(
     clip_type: &str,
     relative_frame: i32,
     effects: &[EvaluatedEffect],
-    scene_durations: &HashMap<i32, i32>,
+    parent_fps: f64,
+    scene_timing: &HashMap<i32, (i32, f64)>,
 ) -> Option<NestedSceneRenderPlan> {
     if clip_type != "scene" {
         return None;
@@ -2225,13 +2261,23 @@ fn nested_scene_render_plan(
     let effect = effects.iter().find(|effect| effect.id == "scene")?;
     let value = |name| effect.params.get(name);
     let target_scene_id = value_as_f64(value("targetSceneId"), -1.0).round() as i32;
-    let duration = *scene_durations.get(&target_scene_id)?;
+    let (duration, target_fps) = *scene_timing.get(&target_scene_id)?;
     let speed = value_as_f64(value("speed"), 1.0);
     let offset = value_as_f64(value("offset"), 0.0).floor();
-    let target_frame = (f64::from(relative_frame) * speed).floor() + offset;
+    let fps_ratio =
+        if parent_fps.is_finite() && parent_fps > 0.0 && target_fps.is_finite() && target_fps > 0.0
+        {
+            target_fps / parent_fps
+        } else {
+            1.0
+        };
+    let target_position = f64::from(relative_frame) * speed * fps_ratio + offset;
+    let target_frame = target_position.floor();
     Some(NestedSceneRenderPlan {
         target_scene_id,
         target_frame: target_frame.clamp(0.0, f64::from(duration.saturating_sub(1).max(0))) as i32,
+        target_position,
+        speed,
         opacity: value_as_f64(value("opacity"), 1.0).clamp(0.0, 1.0) as f32,
     })
 }
@@ -2322,6 +2368,7 @@ fn audio_layer_plan(
 ) -> AudioLayerPlan {
     AudioLayerPlan {
         clip_id: output.clip_id,
+        nested_timing: None,
         source_path,
         start_frame: output.start_frame,
         duration_frames: output.duration_frames,

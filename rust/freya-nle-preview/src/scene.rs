@@ -3,7 +3,8 @@ use crate::decode::{
     upper_object_mask_scene,
 };
 use freya_nle_core::api::{
-    AudioLayerPlan, EvaluatedEffect, MediaKind, ProjectDocument, RenderLayerPlan, SceneRenderPlan,
+    AudioLayerPlan, EvaluatedEffect, MediaKind, NestedAudioTiming, ProjectDocument,
+    RenderLayerPlan, SceneRenderPlan,
 };
 use freya_nle_render::{
     BlendMode, LayerCrop, LayerTransform, NativeRenderDefinition, VisualEffect,
@@ -17,6 +18,12 @@ pub struct PlannedPreview {
     pub scene: PreviewScene,
     pub audio: Vec<AudioLayerPlan>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+struct SceneAudioClock {
+    frame: f64,
+    rate: f64,
 }
 
 pub struct PreviewPlanner {
@@ -107,7 +114,7 @@ impl PreviewPlanner {
         let mut stack = vec![scene_id];
         let mut warnings = Vec::new();
         let root_key = scene_instance_key(0, scene_id, scene_id);
-        let (scene, audio) = self.build_scene(
+        let scene = self.build_scene(
             document,
             scene_id,
             frame,
@@ -115,11 +122,168 @@ impl PreviewPlanner {
             &mut stack,
             &mut warnings,
         )?;
+        let audio = self.build_audio_segments(document, scene_id, frame, root_key, &mut warnings);
         Some(PlannedPreview {
             scene,
             audio,
             warnings,
         })
+    }
+
+    /// Split the output frame wherever an active scene advances to another
+    /// frame. Each interval has a stable set of clips and solo states.
+    fn build_audio_segments(
+        &mut self,
+        document: &ProjectDocument,
+        scene_id: i32,
+        frame: i32,
+        instance_key: u64,
+        warnings: &mut Vec<String>,
+    ) -> Vec<AudioLayerPlan> {
+        let Some(root_fps) = document
+            .scenes
+            .iter()
+            .find(|s| s.id == scene_id)
+            .map(|s| s.fps)
+            .filter(|fps| fps.is_finite() && *fps > 0.0)
+        else {
+            return Vec::new();
+        };
+        let mut result = Vec::new();
+        let mut start = 0.0;
+        for _ in 0..8192 {
+            if start >= 1.0 {
+                return result;
+            }
+            let mut end = 1.0;
+            let mut interval = Vec::new();
+            self.collect_audio_interval(
+                document,
+                scene_id,
+                instance_key,
+                SceneAudioClock {
+                    frame: f64::from(frame) + start,
+                    rate: 1.0,
+                },
+                root_fps,
+                start,
+                &mut end,
+                &mut vec![scene_id],
+                &mut interval,
+            );
+            // Rounding at a scene boundary must not trap planning in one interval.
+            if end <= start + 1e-12 {
+                end = (start + 1e-12).min(1.0);
+            }
+            for mut plan in interval {
+                if let Some(timing) = &mut plan.nested_timing {
+                    timing.start_fraction = start;
+                    timing.end_fraction = end;
+                }
+                result.push(plan);
+            }
+            start = end;
+        }
+        if start < 1.0 {
+            self.warn_once(
+                warnings,
+                "audio frame exceeds the 8192-interval nesting limit; remaining audio is silent"
+                    .to_string(),
+            );
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_audio_interval(
+        &mut self,
+        document: &ProjectDocument,
+        scene_id: i32,
+        instance_key: u64,
+        clock: SceneAudioClock,
+        root_fps: f64,
+        start: f64,
+        end: &mut f64,
+        stack: &mut Vec<i32>,
+        audio: &mut Vec<AudioLayerPlan>,
+    ) {
+        let Some(scene) = document.scenes.iter().find(|scene| scene.id == scene_id) else {
+            return;
+        };
+        let fps = scene.fps;
+        if !fps.is_finite()
+            || fps <= 0.0
+            || !clock.frame.is_finite()
+            || !clock.rate.is_finite()
+            || clock.rate <= 0.0
+        {
+            return;
+        }
+        let frames_per_output_frame = clock.rate * fps / root_fps;
+        if !frames_per_output_frame.is_finite() || frames_per_output_frame <= 0.0 {
+            return;
+        }
+        if clock.frame < 0.0 {
+            *end = (*end).min(start + -clock.frame / frames_per_output_frame);
+            return;
+        }
+        if clock.frame >= f64::from(scene.duration) {
+            return;
+        }
+        let current = clock.frame.floor();
+        *end = (*end).min(start + (current + 1.0 - clock.frame) / frames_per_output_frame);
+        let Some(plan) = self.plans.get_mut(&scene_id) else {
+            return;
+        };
+        let evaluated = plan.evaluate(current as i32);
+        for mut layer in evaluated.audio {
+            layer.nested_timing = Some(NestedAudioTiming {
+                instance_key,
+                frame: clock.frame,
+                fps,
+                rate: clock.rate,
+                start_fraction: start,
+                end_fraction: 1.0,
+            });
+            audio.push(layer);
+        }
+        for layer in evaluated.layers {
+            if scene.hidden_layers.contains(&layer.timeline_layer) {
+                continue;
+            }
+            let Some(nested) = layer.nested_scene else {
+                continue;
+            };
+            if stack.len() >= 32 || stack.contains(&nested.target_scene_id) {
+                continue;
+            }
+            let Some(child) = document
+                .scenes
+                .iter()
+                .find(|scene| scene.id == nested.target_scene_id)
+            else {
+                continue;
+            };
+            let child_frame =
+                nested.target_position + (clock.frame - current) * nested.speed * child.fps / fps;
+            let child_clock = SceneAudioClock {
+                frame: child_frame,
+                rate: clock.rate * nested.speed,
+            };
+            stack.push(nested.target_scene_id);
+            self.collect_audio_interval(
+                document,
+                nested.target_scene_id,
+                scene_instance_key(instance_key, layer.clip_id, nested.target_scene_id),
+                child_clock,
+                root_fps,
+                start,
+                end,
+                stack,
+                audio,
+            );
+            stack.pop();
+        }
     }
 
     /// Adds a diagnostic the first time this planner meets the problem.
@@ -137,7 +301,7 @@ impl PreviewPlanner {
         instance_key: u64,
         stack: &mut Vec<i32>,
         warnings: &mut Vec<String>,
-    ) -> Option<(PreviewScene, Vec<AudioLayerPlan>)> {
+    ) -> Option<PreviewScene> {
         let (width, height, fps, hidden_layers) = document
             .scenes
             .iter()
@@ -152,7 +316,6 @@ impl PreviewPlanner {
             })?;
         let frame_plan = self.plans.get_mut(&scene_id)?.evaluate(frame);
         let camera = frame_plan.camera;
-        let audio = frame_plan.audio;
         let mut planned_layers = frame_plan.layers;
         planned_layers.sort_by_key(|layer| layer.timeline_layer);
         planned_layers.retain(|layer| !hidden_layers.contains(&layer.timeline_layer));
@@ -275,16 +438,14 @@ impl PreviewPlanner {
                 stack.push(nested.target_scene_id);
                 let nested_key =
                     scene_instance_key(instance_key, layer.clip_id, nested.target_scene_id);
-                let nested_scene = self
-                    .build_scene(
-                        document,
-                        nested.target_scene_id,
-                        nested.target_frame,
-                        nested_key,
-                        stack,
-                        warnings,
-                    )
-                    .map(|(scene, _)| scene);
+                let nested_scene = self.build_scene(
+                    document,
+                    nested.target_scene_id,
+                    nested.target_frame,
+                    nested_key,
+                    stack,
+                    warnings,
+                );
                 stack.pop();
                 let Some(nested_scene) = nested_scene else {
                     self.warn_once(
@@ -364,17 +525,14 @@ impl PreviewPlanner {
                 effects,
             });
         }
-        Some((
-            PreviewScene {
-                instance_key,
-                width,
-                height,
-                camera,
-                opaque_background: false,
-                layers: sources,
-            },
-            audio,
-        ))
+        Some(PreviewScene {
+            instance_key,
+            width,
+            height,
+            camera,
+            opaque_background: false,
+            layers: sources,
+        })
     }
 }
 
@@ -1472,6 +1630,113 @@ mod tests {
                 _ => unreachable!("catalog id set is asserted above"),
             }
         }
+    }
+
+    #[test]
+    fn nested_audio_preserves_timebase_and_instance_identity() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 320, "height": 180, "fps": 60.0, "sampleRate": 48000},
+            "scenes": [
+                {"id": 1, "name": "Root", "fps": 60.0, "duration": 300},
+                {"id": 2, "name": "Child", "fps": 30.0, "duration": 90}
+            ],
+            "clips": [
+                {"id": 1, "sceneId": 1, "type": "scene", "start": 0, "duration": 120, "layer": 1,
+                 "effects": [{"id": "scene", "params": {"targetSceneId": 2, "speed": 1.5, "offset": 10}}]},
+                {"id": 2, "sceneId": 1, "type": "scene", "start": 0, "duration": 120, "layer": 2,
+                 "effects": [{"id": "scene", "params": {"targetSceneId": 2, "speed": 1.0, "offset": 20}}]},
+                {"id": 3, "sceneId": 2, "type": "audio", "start": 0, "duration": 90, "layer": 1,
+                 "effects": [{"id": "audio", "params": {"path": "voice.wav"}}]}
+            ]
+        }));
+        let mut planner = PreviewPlanner::new(&document, None);
+        let planned = planner.build(&document, 1, 40).unwrap();
+        assert_eq!(planned.audio.len(), 2);
+        let first = planned.audio[0].nested_timing.unwrap();
+        let second = planned.audio[1].nested_timing.unwrap();
+        assert_ne!(first.instance_key, second.instance_key);
+        assert_eq!((first.frame, first.fps, first.rate), (40.0, 30.0, 1.5));
+        assert_eq!((second.frame, second.fps, second.rate), (40.0, 30.0, 1.0));
+        let planned = planner.build(&document, 1, 119).unwrap();
+        assert_eq!(planned.audio.len(), 1, "past the child duration is silent");
+    }
+
+    #[test]
+    fn nested_audio_switches_clips_within_a_parent_frame() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 320, "height": 180, "fps": 60.0, "sampleRate": 48000},
+            "scenes": [
+                {"id": 1, "name": "Root", "fps": 60.0, "duration": 10},
+                {"id": 2, "name": "Child", "fps": 120.0, "duration": 10}
+            ],
+            "clips": [
+                {"id": 1, "sceneId": 1, "type": "scene", "start": 0, "duration": 10, "layer": 1,
+                 "effects": [{"id": "scene", "params": {"targetSceneId": 2}}]},
+                {"id": 2, "sceneId": 2, "type": "audio", "start": 0, "duration": 1, "layer": 1,
+                 "effects": [{"id": "audio", "params": {"path": "first.wav"}}]},
+                {"id": 3, "sceneId": 2, "type": "audio", "start": 1, "duration": 1, "layer": 1,
+                 "effects": [{"id": "audio", "params": {"path": "second.wav"}}]}
+            ]
+        }));
+        let planned = PreviewPlanner::new(&document, None)
+            .build(&document, 1, 0)
+            .unwrap();
+        assert_eq!(planned.audio.len(), 2);
+        assert_eq!(
+            planned
+                .audio
+                .iter()
+                .map(|plan| plan.clip_id)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        let first = planned.audio[0].nested_timing.unwrap();
+        let second = planned.audio[1].nested_timing.unwrap();
+        assert_eq!(
+            (first.start_fraction, first.end_fraction, first.frame),
+            (0.0, 0.5, 0.0)
+        );
+        assert_eq!(
+            (second.start_fraction, second.end_fraction, second.frame),
+            (0.5, 1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn nested_audio_composes_two_scene_rates_and_clips_child_end() {
+        let document = document(json!({
+            "version": 3,
+            "settings": {"width": 320, "height": 180, "fps": 60.0, "sampleRate": 48000},
+            "scenes": [
+                {"id": 1, "name": "Root", "fps": 60.0, "duration": 10},
+                {"id": 2, "name": "Middle", "fps": 30.0, "duration": 10},
+                {"id": 3, "name": "Leaf", "fps": 120.0, "duration": 1}
+            ],
+            "clips": [
+                {"id": 1, "sceneId": 1, "type": "scene", "start": 0, "duration": 10, "layer": 1,
+                 "effects": [{"id": "scene", "params": {"targetSceneId": 2, "speed": 2.0}}]},
+                {"id": 2, "sceneId": 2, "type": "scene", "start": 0, "duration": 10, "layer": 1,
+                 "effects": [{"id": "scene", "params": {"targetSceneId": 3, "speed": 0.5}}]},
+                {"id": 3, "sceneId": 3, "type": "audio", "start": 0, "duration": 1, "layer": 1,
+                 "effects": [{"id": "audio", "params": {"path": "leaf.wav"}}]}
+            ]
+        }));
+        let planned = PreviewPlanner::new(&document, None)
+            .build(&document, 1, 0)
+            .unwrap();
+        assert_eq!(planned.audio.len(), 1);
+        let timing = planned.audio[0].nested_timing.unwrap();
+        assert_eq!(
+            (
+                timing.fps,
+                timing.rate,
+                timing.start_fraction,
+                timing.end_fraction
+            ),
+            (120.0, 1.0, 0.0, 0.5)
+        );
     }
 
     #[test]

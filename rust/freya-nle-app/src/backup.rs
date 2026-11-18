@@ -5,6 +5,7 @@
 //! undone. Copies live under one directory per project, keyed by a hash of the
 //! canonical project path, and the newest `limit` entries are kept.
 
+use crate::file_io::read_bounded;
 use crate::project_io::{MAX_PROJECT_DOCUMENT_BYTES, write_atomic};
 use crate::recovery::iso_timestamp;
 #[cfg(not(test))]
@@ -29,6 +30,7 @@ const BACKUP_EXTENSION: &str = "freya";
 /// Records which project a backup directory belongs to, so the history can be
 /// browsed across projects. Older directories simply have no copy yet.
 const MANIFEST_NAME: &str = "project.json";
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 /// One saved version on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -494,12 +496,15 @@ fn write_manifest(directory: &Path, project_path: &Path) -> Result<(), String> {
             .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned()),
     };
     let bytes = serde_json::to_vec(&manifest).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err("backup manifest exceeds the size limit".to_owned());
+    }
     write_atomic(&directory.join(MANIFEST_NAME), &bytes)
         .map_err(|error| format!("{}: {error}", directory.display()))
 }
 
 fn read_manifest(directory: &Path) -> Option<ProjectManifest> {
-    let bytes = fs::read(directory.join(MANIFEST_NAME)).ok()?;
+    let bytes = read_bounded(&directory.join(MANIFEST_NAME), MAX_MANIFEST_BYTES).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -767,6 +772,23 @@ mod tests {
         let _ = fs::remove_dir_all(&outside);
         let _ = fs::remove_file(root.join(&key));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn oversized_manifest_is_ignored_without_affecting_backup_history() {
+        let root = test_root("oversized-manifest");
+        let store = BackupStore::with_root(root.clone());
+        let project = root.join("demo.freya");
+        store.record(&project, b"project", 5).unwrap();
+        let directory = store.checked_project_dir(&project).unwrap();
+        fs::write(
+            directory.join(MANIFEST_NAME),
+            vec![b'x'; MAX_MANIFEST_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(read_manifest(&directory).is_none());
+        assert_eq!(store.entries(&project).len(), 1);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -11,9 +11,7 @@ freya-nle-media = { path = "../freya-nle-media" }
 freya-nle-preview = { path = "../freya-nle-preview" }
 freya-nle-core = { path = "../freya-nle-core" }
 wgpu = { version = "29.0.1", default-features = false, features = ["std", "wgsl"] }
+tempfile = "3.27"
 
 [lints.rust]
 unsafe_code = "forbid"
-
-[dev-dependencies]
-tempfile = "3.27"

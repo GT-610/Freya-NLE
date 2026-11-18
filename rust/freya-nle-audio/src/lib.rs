@@ -8,7 +8,7 @@ use freya_nle_core::api::{
     StereoMixParameters, StereoMixTrack, mix_stereo_tracks, resample_stereo,
 };
 use freya_nle_media::AudioDecoder;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub use output::AudioOutput;
@@ -29,6 +29,8 @@ pub struct TimelineAudioSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineAudioBlock {
     pub timeline_frame: i32,
+    /// Position of this block's first sample in the output stream, which advances
+    /// at `sample_rate` regardless of the timeline's playback rate.
     pub start_sample: i64,
     pub sample_rate: u32,
     pub samples: Vec<f32>,
@@ -42,6 +44,22 @@ pub enum TimelineAudioError {
     InvalidTiming,
 }
 
+/// Upper bound for the number of source sample frames one source may decode for a
+/// single output block. At 48 kHz stereo this is about 22 seconds, 8 MiB of PCM.
+///
+/// A nested scene multiplies its speed into the rate of every enclosing scene and
+/// clip, so a deep or hand-edited scene graph can ask for an unbounded decode. The
+/// workspace builds with `panic = "abort"`, so such an allocation request would end
+/// the process instead of dropping one frame. The bound still leaves room for real
+/// documents: the editor caps clip speed at 400 % and scene speed at 4x per level,
+/// so a preview block only reaches it beyond roughly 1,000x.
+const MAX_DECODED_SOURCE_FRAMES: usize = 1_048_576;
+
+/// Source rates this close to unity are treated as unity, skipping resampling.
+/// The tolerance only absorbs floating-point noise from composing scene rates; the
+/// smallest speed the editor offers (1 %) is orders of magnitude larger.
+const UNITY_SOURCE_RATE_EPSILON: f64 = 1.0e-9;
+
 struct DecodedTrack {
     plan: AudioLayerPlan,
     samples: Vec<f32>,
@@ -51,7 +69,8 @@ struct DecodedTrack {
 #[derive(Default)]
 pub struct TimelineAudioMixer {
     decoders: HashMap<PathBuf, AudioDecoder>,
-    plugin_chains: HashMap<i32, AudioPluginChain>,
+    plugin_chains: HashMap<(Option<u64>, i32), AudioPluginChain>,
+    noted_rate_limits: HashSet<(Option<u64>, i32)>,
 }
 
 impl TimelineAudioMixer {
@@ -86,12 +105,18 @@ impl TimelineAudioMixer {
         timeline_rate: f64,
         sources: &[TimelineAudioSource],
     ) -> Result<TimelineAudioBlock, TimelineAudioError> {
-        let Some(start_sample) = cumulative_samples(timeline_frame, fps, sample_rate) else {
-            return Err(TimelineAudioError::InvalidTiming);
-        };
         if !timeline_rate.is_finite() || timeline_rate <= 0.0 {
             return Err(TimelineAudioError::InvalidTiming);
         }
+        // The block's length is measured on the timeline scaled by the playback
+        // rate, so its start must be scaled the same way. Otherwise consecutive
+        // frames are not contiguous in the output stream at any rate but 1x, and
+        // a stateful plugin chain sees a seek on every frame.
+        let Some(start_sample) =
+            cumulative_samples(timeline_frame, fps * timeline_rate, sample_rate)
+        else {
+            return Err(TimelineAudioError::InvalidTiming);
+        };
         self.mix_planned_frame(
             timeline_frame,
             fps,
@@ -116,15 +141,157 @@ impl TimelineAudioMixer {
         timeline_rate: f64,
         sources: &[TimelineAudioSource],
     ) -> Result<TimelineAudioBlock, TimelineAudioError> {
+        let mut boundaries = vec![0, output_frames];
+        for source in sources {
+            if let Some(timing) = source.plan.nested_timing {
+                for fraction in [timing.start_fraction, timing.end_fraction] {
+                    if fraction.is_finite() {
+                        boundaries.push(
+                            (fraction.clamp(0.0, 1.0) * output_frames as f64).round() as usize
+                        );
+                    }
+                }
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let mut samples = Vec::with_capacity(output_frames.saturating_mul(2));
+        let mut meters = Vec::new();
+        let mut errors = Vec::new();
+        for pair in boundaries.windows(2) {
+            let (start, end) = (pair[0], pair[1]);
+            if start == end {
+                continue;
+            }
+            let interval_sources = sources
+                .iter()
+                .filter_map(|source| {
+                    let Some(timing) = source.plan.nested_timing else {
+                        let mut source = source.clone();
+                        let offset = start as f64 / output_frames as f64 / fps;
+                        source.plan.source_start_time +=
+                            (offset * f64::from(source.plan.playback_speed)) as f32;
+                        source.plan.direct_time += offset as f32;
+                        return Some(source);
+                    };
+                    let first = (timing.start_fraction.clamp(0.0, 1.0) * output_frames as f64)
+                        .round() as usize;
+                    let last = (timing.end_fraction.clamp(0.0, 1.0) * output_frames as f64).round()
+                        as usize;
+                    if first > start || last < end {
+                        return None;
+                    }
+                    let mut source = source.clone();
+                    if let Some(timing) = &mut source.plan.nested_timing {
+                        let offset =
+                            (start as f64 / output_frames as f64 - timing.start_fraction).max(0.0);
+                        timing.frame += offset * timing.rate * timing.fps / fps;
+                    }
+                    Some(source)
+                })
+                .collect::<Vec<_>>();
+            let mixed = self.mix_segment(
+                timeline_frame,
+                fps,
+                sample_rate,
+                start_sample.saturating_add(start as i64),
+                end - start,
+                max_plugin_block_size,
+                timeline_rate,
+                &interval_sources,
+            )?;
+            samples.extend(mixed.samples);
+            for meter in mixed.meters {
+                let weight = (end - start) as f32 / output_frames as f32;
+                if let Some(existing) = meters
+                    .iter_mut()
+                    .find(|existing: &&mut StereoTrackMeter| existing.clip_id == meter.clip_id)
+                {
+                    existing.mixed |= meter.mixed;
+                    existing.peak_left = existing.peak_left.max(meter.peak_left);
+                    existing.peak_right = existing.peak_right.max(meter.peak_right);
+                    existing.rms_left += meter.rms_left * meter.rms_left * weight;
+                    existing.rms_right += meter.rms_right * meter.rms_right * weight;
+                } else {
+                    meters.push(StereoTrackMeter {
+                        rms_left: meter.rms_left * meter.rms_left * weight,
+                        rms_right: meter.rms_right * meter.rms_right * weight,
+                        ..meter
+                    });
+                }
+            }
+            errors.extend(mixed.errors);
+        }
+        for meter in &mut meters {
+            meter.rms_left = meter.rms_left.sqrt();
+            meter.rms_right = meter.rms_right.sqrt();
+        }
+        self.plugin_chains.retain(|key, _| {
+            sources.iter().any(|source| {
+                (
+                    source.plan.nested_timing.map(|timing| timing.instance_key),
+                    source.plan.clip_id,
+                ) == *key
+                    && !source.plan.plugins.is_empty()
+            })
+        });
+        self.noted_rate_limits.retain(|key| {
+            sources.iter().any(|source| {
+                (
+                    source.plan.nested_timing.map(|timing| timing.instance_key),
+                    source.plan.clip_id,
+                ) == *key
+            })
+        });
+        Ok(TimelineAudioBlock {
+            timeline_frame,
+            start_sample,
+            sample_rate,
+            samples,
+            meters,
+            errors,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mix_segment(
+        &mut self,
+        timeline_frame: i32,
+        fps: f64,
+        sample_rate: u32,
+        start_sample: i64,
+        output_frames: usize,
+        max_plugin_block_size: usize,
+        timeline_rate: f64,
+        sources: &[TimelineAudioSource],
+    ) -> Result<TimelineAudioBlock, TimelineAudioError> {
         let mut decoded_tracks = Vec::with_capacity(sources.len());
         let mut errors = Vec::new();
         for source in sources {
+            let key = (
+                source.plan.nested_timing.map(|timing| timing.instance_key),
+                source.plan.clip_id,
+            );
             let source_rate = playback_source_rate(&source.plan, timeline_rate);
-            let resample = (source_rate - 1.0).abs() > 0.01;
+            let (source_rate, limited) = bounded_source_rate(source_rate, output_frames);
+            if limited {
+                // A malformed document would otherwise request a multi-gigabyte
+                // decode for one frame; say so once instead of every frame.
+                if self.noted_rate_limits.insert(key) {
+                    errors.push(format!(
+                        "clip #{} ({}): playback rate is out of range; audio is limited to {source_rate:.2}x",
+                        source.plan.clip_id,
+                        source.path.display()
+                    ));
+                }
+            }
+            let resample = (source_rate - 1.0).abs() > UNITY_SOURCE_RATE_EPSILON;
             let source_frames = if resample {
-                ((output_frames as f64 * source_rate).ceil() as usize)
+                let frames = ((output_frames as f64 * source_rate).ceil() as usize)
                     .saturating_add(2)
-                    .max(1)
+                    .max(1);
+                debug_assert!(frames <= MAX_DECODED_SOURCE_FRAMES);
+                frames.min(MAX_DECODED_SOURCE_FRAMES)
             } else {
                 output_frames
             };
@@ -154,34 +321,29 @@ impl TimelineAudioMixer {
                     vec![0.0; output_frames.saturating_mul(2)]
                 }
             };
+            let plugin_key = (
+                source.plan.nested_timing.map(|timing| timing.instance_key),
+                source.plan.clip_id,
+            );
             if !source.plan.plugins.is_empty() {
-                self.plugin_chains
-                    .entry(source.plan.clip_id)
-                    .or_default()
-                    .process(
-                        &source.plan.plugins,
-                        AudioPluginProcessContext {
-                            timeline_frame,
-                            start_sample,
-                            sample_rate,
-                            max_block_size: max_plugin_block_size,
-                        },
-                        &mut samples,
-                        &mut errors,
-                    );
+                self.plugin_chains.entry(plugin_key).or_default().process(
+                    &source.plan.plugins,
+                    AudioPluginProcessContext {
+                        start_sample,
+                        sample_rate,
+                        max_block_size: max_plugin_block_size,
+                    },
+                    &mut samples,
+                    &mut errors,
+                );
             } else {
-                self.plugin_chains.remove(&source.plan.clip_id);
+                self.plugin_chains.remove(&plugin_key);
             }
             decoded_tracks.push(DecodedTrack {
                 plan: source.plan.clone(),
                 samples,
             });
         }
-        self.plugin_chains.retain(|clip_id, _| {
-            sources
-                .iter()
-                .any(|source| source.plan.clip_id == *clip_id && !source.plan.plugins.is_empty())
-        });
 
         let tracks = decoded_tracks
             .iter()
@@ -228,11 +390,37 @@ impl TimelineAudioMixer {
     }
 }
 
-fn playback_source_rate(plan: &AudioLayerPlan, timeline_rate: f64) -> f64 {
-    if plan.direct_mode {
-        timeline_rate
+/// Clamps a composed source rate so one output frame cannot request an unbounded
+/// decode. Returns the effective rate and whether it had to be limited.
+///
+/// A zero rate is a freeze frame and stays zero; negative and non-finite rates are
+/// unusable and fall back to unity so an affected clip still renders.
+fn bounded_source_rate(source_rate: f64, output_frames: usize) -> (f64, bool) {
+    if source_rate == 0.0 {
+        return (0.0, false);
+    }
+    if !source_rate.is_finite() || source_rate < 0.0 {
+        return (1.0, true);
+    }
+    if output_frames == 0 {
+        return (source_rate, false);
+    }
+    // The decode request adds two guard frames and rounds up, so leave room for both
+    // or the bounded rate could still ask for slightly more than the limit.
+    let ceiling = (MAX_DECODED_SOURCE_FRAMES.saturating_sub(4)) as f64 / output_frames as f64;
+    if source_rate > ceiling {
+        (ceiling, true)
     } else {
-        f64::from(plan.playback_speed) * timeline_rate
+        (source_rate, false)
+    }
+}
+
+fn playback_source_rate(plan: &AudioLayerPlan, timeline_rate: f64) -> f64 {
+    let nested_rate = plan.nested_timing.map_or(1.0, |timing| timing.rate);
+    if plan.direct_mode {
+        timeline_rate * nested_rate
+    } else {
+        f64::from(plan.playback_speed) * timeline_rate * nested_rate
     }
 }
 
@@ -246,16 +434,28 @@ fn cumulative_samples(frame: i32, fps: f64, sample_rate: u32) -> Option<i64> {
 
 fn source_time_seconds(plan: &AudioLayerPlan, timeline_frame: i32, fps: f64) -> f64 {
     if plan.direct_mode {
-        return f64::from(plan.direct_time);
+        let fractional_time = plan.nested_timing.map_or(0.0, |timing| {
+            (timing.frame - timing.frame.floor()) / timing.fps
+        });
+        return f64::from(plan.direct_time) + fractional_time;
     }
-    let relative_frames = timeline_frame.saturating_sub(plan.start_frame).max(0);
-    f64::from(plan.source_start_time)
-        + f64::from(relative_frames) / fps * f64::from(plan.playback_speed)
+    let (frame, fps) = plan
+        .nested_timing
+        .map_or((f64::from(timeline_frame), fps), |timing| {
+            (timing.frame, timing.fps)
+        });
+    let relative_frames = (frame - f64::from(plan.start_frame)).max(0.0);
+    f64::from(plan.source_start_time) + relative_frames / fps * f64::from(plan.playback_speed)
 }
 
 fn mix_parameters(plan: &AudioLayerPlan, timeline_frame: i32, fps: f64) -> StereoMixParameters {
+    let (frame, fps) = plan
+        .nested_timing
+        .map_or((f64::from(timeline_frame), fps), |timing| {
+            (timing.frame, timing.fps)
+        });
     StereoMixParameters {
-        relative_time: f64::from(timeline_frame.saturating_sub(plan.start_frame).max(0)) / fps,
+        relative_time: (frame - f64::from(plan.start_frame)).max(0.0) / fps,
         duration: f64::from(plan.duration_frames.max(0)) / fps,
         fade_in_seconds: plan.fade_in_seconds,
         fade_out_seconds: plan.fade_out_seconds,
@@ -276,6 +476,7 @@ mod tests {
     fn plan(clip_id: i32) -> AudioLayerPlan {
         AudioLayerPlan {
             clip_id,
+            nested_timing: None,
             source_path: Some("missing.wav".to_owned()),
             start_frame: 0,
             duration_frames: 120,
@@ -317,6 +518,121 @@ mod tests {
     }
 
     #[test]
+    fn nested_audio_uses_child_timebase_and_composed_rate() {
+        let mut plan = plan(1);
+        plan.start_frame = 15;
+        plan.duration_frames = 60;
+        plan.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 42,
+            frame: 37.5,
+            fps: 30.0,
+            rate: 1.5,
+            start_fraction: 0.0,
+            end_fraction: 1.0,
+        });
+        assert_eq!(source_time_seconds(&plan, 120, 60.0), 2.5);
+        assert_eq!(playback_source_rate(&plan, 2.0), 6.0);
+        let parameters = mix_parameters(&plan, 120, 60.0);
+        assert_eq!(parameters.relative_time, 0.75);
+        assert_eq!(parameters.duration, 2.0);
+        plan.direct_mode = true;
+        assert!((source_time_seconds(&plan, 120, 60.0) - (3.0 + 0.5 / 30.0)).abs() < 1e-10);
+        assert_eq!(playback_source_rate(&plan, 2.0), 3.0);
+    }
+
+    #[test]
+    fn non_unity_rates_keep_output_sample_positions_contiguous() {
+        // Preview at 2x asks for half as many samples per frame, so the next
+        // block must start where the previous one ended. When the start came from
+        // the unscaled frame position it advanced twice as fast as the audio, and
+        // the plugin chain treated every frame as a seek.
+        let (fps, sample_rate, rate) = (60.0, 48_000, 2.0);
+        let frames = 400; // 48_000 / (60 * 2)
+        let mut mixer = TimelineAudioMixer::default();
+        let first = mixer
+            .mix_frame_with_timeline_rate(
+                0,
+                fps,
+                sample_rate,
+                frames,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                rate,
+                &[],
+            )
+            .expect("first frame mixes");
+        let second = mixer
+            .mix_frame_with_timeline_rate(
+                1,
+                fps,
+                sample_rate,
+                frames,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                rate,
+                &[],
+            )
+            .expect("second frame mixes");
+        assert_eq!(first.start_sample, 0);
+        assert_eq!(
+            second.start_sample,
+            first.start_sample + frames as i64,
+            "the second frame must continue the output stream"
+        );
+
+        // Unity playback keeps the values it always had.
+        let unity = mixer
+            .mix_frame_with_timeline_rate(
+                1,
+                fps,
+                sample_rate,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                1.0,
+                &[],
+            )
+            .expect("unity frame mixes");
+        assert_eq!(unity.start_sample, 800);
+    }
+
+    #[test]
+    fn a_fractional_fps_export_stays_contiguous_from_a_nonzero_start() {
+        // The export worker sizes each block with `plan_export_audio_frame`, whose
+        // counts are the difference between two absolute sample positions. When it
+        // passed the export-relative index instead, the first block of an export
+        // starting at frame 1 covered 800..1599 while the next began at 1601, so a
+        // stateful plugin saw a seek on most frames.
+        let (fps_num, fps_den) = (60_000, 1_001);
+        let fps = f64::from(fps_num) / f64::from(fps_den);
+        let sample_rate = 48_000;
+        let start = 1;
+        let mut previous_end: Option<i64> = None;
+        let mut mixer = TimelineAudioMixer::default();
+        for frame in start..start + 12 {
+            let plan =
+                freya_nle_core::api::plan_export_audio_frame(frame, sample_rate, fps_num, fps_den)
+                    .expect("the export frame plans");
+            let block = mixer
+                .mix_frame_with_timeline_rate(
+                    frame,
+                    fps,
+                    sample_rate as u32,
+                    plan.samples_for_frame as usize,
+                    DEFAULT_PLUGIN_BLOCK_SIZE,
+                    1.0,
+                    &[],
+                )
+                .expect("the frame mixes");
+            if let Some(end) = previous_end {
+                assert_eq!(
+                    block.start_sample, end,
+                    "frame {frame} must continue the stream: {} != {end}",
+                    block.start_sample
+                );
+            }
+            previous_end = Some(block.start_sample + i64::from(plan.samples_for_frame));
+        }
+    }
+
+    #[test]
     fn export_sample_count_can_start_at_an_arbitrary_timeline_frame() {
         let fps = 60_000.0 / 1_001.0;
         let mut mixer = TimelineAudioMixer::default();
@@ -354,6 +670,312 @@ mod tests {
         assert_eq!(source_time_seconds(&plan, 30, 60.0), 2.0);
         plan.direct_mode = true;
         assert_eq!(source_time_seconds(&plan, 30, 60.0), 3.0);
+    }
+
+    #[test]
+    fn near_unity_speeds_still_resample() {
+        // AviUtl's speed control is a percentage, so 101 % arrives as 1.01 and lands
+        // within a hair of unity. Treating it as unity would silently ignore the
+        // speed, so even a 1 % change must take the resampling path.
+        let mut plan_a = plan(1);
+        plan_a.playback_speed = 1.01;
+        let rate = playback_source_rate(&plan_a, 1.0);
+        assert!(
+            (rate - 1.0).abs() > UNITY_SOURCE_RATE_EPSILON,
+            "a 1 % speed change must resample, got rate {rate}"
+        );
+        // Only floating-point noise from composing scene rates skips resampling.
+        let noisy = 1.0 + UNITY_SOURCE_RATE_EPSILON / 4.0;
+        assert!((noisy - 1.0).abs() <= UNITY_SOURCE_RATE_EPSILON);
+
+        let mut plan_b = plan(2);
+        plan_b.playback_speed = 0.99;
+        assert!((playback_source_rate(&plan_b, 1.0) - 1.0).abs() > UNITY_SOURCE_RATE_EPSILON);
+    }
+
+    #[test]
+    fn extreme_composed_rates_are_bounded_before_decoding() {
+        // Three nested levels at the editor's maximum scene speed, the maximum clip
+        // speed, and the maximum preview rate compose to a real but large rate.
+        let mut plan_a = plan(1);
+        plan_a.playback_speed = 4.0;
+        plan_a.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 3,
+            frame: 0.0,
+            fps: 60.0,
+            rate: 64.0,
+            start_fraction: 0.0,
+            end_fraction: 1.0,
+        });
+        let rate = playback_source_rate(&plan_a, 4.0);
+        assert!((rate - 1_024.0).abs() < 0.01, "composed rate: {rate}");
+        // A minute-long export block is where the composed rate stops being safe.
+        let output_frames = 60 * 48_000;
+        let (bounded, limited) = bounded_source_rate(rate, output_frames);
+        assert!(limited, "1,024x over a minute must be bounded");
+        assert!(bounded * output_frames as f64 <= MAX_DECODED_SOURCE_FRAMES as f64);
+
+        // A hand-edited document can compose to infinity, NaN, or a negative speed.
+        for impossible in [f64::INFINITY, f64::NAN, -2.0] {
+            let (bounded, limited) = bounded_source_rate(impossible, 800);
+            assert!(limited, "{impossible} must be reported as limited");
+            assert_eq!(bounded, 1.0, "{impossible} must fall back to unity");
+        }
+
+        // A freeze frame stays silent instead of being reported as out of range.
+        assert_eq!(bounded_source_rate(0.0, 800), (0.0, false));
+    }
+
+    #[test]
+    fn ordinary_rates_are_not_reported_as_limited() {
+        for rate in [0.01, 0.5, 1.0, 1.01, 4.0, 64.0] {
+            let (bounded, limited) = bounded_source_rate(rate, 800);
+            assert_eq!(bounded, rate);
+            assert!(!limited, "{rate} must not be limited");
+        }
+    }
+
+    /// Writes a mono 16-bit ramp over the first 1,000 samples, then silence, so a
+    /// speed change moves the value read at a fixed output position.
+    fn write_ramp_wav(path: &Path) -> u32 {
+        use std::io::Write;
+        const RAMP: u32 = 1_000;
+        let sample_count = 48_000_u32;
+        let bytes = sample_count * 2;
+        let mut file = std::fs::File::create(path).expect("ramp fixture creates");
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + bytes).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&48_000_u32.to_le_bytes()).unwrap();
+        file.write_all(&96_000_u32.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&bytes.to_le_bytes()).unwrap();
+        for index in 0..sample_count {
+            // A 1 in 1,000 rise keeps neighbouring samples distinct, so a 1 % speed
+            // change visibly shifts where the output lands on the ramp.
+            let value = if index < RAMP {
+                (f64::from(index) / f64::from(RAMP) * 24_000.0) as i16
+            } else {
+                0
+            };
+            file.write_all(&value.to_le_bytes()).unwrap();
+        }
+        sample_count
+    }
+
+    #[test]
+    fn a_one_percent_speed_change_moves_the_decoded_samples() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "freya-near-unity-{}-{nonce}.wav",
+            std::process::id()
+        ));
+        write_ramp_wav(&path);
+
+        let mix = |speed: f32| {
+            let mut layer = plan(11);
+            layer.source_start_time = 0.0;
+            layer.playback_speed = speed;
+            let source = TimelineAudioSource {
+                path: path.clone(),
+                plan: layer,
+            };
+            TimelineAudioMixer::default()
+                .mix_frame_with_sample_count_and_plugin_block_size(
+                    0,
+                    60.0,
+                    48_000,
+                    800,
+                    DEFAULT_PLUGIN_BLOCK_SIZE,
+                    &[source],
+                )
+                .expect("a valid frame mixes")
+        };
+
+        let nominal = mix(1.0);
+        let faster = mix(1.01);
+        let slower = mix(0.99);
+        assert!(nominal.errors.is_empty(), "{:?}", nominal.errors);
+        assert!(faster.errors.is_empty(), "{:?}", faster.errors);
+        assert!(slower.errors.is_empty(), "{:?}", slower.errors);
+
+        // Skipping resampling near unity would make all three mixes identical, which
+        // is what silently ignored AviUtl's 99 % and 101 % speeds. The ramp rises one
+        // step per source sample, so a 1 % speed change over 800 frames moves the
+        // landing point by eight steps.
+        let sample = |block: &TimelineAudioBlock| block.samples[block.samples.len() - 2];
+        let last_nominal = sample(&nominal);
+        let last_faster = sample(&faster);
+        let last_slower = sample(&slower);
+        assert!(
+            (last_faster - last_nominal).abs() > 1.0e-4,
+            "101 % must advance further through the source: {last_faster} vs {last_nominal}"
+        );
+        assert!(
+            (last_slower - last_nominal).abs() > 1.0e-4,
+            "99 % must advance less through the source: {last_slower} vs {last_nominal}"
+        );
+        assert!(
+            last_faster > last_nominal && last_nominal > last_slower,
+            "a ramp must stay monotonic in speed: {last_faster} > {last_nominal} > {last_slower}"
+        );
+
+        std::fs::remove_file(&path).expect("ramp fixture removes");
+    }
+
+    #[test]
+    fn a_limited_rate_still_mixes_and_reports_once() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "freya-limited-rate-{}-{nonce}.wav",
+            std::process::id()
+        ));
+        write_ramp_wav(&path);
+
+        let mut layer = plan(12);
+        layer.source_start_time = 0.0;
+        // A hand-edited document can nest scenes until the composed rate is absurd.
+        layer.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 5,
+            frame: 0.0,
+            fps: 60.0,
+            rate: 1.0e9,
+            start_fraction: 0.0,
+            end_fraction: 1.0,
+        });
+        let source = TimelineAudioSource {
+            path: path.clone(),
+            plan: layer,
+        };
+
+        let mut mixer = TimelineAudioMixer::default();
+        let first = mixer
+            .mix_frame_with_sample_count_and_plugin_block_size(
+                0,
+                60.0,
+                48_000,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                std::slice::from_ref(&source),
+            )
+            .expect("the frame still mixes at a bounded rate");
+        assert_eq!(first.samples.len(), 1_600);
+        assert!(
+            first
+                .errors
+                .iter()
+                .any(|error| error.contains("out of range")),
+            "a limited rate must be reported: {:?}",
+            first.errors
+        );
+
+        // The diagnostic is a one-off; repeating it every frame would flood the log.
+        let second = mixer
+            .mix_frame_with_sample_count_and_plugin_block_size(
+                1,
+                60.0,
+                48_000,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                &[source],
+            )
+            .expect("the next frame still mixes");
+        assert_eq!(second.samples.len(), 1_600);
+        assert!(
+            second.errors.is_empty(),
+            "the rate warning must not repeat: {:?}",
+            second.errors
+        );
+
+        // Windows keeps the decoder's handle on the file, and refuses to delete a
+        // file that is still open, so the mixer has to go first.
+        drop(mixer);
+        std::fs::remove_file(&path).expect("ramp fixture removes");
+    }
+
+    #[test]
+    fn solo_only_silences_other_tracks_during_its_segment() {
+        use std::io::Write;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("freya-segment-{}-{nonce}.wav", std::process::id()));
+        let mut file = std::fs::File::create(&path).unwrap();
+        let sample_count = 4800_u32;
+        let bytes = sample_count * 2;
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + bytes).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&48000_u32.to_le_bytes()).unwrap();
+        file.write_all(&96000_u32.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&bytes.to_le_bytes()).unwrap();
+        for _ in 0..sample_count {
+            file.write_all(&8192_i16.to_le_bytes()).unwrap();
+        }
+        drop(file);
+        let mut base = plan(1);
+        base.source_start_time = 0.0;
+        base.playback_speed = 1.0;
+        let mut solo = base.clone();
+        solo.clip_id = 2;
+        solo.solo = true;
+        solo.volume = 0.5;
+        solo.nested_timing = Some(freya_nle_core::api::NestedAudioTiming {
+            instance_key: 7,
+            frame: 1.0,
+            fps: 120.0,
+            rate: 1.0,
+            start_fraction: 0.5,
+            end_fraction: 1.0,
+        });
+        let sources = [
+            TimelineAudioSource {
+                path: path.clone(),
+                plan: base,
+            },
+            TimelineAudioSource {
+                path: path.clone(),
+                plan: solo,
+            },
+        ];
+        let block = TimelineAudioMixer::default()
+            .mix_frame_with_sample_count_and_plugin_block_size(
+                0,
+                60.0,
+                48000,
+                800,
+                DEFAULT_PLUGIN_BLOCK_SIZE,
+                &sources,
+            )
+            .unwrap();
+        assert!(block.errors.is_empty(), "{:?}", block.errors);
+        let first = block.samples[200];
+        let second = block.samples[1200];
+        assert!(first > 0.1, "first interval: {first}");
+        assert!(
+            (second / first - 0.5).abs() < 0.02,
+            "first: {first}, second: {second}"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
