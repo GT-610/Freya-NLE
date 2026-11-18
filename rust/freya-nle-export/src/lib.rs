@@ -657,7 +657,7 @@ fn run_video_export(
 #[allow(clippy::too_many_arguments)]
 fn encode_video_frames(
     plan: &VideoExportPlan,
-    fps: f64,
+    job_fps: f64,
     max_plugin_block_size: usize,
     progress_interval: i32,
     config: &VideoEncoderConfig,
@@ -665,6 +665,11 @@ fn encode_video_frames(
     commands: &Receiver<WorkerCommand>,
     events: &Sender<WorkerEvent>,
 ) -> Result<String, String> {
+    // The encoder is configured with the integer rational, so the audio blocks
+    // must be placed on that same clock. A rounded job rate such as 29.97 is a
+    // hair faster than 30000/1001, which moves a block's start by one sample
+    // against the planner's length every few frames.
+    let fps = audio_frame_rate(job_fps, config);
     let mut mixer = TimelineAudioMixer::default();
     let mut next_frame = plan.start_frame;
     let timer = Instant::now();
@@ -805,6 +810,21 @@ fn run_image_sequence_export(
                 next_frame += 1;
             }
         }
+    }
+}
+
+/// Frame rate the audio side must use for a video export.
+///
+/// `fps_rational` rounds the job's rate into the integer pair the encoder takes,
+/// and both numbers then describe the same nominal rate slightly differently. The
+/// encoder and the audio clock have to agree, so the rational wins; `job_fps` is
+/// only a fallback for a configuration that cannot express one.
+fn audio_frame_rate(job_fps: f64, config: &VideoEncoderConfig) -> f64 {
+    let rational = f64::from(config.fps_num) / f64::from(config.fps_den);
+    if rational.is_finite() && rational > 0.0 {
+        rational
+    } else {
+        job_fps
     }
 }
 
@@ -1002,6 +1022,64 @@ mod tests {
             export_frame_samples(0, &config).expect("frame zero plans"),
             800
         );
+    }
+
+    #[test]
+    fn the_audio_clock_uses_the_encoder_rational() {
+        // `build_job` keeps 29.97 in the job and hands 30000/1001 to the encoder.
+        // Mixing at the job's rounded rate moved block starts off the planner's
+        // lengths: at frame 128 the block ran to 206607 while frame 129 began at
+        // 206606, which the plugin chain reads as a seek.
+        let config = VideoEncoderConfig {
+            width: 64,
+            height: 64,
+            fps_num: 30_000,
+            fps_den: 1_001,
+            bitrate: 500_000,
+            crf: Some(28),
+            gop_size: None,
+            codec_name: "libx264".to_owned(),
+            audio_codec_name: "aac".to_owned(),
+            audio_bitrate: 96_000,
+            sample_rate: 48_000,
+            output_path: PathBuf::from("unused.mp4"),
+            preset: "ultrafast".to_owned(),
+            profile: String::new(),
+        };
+        let fps = audio_frame_rate(29.97, &config);
+        assert_eq!(
+            fps,
+            30_000.0 / 1_001.0,
+            "the encoder's rational is the clock both sides must share"
+        );
+        assert!(
+            (fps - 29.97).abs() > 0.0,
+            "the rounded job rate is a different number, which is the trap"
+        );
+
+        let mut mixer = freya_nle_audio::TimelineAudioMixer::default();
+        let mut previous_end: Option<i64> = None;
+        for frame in 128..131 {
+            let samples = export_frame_samples(frame, &config).expect("the frame plans");
+            let block = mixer
+                .mix_frame_with_timeline_rate(
+                    frame,
+                    fps,
+                    config.sample_rate,
+                    samples as usize,
+                    1_024,
+                    1.0,
+                    &[],
+                )
+                .expect("the frame mixes");
+            if let Some(end) = previous_end {
+                assert_eq!(
+                    block.start_sample, end,
+                    "frame {frame} must continue the stream at 29.97 fps"
+                );
+            }
+            previous_end = Some(block.start_sample + i64::from(samples));
+        }
     }
 
     #[test]
