@@ -436,9 +436,10 @@ fn preserve_surviving_generations(
         {
             continue;
         }
-        // Only a real file counts as already recorded; anything else at that
-        // path must fail loudly rather than look like preserved provenance.
-        if generation_origin_path(root, &name).is_file() {
+        // A sidecar counts as already recorded only when it parses. Anything
+        // else — a corrupt file, a directory — is rewritten, so an unusable
+        // sidecar cannot pass for provenance that is not there.
+        if read_generation_origin(root, &name).is_some() {
             continue;
         }
         write_generation_origin(
@@ -600,7 +601,11 @@ fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Res
             // which outlives its stale metadata when its own timestamp is newer.
             if preserve_surviving_generations(root, &recovery.id, None).is_err() {
                 // Without the sidecar the snapshot would lose its project
-                // directory; leave the metadata for the next run instead.
+                // directory; leave the metadata for the next run instead, and
+                // keep its snapshot so the retained entry stays usable.
+                if let Some(snapshot_path) = recovery.snapshot_path {
+                    referenced_snapshots.insert(snapshot_path);
+                }
                 continue;
             }
             match fs::remove_file(&metadata_path) {
@@ -918,6 +923,62 @@ mod tests {
         assert_eq!(
             entries[0].original_project_url, "/tmp/original.aviqtl",
             "the surviving snapshot keeps its project directory"
+        );
+        fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    fn a_corrupt_sidecar_is_rewritten_before_the_metadata_goes() {
+        // A sidecar that does not parse holds nothing, so treating it as recorded
+        // would leave the surviving generation without its project directory.
+        let root = test_root("corrupt-sidecar");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let generated = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&generated, b"newer generation").unwrap();
+        let name = generated.file_name().unwrap().to_str().unwrap().to_owned();
+        fs::write(generation_origin_path(&root, &name), b"{ not json").unwrap();
+
+        remove_recovery(&root, &id).expect("the recovery is discarded");
+
+        let entries = scan_recoveries(&root);
+        let orphan = entries
+            .iter()
+            .find(|entry| entry.id == name)
+            .expect("the surviving generation is listed");
+        assert_eq!(
+            orphan.original_project_url, "/tmp/original.aviqtl",
+            "the unusable sidecar must be replaced, not trusted"
+        );
+        fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_keeps_the_snapshot_of_metadata_it_could_not_replace() {
+        // When the sidecar cannot be written the metadata is retained, so its
+        // snapshot must survive the aging pass or the retained entry is unusable.
+        let root = test_root("cleanup-retains-snapshot");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let current = root.join(read_current_snapshot_name(&root, &id).unwrap());
+        let metadata = root.join(format!("{id}.json"));
+        let old_time = SystemTime::now() - DEFAULT_MAXIMUM_AGE - Duration::from_secs(60);
+        for path in [&metadata, &current] {
+            aged_fixture(path)
+                .set_times(fs::FileTimes::new().set_modified(old_time))
+                .unwrap();
+        }
+        let generated = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&generated, b"fresh generation").unwrap();
+        block_generation_origin(&root, generated.file_name().unwrap().to_str().unwrap());
+
+        cleanup_stale(&root, SystemTime::now(), DEFAULT_MAXIMUM_AGE).expect("cleanup runs");
+
+        assert!(metadata.exists(), "the metadata is kept for the next run");
+        assert!(
+            current.exists(),
+            "the retained entry's snapshot must not be aged away"
         );
         fs::remove_dir_all(root).expect("test recovery root removes");
     }
