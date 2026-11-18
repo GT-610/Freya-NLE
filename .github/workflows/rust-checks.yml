@@ -31,8 +31,12 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman -Syu --noconfirm archlinux-keyring
+          # `fontconfig` and a face are needed because the window-event tests
+          # create real Slint windows: without any installed font, fontique
+          # answers `NoMatch` and the window cannot be built.
           pacman -S --needed --noconfirm \
             alsa-lib base-devel clang python pkgconf ffmpeg mesa vulkan-devel \
+            fontconfig ttf-dejavu \
             libx11 libxcursor libxi libxrandr libxkbcommon wayland wayland-protocols
       - name: Validate build helpers
         run: python -m unittest tests.test_build_version tests.test_logging_hygiene tests.test_release_contents
