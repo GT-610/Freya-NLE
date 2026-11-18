@@ -295,11 +295,13 @@ fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
                 "snapshot is referenced by recovery metadata",
             ));
         }
-        return match fs::remove_file(root.join(id)) {
+        let result = match fs::remove_file(root.join(id)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         };
+        remove_generation_origin(root, id);
+        return result;
     }
     if !recovery_id_is_valid(id) {
         return Err(io::Error::new(
@@ -307,18 +309,131 @@ fn remove_recovery(root: &Path, id: &str) -> io::Result<()> {
             "invalid recovery identifier",
         ));
     }
-    if let Some(snapshot) = read_current_snapshot_name(root, id) {
-        match fs::remove_file(root.join(snapshot)) {
+    let current = read_current_snapshot_name(root, id);
+    // Newer unreferenced generations outlive this metadata, so record where the
+    // project came from before the metadata that holds that answer is deleted.
+    preserve_surviving_generations(root, id, current.as_deref());
+    if let Some(snapshot) = current {
+        match fs::remove_file(root.join(&snapshot)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
+        remove_generation_origin(root, &snapshot);
     }
     let metadata = root.join(format!("{id}.json"));
     match fs::remove_file(metadata) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
+    }
+}
+
+/// Where a surviving generation's provenance is kept once its owner metadata goes.
+///
+/// Discarding a recovery removes `<id>.json` but keeps newer unreferenced
+/// generations, which would then lose the original project URL the snapshot's
+/// relative media paths resolve against. The sidecar records it next to the
+/// snapshot. The extension is deliberately not `.json` and not a snapshot name,
+/// so both scans ignore it as an entry of its own.
+const GENERATION_ORIGIN_EXTENSION: &str = "origin";
+
+fn generation_origin_path(root: &Path, snapshot_file: &str) -> PathBuf {
+    root.join(format!("{snapshot_file}.{GENERATION_ORIGIN_EXTENSION}"))
+}
+
+fn write_generation_origin(
+    root: &Path,
+    snapshot_file: &str,
+    original_project_url: &str,
+    display_name: &str,
+) -> io::Result<()> {
+    if recovery_id_from_snapshot_name(snapshot_file).is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid recovery snapshot name",
+        ));
+    }
+    let document = serde_json::json!({
+        "version": 1,
+        "originalProjectUrl": original_project_url,
+        "displayName": display_name,
+    });
+    let bytes = serde_json::to_vec(&document)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if bytes.len() as u64 > MAX_RECOVERY_METADATA_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "recovery origin exceeds the size limit",
+        ));
+    }
+    write_atomic(&generation_origin_path(root, snapshot_file), &bytes)
+}
+
+/// Reads the provenance kept for one surviving generation, if any.
+fn read_generation_origin(root: &Path, snapshot_file: &str) -> Option<(String, String)> {
+    // Only a name this module wrote can address a sidecar.
+    recovery_id_from_snapshot_name(snapshot_file)?;
+    let bytes = read_bounded(
+        &generation_origin_path(root, snapshot_file),
+        MAX_RECOVERY_METADATA_BYTES,
+    )
+    .ok()?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let object = document.as_object()?;
+    let url = object
+        .get("originalProjectUrl")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let name = object
+        .get("displayName")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Some((url, name))
+}
+
+fn remove_generation_origin(root: &Path, snapshot_file: &str) {
+    let _ = fs::remove_file(generation_origin_path(root, snapshot_file));
+}
+
+/// Records the owner's provenance on every generation that will outlive its
+/// metadata, so discarding one recovery does not orphan the others.
+fn preserve_surviving_generations(root: &Path, owner: &str, current: Option<&str>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let metadata = read_bounded(
+        &root.join(format!("{owner}.json")),
+        MAX_RECOVERY_METADATA_BYTES,
+    )
+    .ok()
+    .and_then(|bytes| inspect_recovery_metadata(owner, &bytes))
+    .filter(|inspection| inspection.status == "ok");
+    let Some(inspection) = metadata else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if Some(name.as_str()) == current
+            || recovery_id_from_snapshot_name(&name).as_deref() != Some(owner)
+        {
+            continue;
+        }
+        if generation_origin_path(root, &name).exists() {
+            continue;
+        }
+        // A failed write only means this generation keeps the old behaviour, so
+        // it must not stop the discard the user asked for.
+        let _ = write_generation_origin(
+            root,
+            &name,
+            &inspection.metadata.original_project_url,
+            &inspection.metadata.display_name,
+        );
     }
 }
 
@@ -349,15 +464,28 @@ fn scan_recoveries(root: &Path) -> Vec<RecoveryEntry> {
             let parent = recoveries
                 .iter()
                 .find(|entry| entry.id == owner && entry.is_valid());
-            let display_name = parent.map_or_else(
-                || "Interrupted recovery".to_owned(),
-                |entry| format!("{} (interrupted recovery)", entry.display_name),
-            );
+            // The owner metadata may be gone because the user discarded that
+            // recovery while this generation survived; its provenance was kept
+            // beside the snapshot, so the project's media directory still
+            // resolves.
+            let recorded = parent
+                .is_none()
+                .then(|| read_generation_origin(root, name))
+                .flatten();
+            let display_name = match (parent, &recorded) {
+                (Some(entry), _) => format!("{} (interrupted recovery)", entry.display_name),
+                (None, Some((_, name))) if !name.is_empty() => {
+                    format!("{name} (interrupted recovery)")
+                }
+                _ => "Interrupted recovery".to_owned(),
+            };
             recoveries.push(RecoveryEntry {
                 id: name.to_owned(),
                 snapshot_path: Some(path.clone()),
-                original_project_url: parent
-                    .map_or_else(String::new, |entry| entry.original_project_url.clone()),
+                original_project_url: parent.map_or_else(
+                    || recorded.map(|(url, _)| url).unwrap_or_default(),
+                    |entry| entry.original_project_url.clone(),
+                ),
                 display_name,
                 saved_at: metadata.modified().map(iso_timestamp).unwrap_or_default(),
                 error: None,
@@ -453,7 +581,17 @@ fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Res
         if is_stale {
             // A crash can leave a newer, unreferenced generation next to old
             // metadata. Remove only the metadata here; each snapshot is aged
-            // independently below.
+            // independently below, and the surviving generations keep the
+            // provenance the metadata used to hold.
+            preserve_surviving_generations(
+                root,
+                &recovery.id,
+                recovery
+                    .snapshot_path
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str()),
+            );
             match fs::remove_file(&metadata_path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -483,7 +621,8 @@ fn cleanup_stale(root: &Path, now: SystemTime, maximum_age: Duration) -> io::Res
             .and_then(|metadata| metadata.modified())
             .is_ok_and(|modified| modified < cutoff);
         if is_stale {
-            fs::remove_file(path)?;
+            fs::remove_file(&path)?;
+            remove_generation_origin(root, file_name);
         }
     }
     Ok(())
@@ -535,6 +674,19 @@ mod tests {
             std::process::id(),
             RECOVERY_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    /// Opens an existing fixture so its timestamp can be changed.
+    ///
+    /// `File::open` asks for read access only, and Windows refuses `SetFileTime`
+    /// through a read-only handle, so a fixture that is backdated needs write
+    /// access. Nothing is truncated, so the file keeps its contents.
+    fn aged_fixture(path: &Path) -> fs::File {
+        fs::OpenOptions::new()
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .unwrap()
     }
 
     fn recovery_write(id: String, scene_name: &str) -> RecoveryWrite {
@@ -649,6 +801,74 @@ mod tests {
         assert!(!old_snapshot.exists());
         assert_eq!(fs::read(&new_snapshot).unwrap(), b"new snapshot");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discarding_one_recovery_keeps_the_others_media_directory() {
+        // Discarding the current recovery deletes its metadata but keeps a newer
+        // generation that a crash left behind. Without the provenance recorded
+        // beside that snapshot, the next scan has no original project URL, and
+        // the recovered project cannot resolve its relative media paths.
+        let root = test_root("discard-keeps-origin");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let generated = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&generated, b"newer generation").unwrap();
+
+        remove_recovery(&root, &id).expect("the recovery is discarded");
+        assert!(!root.join(format!("{id}.json")).exists());
+        assert!(generated.exists(), "the newer generation survives");
+
+        let entries = scan_recoveries(&root);
+        let orphan = entries
+            .iter()
+            .find(|entry| entry.id.ends_with(".aviqtl"))
+            .expect("the surviving generation is listed");
+        assert_eq!(
+            orphan.original_project_url, "/tmp/original.aviqtl",
+            "the discard must not lose the project's directory"
+        );
+        assert!(
+            orphan.display_name.contains("Original"),
+            "the name survives too: {}",
+            orphan.display_name
+        );
+
+        // Discarding the generation cleans the sidecar up with it.
+        remove_recovery(&root, &orphan.id).expect("the generation is discarded");
+        assert!(
+            !generation_origin_path(&root, generated.file_name().unwrap().to_str().unwrap())
+                .exists()
+        );
+        assert!(scan_recoveries(&root).is_empty());
+        fs::remove_dir_all(root).expect("test recovery root removes");
+    }
+
+    #[test]
+    fn stale_cleanup_keeps_the_origin_of_a_surviving_generation() {
+        // The same loss happens when the metadata ages out rather than being
+        // discarded, so the cleanup path records the provenance as well.
+        let root = test_root("cleanup-keeps-origin");
+        let id = generate_recovery_id();
+        write_recovery(&root, &recovery_write(id.clone(), "Old")).unwrap();
+        let metadata = root.join(format!("{id}.json"));
+        let old_time = SystemTime::now() - DEFAULT_MAXIMUM_AGE - Duration::from_secs(60);
+        aged_fixture(&metadata)
+            .set_times(fs::FileTimes::new().set_modified(old_time))
+            .unwrap();
+        let generated = root.join(format!("{}-{}.aviqtl", id, generate_recovery_id()));
+        fs::write(&generated, b"newer generation").unwrap();
+
+        cleanup_stale(&root, SystemTime::now(), DEFAULT_MAXIMUM_AGE).expect("stale cleanup runs");
+        assert!(!metadata.exists());
+
+        let entries = scan_recoveries(&root);
+        let orphan = entries
+            .iter()
+            .find(|entry| entry.id.ends_with(".aviqtl"))
+            .expect("the surviving generation is listed");
+        assert_eq!(orphan.original_project_url, "/tmp/original.aviqtl");
+        fs::remove_dir_all(root).expect("test recovery root removes");
     }
 
     #[test]
