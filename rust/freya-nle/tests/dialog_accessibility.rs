@@ -217,3 +217,92 @@ fn backup_history_keeps_each_version_addressable() {
         )]
     );
 }
+
+#[test]
+fn the_discard_confirmation_swallows_clicks_meant_for_the_list() {
+    // Converting this overlay to a FocusScope once dropped the full-window
+    // barrier with the scrim, so a click outside the panel reached the list
+    // underneath and could recover or discard a snapshot the user never chose.
+    i_slint_backend_testing::init_no_event_loop();
+    let window = ProjectRecoveryWindow::new().unwrap();
+    let recovered = Rc::new(RefCell::new(Vec::<String>::new()));
+    let log = recovered.clone();
+    window.on_recover_project(move |id| log.borrow_mut().push(id.to_string()));
+    let discarded = Rc::new(RefCell::new(Vec::<String>::new()));
+    let log = discarded.clone();
+    window.on_discard_recovery(move |id| log.borrow_mut().push(id.to_string()));
+    let closes = Rc::new(Cell::new(0));
+    let count = closes.clone();
+    window.on_close_window(move || count.set(count.get() + 1));
+    window.show().unwrap();
+    window.set_recoveries(ModelRc::new(VecModel::from(vec![recovery_entry(
+        "first", "Holiday", true,
+    )])));
+    settle_focus();
+
+    let sweep = || {
+        for row in 0..12 {
+            for column in 0..20 {
+                let position = slint::LogicalPosition::new(
+                    8.0 + column as f32 * 32.0,
+                    8.0 + row as f32 * 32.0,
+                );
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerMoved { position });
+                window.window().dispatch_event(WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerReleased {
+                        position,
+                        button: slint::platform::PointerEventButton::Left,
+                    });
+            }
+        }
+    };
+
+    // The grid does reach the list while nothing covers it, otherwise the check
+    // below would pass for the wrong reason.
+    sweep();
+    let reaches_list =
+        !recovered.borrow().is_empty() || discarded.borrow().iter().any(|id| id == "first");
+    assert!(
+        reaches_list,
+        "the sweep must be able to reach the list: {:?} {:?}",
+        recovered.borrow(),
+        discarded.borrow()
+    );
+
+    recovered.borrow_mut().clear();
+    discarded.borrow_mut().clear();
+    closes.set(0);
+    window.set_discard_confirmation_visible(true);
+    settle_focus();
+    sweep();
+
+    assert!(
+        recovered.borrow().is_empty(),
+        "no click may recover behind the confirmation: {:?}",
+        recovered.borrow()
+    );
+    assert!(
+        !discarded.borrow().iter().any(|id| id == "first"),
+        "no click may discard a listed snapshot behind the confirmation: {:?}",
+        discarded.borrow()
+    );
+    assert_eq!(
+        closes.get(),
+        0,
+        "the confirmation must not close the window behind itself"
+    );
+    // The confirmation's own buttons still work: some clicks reached Yes, which
+    // reports an empty identifier because nothing was chosen to discard.
+    assert!(
+        discarded.borrow().iter().any(|id| id.is_empty()),
+        "the confirmation buttons must stay usable: {:?}",
+        discarded.borrow()
+    );
+}

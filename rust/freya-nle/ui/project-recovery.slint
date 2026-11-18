@@ -164,6 +164,19 @@ export component ProjectRecoveryWindow inherits Window {
             }
         }
 
+        // Dim the list and swallow clicks that miss the panel. Without this the
+        // pointer reaches the buttons behind the confirmation, so a click meant
+        // to dismiss it can discard or recover a snapshot instead.
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: AppTheme.scrim;
+            barrier := TouchArea {
+                width: 100%;
+                height: 100%;
+            }
+        }
+
         Rectangle {
             width: min(parent.width - 32px, 470px);
             height: 160px;
