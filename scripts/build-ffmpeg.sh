@@ -18,6 +18,9 @@
 #   --prefix   Install prefix (default: .build_tmp/ffmpeg/<triple>)
 #   --jobs     Parallel make jobs (default: number of CPUs)
 #
+#   Linux targets are native-only: each is built on a machine of that
+#   architecture rather than cross-compiled.
+#
 # The result is a dynamic FFmpeg (`libav*.so`/`.dylib`), which is what
 # `ffmpeg-sys-the-third` links unless its `static` feature is enabled. Dynamic is
 # deliberate: a user can swap in their own build, and the packaging step that
@@ -41,8 +44,8 @@ JOBS=""
 X264_PREFIX=""
 
 usage() {
-    # Lines 12-20 are the usage block; the paragraph after it is not help text.
-    sed -n '12,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Lines 12-23 are the usage block; the paragraph after it is not help text.
+    sed -n '12,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -57,6 +60,27 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$TARGET" ] || { echo "--target is required" >&2; usage 1; }
+
+# Linux builds are native-only: this recipe has no cross toolchain, so a
+# --target naming another architecture would compile with the host's compiler
+# and install the wrong binaries under the target's own prefix. Refused here,
+# before the install cache is consulted, because a cached prefix is exactly
+# how a wrong build would otherwise go unnoticed. macOS targets are exempt:
+# clang there crosses between Apple architectures by design.
+case "$TARGET" in
+    *-linux-*)
+        if [ "$(uname -s)" != "Linux" ]; then
+            echo "refusing to build $TARGET on $(uname -s): Linux builds are native-only" >&2
+            exit 1
+        fi
+        machine="$(uname -m)"
+        [ "$machine" = "arm64" ] && machine="aarch64"
+        if [ "${TARGET%%-*}" != "$machine" ]; then
+            echo "refusing to build $TARGET on $machine: Linux builds are native-only" >&2
+            exit 1
+        fi
+        ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${WORK_DIR:-$ROOT/.build_tmp/ffmpeg}"

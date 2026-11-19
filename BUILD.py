@@ -1119,18 +1119,29 @@ class AppImageBuilder(LinuxBuilderBase):
     def build_ffmpeg(self):
         """Build the pinned FFmpeg inside the same container as the application.
 
-        The prefix is named after the architecture so one checkout can hold both
-        a native and a cross-built FFmpeg: packaging picks the prefix up through
-        `FFMPEG_DIR`, and a shared directory would hand an arm64 image the
-        x86_64 libraries this project just built.
+        The prefix is named after the architecture so one checkout can hold
+        both a native and a cross-built FFmpeg: packaging picks the prefix up
+        through `FFMPEG_DIR`, and a shared directory would hand an arm64 image
+        the x86_64 libraries this project just built.
+
+        The container's prefix also sits apart from a host build's. The
+        checkout is shared through the mount, so a prefix named only after the
+        target would let the container reuse an FFmpeg the host compiled
+        against its own glibc — the script's reuse check only asks whether the
+        prefix holds a pkg-config file. `WORK_DIR` moves x264 and the source
+        checkout for the same reason; repeated container builds still reuse
+        everything under the container's own directory.
         """
         target = self.ffmpeg_target()
-        prefix = f"/src/.build_tmp/ffmpeg/{target}"
+        prefix = f"/src/.build_tmp/ffmpeg/container/{target}"
         self.run_cmd([
-            "bash", "/src/scripts/build-ffmpeg.sh",
-            "--target", target, "--prefix", prefix,
+            "bash", "-c",
+            "WORK_DIR=/src/.build_tmp/ffmpeg/container "
+            f"bash /src/scripts/build-ffmpeg.sh --target {target} --prefix {prefix}",
         ])
-        self.env["FFMPEG_DIR"] = str(self.config.temp_base / "ffmpeg" / target)
+        self.env["FFMPEG_DIR"] = str(
+            self.config.temp_base / "ffmpeg" / "container" / target
+        )
 
     def package(self):
         super().package()

@@ -661,6 +661,36 @@ class TestAppImage(unittest.TestCase):
             builder.install_dependencies()
             self.assertEqual(built, [True])
 
+    def test_the_container_ffmpeg_prefix_is_apart_from_a_host_build(self):
+        # The container shares the checkout through the mount, so a prefix named
+        # only after the target would let it reuse an FFmpeg the host compiled
+        # against its own glibc: the recipe's reuse check only asks whether the
+        # prefix holds a pkg-config file. The container gets its own prefix and
+        # `WORK_DIR`, so x264 and the source tree move with it while repeated
+        # container builds still reuse what the last one left there.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = config_for(Path(temporary), target="appimage")
+            config.use_container = True
+            builder = AppImageBuilder(config, Logger(lambda _m: None, lambda *_a: None))
+            commands = []
+            builder.run_cmd = lambda command, **kwargs: commands.append(command) or 0
+            builder.build_ffmpeg()
+            command = commands[-1][-1]
+            self.assertIn("WORK_DIR=/src/.build_tmp/ffmpeg/container", command)
+            self.assertIn(
+                "--prefix /src/.build_tmp/ffmpeg/container/x86_64-unknown-linux-gnu",
+                command,
+            )
+            # A host build of the same target keeps the host prefix to itself.
+            self.assertNotIn(
+                "--prefix /src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu", command
+            )
+            self.assertEqual(
+                builder.env["FFMPEG_DIR"],
+                str(Path(temporary) / ".build_tmp" / "ffmpeg" / "container"
+                    / "x86_64-unknown-linux-gnu"),
+            )
+
     def test_a_missing_ffmpeg_prefix_is_an_error_not_an_empty_image(self):
         with tempfile.TemporaryDirectory() as temporary:
             builder = self.builder(Path(temporary))
@@ -1453,6 +1483,14 @@ class TestReleasePipeline(unittest.TestCase):
         self.assertIn("scripts/verify-release-contents.py", arm)
         self.assertIn("linux arm64", arm)
         self.assertIn("needs.resolve.outputs.source_ref", arm)
+        # The reported version is a field, not a substring: a prefix match
+        # would accept 0.7.0-rc.10 for a 0.7.0-rc.1 release.
+        self.assertIn('!= "$VERSION"', arm)
+        # `uname -m` and `build-info.json` are labels; the ELF machine type is
+        # the payload's own statement, and a host that emulates both
+        # architectures would run the wrong one without this.
+        self.assertIn("readelf --file-header", arm)
+        self.assertIn("Machine:.*AArch64", arm)
 
     def test_pacman_runs_without_sudo_in_the_podman_container(self):
         # The pinned Arch image has no sudo, and the podman fallback executes as
@@ -1612,6 +1650,20 @@ class TestLinuxArm64Recipe(unittest.TestCase):
         self.assertNotIn("--host=x86_64-linux-gnu", self.script)
         self.assertIn('"--host=$TARGET"', self.script)
 
+    def test_linux_targets_are_native_only_and_rejected_before_the_cache(self):
+        # There is no cross toolchain here, so the wrong host would compile the
+        # host architecture into the target's prefix and only fail much later,
+        # at the link — or not at all, if a cached prefix then satisfied the
+        # reuse check. The refusal has to come first.
+        self.assertIn("Linux builds are native-only", self.script)
+        reuse = self.script.index("Reusing the FFmpeg install")
+        refusal = self.script.index("Linux builds are native-only")
+        self.assertLess(refusal, reuse)
+        # macOS keeps its cross build: clang there crosses Apple architectures
+        # by design, so the check may not reject the Darwin triples.
+        darwin = self.script.index("aarch64-apple-darwin|x86_64-apple-darwin)")
+        self.assertGreater(darwin, refusal)
+
 
 class TestVendoredCrates(unittest.TestCase):
     """Two crates assume `c_char` is signed, which AArch64 Linux contradicts.
@@ -1651,6 +1703,28 @@ class TestVendoredCrates(unittest.TestCase):
         self.assertIn("fn char8_array_to_string(array: &[c_char])", vst3)
         self.assertIn("fn tuid_to_hex(cid: &[c_char; 16])", vst3)
         self.assertIn("*const c_char", vst3)
+        # The ID parser may not slice the string: a project file can carry a
+        # multi-byte character across one of the pair boundaries, and a string
+        # index would panic where the parse has to fail.
+        self.assertIn("fn hex_to_tuid", vst3)
+        self.assertNotIn("&hex[i * 2..i * 2 + 2]", vst3)
+
+    def test_the_vendored_crates_carry_their_licence_texts(self):
+        # The crates are MIT OR Apache-2.0 and the sources live in this tree,
+        # so the notices belong beside them — and `copy_licenses` ships
+        # everything under `licenses/`, which is how the artifacts get them.
+        for crate in self.CRATES:
+            for notice in ("LICENSE-MIT", "LICENSE-APACHE"):
+                with self.subTest(crate=crate, notice=notice):
+                    source = SOURCE_DIR / "vendor" / crate / notice
+                    self.assertTrue(source.is_file(), f"{source} is missing")
+                    shipped = SOURCE_DIR / "licenses" / {
+                        "LICENSE-MIT": "MIT.txt", "LICENSE-APACHE": "Apache-2.0.txt"
+                    }[notice]
+                    self.assertEqual(
+                        shipped.read_bytes(), source.read_bytes(),
+                        f"{shipped} differs from {source}",
+                    )
 
 
 class TestReleaseVersionBaseline(unittest.TestCase):

@@ -227,8 +227,16 @@ fn hex_to_tuid(hex: &str) -> Option<TUID> {
         return None;
     }
     let mut out: TUID = [0; 16];
+    let bytes = hex.as_bytes();
     for i in 0..16 {
-        out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()? as c_char;
+        // Byte slices, not string slices: a character spanning one of the
+        // pair boundaries would panic a string index instead of failing the
+        // parse, and this input is whatever a project file happened to carry.
+        let pair = match std::str::from_utf8(&bytes[i * 2..i * 2 + 2]) {
+            Ok(digits) => digits,
+            Err(_) => return None,
+        };
+        out[i] = u8::from_str_radix(pair, 16).ok()? as c_char;
     }
     Some(out)
 }
@@ -1425,11 +1433,13 @@ mod tests {
 
     #[test]
     fn tuid_hex_roundtrip() {
-        // `0xf0` rather than `-0x10`: `TUID`'s element is `c_char`, which is
-        // unsigned on AArch64 Linux.
-        let cid: TUID = [
+        // Built from bytes: `TUID`'s element is `c_char`, unsigned on AArch64
+        // Linux and signed elsewhere, and `0xf0` does not fit a signed literal
+        // while `-0x10` does not fit an unsigned one.
+        let bytes: [u8; 16] = [
             0x01, 0x23, 0x45, 0x67, 0xf0, 0xf0, 0xf0, 0xf0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
+        let cid: TUID = std::array::from_fn(|i| bytes[i] as c_char);
         let hex = tuid_to_hex(&cid);
         let parsed = hex_to_tuid(&hex).expect("parse");
         assert_eq!(parsed, cid);

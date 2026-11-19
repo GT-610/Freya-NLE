@@ -9,7 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to publish (must already exist)
+        # The publish gate below requires every artifact of the current set,
+        # including the arm64 AppImage, so a tag whose source predates it
+        # cannot be republished: its `package` run fails before `publish`.
+        description: Tag to publish (must already exist and build every current release artifact)
         required: true
         type: string
 
@@ -260,17 +263,28 @@ jobs:
           esac
           reported="$("$image" --appimage-extract-and-run --version)"
           echo "$reported"
-          case "$reported" in
-            *"$VERSION"*) ;;
-            *) echo "The arm64 AppImage reports the wrong version" >&2; exit 1 ;;
-          esac
-          # Starting the image proves the runtime and the binary resolve; the
-          # contents prove the payload is the arm64 build. Without this an
-          # x86_64 payload under an arm64 name would still pass the run above
-          # on a runner that happens to emulate it.
+          # Compare the version field, not a substring: a prefix match would
+          # accept 0.7.0-rc.10 when the release says 0.7.0-rc.1.
+          reported_version="$(printf '%s\n' "$reported" | awk '{print $NF}')"
+          if [ "$reported_version" != "$VERSION" ]; then
+            echo "The arm64 AppImage reports $reported_version, expected $VERSION" >&2
+            exit 1
+          fi
+          # The ELF headers, not the labels: `uname -m` proves the runner and
+          # `build-info.json` is metadata, so an x86_64 payload labelled arm64
+          # would still start on a host that emulates it. The image file is the
+          # runtime; the extracted binary is the application.
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           (cd "$work" && "$image" --appimage-extract > /dev/null)
+          for elf in "$image" "$work/squashfs-root/usr/bin/freya-nle"; do
+            if ! readelf --file-header "$elf" | grep -q 'Machine:.*AArch64'; then
+              echo "$elf is not an AArch64 binary" >&2
+              exit 1
+            fi
+          done
+          # The contents prove the payload is the build this release claims:
+          # version, commit, architecture, and the bundled licences.
           python3 "$GITHUB_WORKSPACE/scripts/verify-release-contents.py" \
             "$work/squashfs-root/usr/bin" "$VERSION" "$BUILT_COMMIT" linux arm64
 

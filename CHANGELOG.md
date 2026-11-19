@@ -9,7 +9,8 @@ All notable changes to Freya NLE are documented in this file.
   `Freya-NLE-<version>-linux-arm64.AppImage`. It is produced natively on an arm64
   Ubuntu 22.04 runner rather than cross-compiled, so it links the pinned FFmpeg
   and the same glibc 2.35 floor as the x86_64 image. `BUILD.py --appimage
-  --target aarch64-unknown-linux-gnu` builds it locally, and the release refuses
+  --target aarch64-unknown-linux-gnu` builds it locally — the build container
+  has to run arm64 natively or through emulation — and the release refuses
   to publish without it
 
 ### Fixed
