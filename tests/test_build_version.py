@@ -1651,6 +1651,15 @@ class TestLinuxArm64Recipe(unittest.TestCase):
         self.assertNotIn("--host=x86_64-linux-gnu", self.script)
         self.assertIn('"--host=$TARGET"', self.script)
 
+
+@unittest.skipIf(os.name == "nt", "the guard lives in a bash script MSVC builds do not run")
+class TestLinuxArm64RecipeGuard(unittest.TestCase):
+    """The Linux native-only guard, exercised against a controlled host.
+
+    The real script runs with a stand-in `uname` and a cached prefix, so the
+    cases need neither a compiler nor a network.
+    """
+
     def run_recipe(self, *, host_system, host_machine, target, cached):
         """Run the real script against a controlled host and cached prefix."""
         with tempfile.TemporaryDirectory() as temporary:
