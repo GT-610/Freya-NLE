@@ -430,31 +430,27 @@ pub fn available_audio_encoders() -> Vec<String> {
 }
 
 pub fn valid_export_path(path: &str) -> bool {
-    if path.trim().is_empty() || path.contains('\0') {
-        return false;
-    }
     #[cfg(target_os = "windows")]
     {
-        if path
-            .chars()
-            .any(|character| matches!(character, '<' | '>' | '"' | '|' | '?' | '*'))
-        {
-            return false;
-        }
-        if let Some(first_colon) = path.find(':') {
-            let bytes = path.as_bytes();
-            if first_colon != 1
-                || !bytes.first().is_some_and(u8::is_ascii_alphabetic)
-                || !bytes
-                    .get(2)
-                    .is_some_and(|value| matches!(*value, b'\\' | b'/'))
-                || path[first_colon + 1..].contains(':')
-            {
-                return false;
-            }
-        }
+        !path.trim().is_empty()
+            && !path.contains('\0')
+            && !path
+                .chars()
+                .any(|character| matches!(character, '<' | '>' | '"' | '|' | '?' | '*'))
+            && path.find(':').is_none_or(|first_colon| {
+                let bytes = path.as_bytes();
+                first_colon == 1
+                    && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+                    && bytes
+                        .get(2)
+                        .is_some_and(|value| matches!(*value, b'\\' | b'/'))
+                    && !path[first_colon + 1..].contains(':')
+            })
     }
-    true
+    #[cfg(not(target_os = "windows"))]
+    {
+        !path.trim().is_empty() && !path.contains('\0')
+    }
 }
 
 pub fn is_software_codec(codec: &str) -> bool {

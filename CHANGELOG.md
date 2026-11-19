@@ -4,6 +4,8 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-19
+
 ### Added
 - The portable Linux AppImage is also built for arm64, as
   `Freya-NLE-<version>-linux-arm64.AppImage`. It is produced natively on an arm64
@@ -12,6 +14,18 @@ All notable changes to Freya NLE are documented in this file.
   --target aarch64-unknown-linux-gnu` builds it locally — the build container
   has to run arm64 natively or through emulation — and the release refuses
   to publish without it
+- The release reads each artifact's contents before publishing it: the version,
+  commit, architecture, and bundled licence texts come from the payload instead of
+  from the file name
+
+### Changed
+- The Rust toolchain is pinned to 1.100.0 (`rust-toolchain.toml`, the workspace
+  `rust-version`, and every CI job), up from 1.99.1
+- Third-party crates in `rust/Cargo.lock` are updated within their compatible
+  ranges, resolving 130 packages including `serde_json`, `uuid`, `rustls`,
+  `toml`, `icu`, and `zerocopy`. Crates that need a new major version (`slint`,
+  `wgpu`/`naga`, `cpal`, `rfd`, `ureq`, and `fontdb`) are left for a separate
+  change rather than folded into a patch release
 
 ### Fixed
 - A note of `99 %` or `101 %` in the audio speed field is now heard. Any speed
@@ -30,6 +44,26 @@ All notable changes to Freya NLE are documented in this file.
   FFmpeg log bridge did not accept, and two audio-plugin crates spell `c_char` as
   `i8` where AArch64 Linux defines it as `u8`. The crates are patched from
   `vendor/`, and the patch notes say when each can be dropped
+- A fractional-frame-rate export keeps its audio clock on the encoder's rational
+  rate. The worker mixed at the rounded number the field shows while the encoder
+  used `30000/1001`, so the block lengths drifted by a sample and the plugin chain
+  treated every frame as a seek
+- Stateful audio plugins keep their state when playback is not at 1x. A block took
+  its start from the unscaled timeline frame while its length came from the
+  scaled rate, so continuity broke on every frame and the chain was rebuilt
+- A batch export that writes its video but cannot decode one clip's audio marks the
+  item for review and lists every notice in a result panel that scrolls, instead
+  of reporting an unqualified success in a clipped message
+- Timeline shortcuts no longer fire while a text field has the focus
+- Project documents, recovery metadata, backup manifests, effect presets, and
+  script-plugin manifests are read through one bounded, regular-file-only path, so
+  an oversized file or a FIFO can no longer be loaded in full or block discovery
+- An interrupted recovery snapshot whose metadata was discarded keeps the project
+  it belongs to, so the recovered project can still resolve its relative media;
+  the recovery window can also discard metadata that does not parse
+- Nested scene audio is mixed at the child scene's own timebase, and its frame rate
+  is converted instead of being assumed equal to the parent's
+- The compiled-expression cache evicts old entries without rejecting new ones
 
 ## [0.8.1] - 2026-11-13
 

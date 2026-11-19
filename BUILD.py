@@ -1065,7 +1065,7 @@ class AppImageBuilder(LinuxBuilderBase):
         self.create_podman_container()
         # The pinned image is Ubuntu 22.04, so the packages come from apt. Rust
         # comes from rustup, not from the distribution: 22.04's rustc is far too
-        # old for this workspace and `rust-toolchain.toml` pins 1.99.1.
+        # old for this workspace and `rust-toolchain.toml` pins 1.100.0.
         self.run_cmd([
             "bash", "-c",
             "export DEBIAN_FRONTEND=noninteractive && "

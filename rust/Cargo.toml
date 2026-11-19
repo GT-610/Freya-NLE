@@ -3,9 +3,9 @@ resolver = "3"
 members = ["freya-nle-app", "freya-nle-audio", "freya-nle-carla", "freya-nle-core", "freya-nle-export", "freya-nle-media", "freya-nle-preview", "freya-nle-render", "freya-nle"]
 
 [workspace.package]
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 publish = false
 
 # `truce-rack-clap` 1.1.5 declares the buffer behind `value_to_text` as
