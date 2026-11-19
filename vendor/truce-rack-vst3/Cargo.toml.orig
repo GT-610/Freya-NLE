@@ -1,0 +1,28 @@
+[package]
+name = "truce-rack-vst3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "VST3 host implementation for the truce-rack audio-plugin framework"
+readme = "README.md"
+
+[dependencies]
+truce-rack-core = { workspace = true }
+thiserror = { workspace = true }
+libloading = { workspace = true }
+vst3 = { workspace = true }
+
+# macOS-only: VST3 bundles are CFBundle directories; loading via
+# raw dlopen leaves the bundle un-registered with CoreFoundation,
+# and the plugin's `bundleEntry` crashes when it tries to use
+# CFPlugin / CFBundleGetIdentifier APIs (observed with
+# Surge XT Effects). CFBundle gives bundleEntry the context it
+# expects.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
+[lints]
+workspace = true

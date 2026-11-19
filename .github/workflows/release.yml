@@ -9,7 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to publish (must already exist)
+        # The publish gate below requires every artifact of the current set,
+        # including the arm64 AppImage, so a tag whose source predates it
+        # cannot be republished: its `package` run fails before `publish`.
+        description: Tag to publish (must already exist and build every current release artifact)
         required: true
         type: string
 
@@ -73,9 +76,10 @@ jobs:
 
   publish:
     name: Publish
-    # `smoke-arch` is the only job that runs the Arch archive on Arch, so it is a
-    # gate like the other smoke test rather than an advisory check.
-    needs: [resolve, package, smoke, smoke-arch]
+    # `smoke-arch` is the only job that runs the Arch archive on Arch, and
+    # `smoke-arm64` the only one that runs the arm64 image on arm64, so both are
+    # gates like the other smoke test rather than advisory checks.
+    needs: [resolve, package, smoke, smoke-arm64, smoke-arch]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +99,7 @@ jobs:
           # platform is a broken release, not a smaller one.
           for expected in \
             "Freya-NLE-$version-linux-x86_64.AppImage" \
+            "Freya-NLE-$version-linux-arm64.AppImage" \
             "Freya-NLE-$version-linux-x86_64-archlinux.tar.zst" \
             "Freya-NLE-$version-macos-arm64.zip" \
             "Freya-NLE-$version-macos-x86_64.zip" \
@@ -108,6 +113,7 @@ jobs:
           for file in dist/*; do
             case "$(basename "$file")" in
               "Freya-NLE-$version-linux-x86_64.AppImage"|\
+              "Freya-NLE-$version-linux-arm64.AppImage"|\
               "Freya-NLE-$version-linux-x86_64-archlinux.tar.zst"|\
               "Freya-NLE-$version-macos-arm64.zip"|\
               "Freya-NLE-$version-macos-x86_64.zip"|\
@@ -126,6 +132,10 @@ jobs:
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           verify="$GITHUB_WORKSPACE/scripts/verify-release-contents.py"
+          # Only the image this runner can execute is unpacked here; the arm64
+          # one is checked by `smoke-arm64`, which runs it for real. Extracting
+          # the wrong architecture's image would mean running its runtime, and
+          # the release notes are no place to find out that it will not start.
           image="$GITHUB_WORKSPACE/dist/Freya-NLE-$VERSION-linux-x86_64.AppImage"
           chmod +x "$image"
           (cd "$work" && "$image" --appimage-extract > /dev/null)
@@ -217,6 +227,66 @@ jobs:
           # it without a chmod step the documentation would have to explain.
           test -x unpacked/freya-nle
           ls unpacked
+
+  # The arm64 image has to be started on arm64: the x86_64 runner above can
+  # only prove that it does not crash the shell trying to execute it, and the
+  # defect this catches -- an image labelled arm64 around an x86_64 payload --
+  # is exactly the one that still looks fine from an x86_64 host.
+  smoke-arm64:
+    name: Smoke-test the arm64 AppImage on arm64
+    needs: [resolve, package]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The contents check compares the bundled licences with the commit the
+          # release claims to have built, so the tree has to be that commit.
+          ref: ${{ needs.resolve.outputs.source_ref }}
+      - name: Download the arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Run the AppImage
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          BUILT_COMMIT: ${{ needs.resolve.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          image="$GITHUB_WORKSPACE/dist/Freya-NLE-$VERSION-linux-arm64.AppImage"
+          chmod +x "$image"
+          # The label says arm64, so the payload has to say the same thing; a
+          # mistyped ARCH would still name the file correctly.
+          case "$(uname -m)" in
+            aarch64|arm64) ;;
+            *) echo "This runner is $(uname -m), not arm64" >&2; exit 1 ;;
+          esac
+          reported="$("$image" --appimage-extract-and-run --version)"
+          echo "$reported"
+          # Compare the version field, not a substring: a prefix match would
+          # accept 0.7.0-rc.10 when the release says 0.7.0-rc.1.
+          reported_version="$(printf '%s\n' "$reported" | awk '{print $NF}')"
+          if [ "$reported_version" != "$VERSION" ]; then
+            echo "The arm64 AppImage reports $reported_version, expected $VERSION" >&2
+            exit 1
+          fi
+          # The ELF headers, not the labels: `uname -m` proves the runner and
+          # `build-info.json` is metadata, so an x86_64 payload labelled arm64
+          # would still start on a host that emulates it. The image file is the
+          # runtime; the extracted binary is the application.
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          (cd "$work" && "$image" --appimage-extract > /dev/null)
+          for elf in "$image" "$work/squashfs-root/usr/bin/freya-nle"; do
+            if ! readelf --file-header "$elf" | grep -q 'Machine:.*AArch64'; then
+              echo "$elf is not an AArch64 binary" >&2
+              exit 1
+            fi
+          done
+          # The contents prove the payload is the build this release claims:
+          # version, commit, architecture, and the bundled licences.
+          python3 "$GITHUB_WORKSPACE/scripts/verify-release-contents.py" \
+            "$work/squashfs-root/usr/bin" "$VERSION" "$BUILT_COMMIT" linux arm64
 
   smoke-arch:
     name: Smoke-test the Arch archive on Arch

@@ -13,9 +13,13 @@
 #   scripts/build-ffmpeg.sh --target <triple> [--prefix <dir>] [--jobs <n>]
 #
 #   --target   Rust target triple: x86_64-unknown-linux-gnu,
-#              aarch64-apple-darwin, x86_64-apple-darwin
+#              aarch64-unknown-linux-gnu, aarch64-apple-darwin,
+#              x86_64-apple-darwin
 #   --prefix   Install prefix (default: .build_tmp/ffmpeg/<triple>)
 #   --jobs     Parallel make jobs (default: number of CPUs)
+#
+#   Linux targets are native-only: each is built on a machine of that
+#   architecture rather than cross-compiled.
 #
 # The result is a dynamic FFmpeg (`libav*.so`/`.dylib`), which is what
 # `ffmpeg-sys-the-third` links unless its `static` feature is enabled. Dynamic is
@@ -40,8 +44,8 @@ JOBS=""
 X264_PREFIX=""
 
 usage() {
-    # Lines 11-18 are the usage block; the paragraph after it is not help text.
-    sed -n '11,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Lines 12-23 are the usage block; the paragraph after it is not help text.
+    sed -n '12,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -56,6 +60,27 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$TARGET" ] || { echo "--target is required" >&2; usage 1; }
+
+# Linux builds are native-only: this recipe has no cross toolchain, so a
+# --target naming another architecture would compile with the host's compiler
+# and install the wrong binaries under the target's own prefix. Refused here,
+# before the install cache is consulted, because a cached prefix is exactly
+# how a wrong build would otherwise go unnoticed. macOS targets are exempt:
+# clang there crosses between Apple architectures by design.
+case "$TARGET" in
+    *-linux-*)
+        if [ "$(uname -s)" != "Linux" ]; then
+            echo "refusing to build $TARGET on $(uname -s): Linux builds are native-only" >&2
+            exit 1
+        fi
+        machine="$(uname -m)"
+        [ "$machine" = "arm64" ] && machine="aarch64"
+        if [ "${TARGET%%-*}" != "$machine" ]; then
+            echo "refusing to build $TARGET on $machine: Linux builds are native-only" >&2
+            exit 1
+        fi
+        ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${WORK_DIR:-$ROOT/.build_tmp/ffmpeg}"
@@ -80,6 +105,14 @@ case "$TARGET" in
     x86_64-unknown-linux-gnu)
         FF_OS="linux"
         FF_ARCH_FLAGS=(--arch=x86_64)
+        FF_EXTRA=(--enable-pthreads --enable-pic)
+        ;;
+    aarch64-unknown-linux-gnu)
+        # `--cpu=armv8-a` rather than `--cpu=native`: the image has to run on any
+        # ARMv8.0 system, and `native` would bake in the extensions of whatever
+        # machine happened to build it.
+        FF_OS="linux"
+        FF_ARCH_FLAGS=(--arch=aarch64 --cpu=armv8-a)
         FF_EXTRA=(--enable-pthreads --enable-pic)
         ;;
     aarch64-apple-darwin|x86_64-apple-darwin)
@@ -193,7 +226,9 @@ if [ ! -f "$X264_PREFIX/lib/libx264.a" ] && [ ! -f "$X264_PREFIX/lib/libx264.dyl
             X264_FLAGS+=(--extra-cflags="-arch $X264_ARCH -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET")
             ;;
         *)
-            X264_FLAGS=(--enable-static --enable-pic --host=x86_64-linux-gnu)
+            # x264's configure takes the architecture from `--host`; leaving it
+            # at x86_64 would build the x86 assembly kernels for an arm64 target.
+            X264_FLAGS=(--enable-static --enable-pic "--host=$TARGET")
             ;;
     esac
     # Logged rather than discarded: silencing these hid a configure failure that

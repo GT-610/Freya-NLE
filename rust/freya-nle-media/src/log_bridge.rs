@@ -23,10 +23,13 @@ const LINE_BYTES: usize = 1024;
 
 /// The type FFmpeg's C prototypes really take for `va_list`.
 ///
-/// Where `va_list` is an array (the SysV x86-64 ABI), a C parameter of that
-/// type decays to a pointer: bindgen keeps the alias as the array while it
-/// declares the functions with the pointer. Naming either form by hand would
-/// tie this module to one target, so the binding's own alias decides.
+/// C passes a `va_list` parameter differently on each ABI this project builds
+/// for. Where it is an array (the SysV x86-64 ABI), the parameter decays to a
+/// pointer: bindgen keeps the alias as the array while it declares the
+/// functions with the pointer. Where it is a struct (the AArch64 ABI), the
+/// whole value is passed, and bindgen models the structure it cannot name as
+/// an opaque array. Naming either form by hand would tie this module to one
+/// target, so the binding's own alias decides.
 trait DecayedVaList {
     type Arg;
 }
@@ -39,6 +42,19 @@ impl<T> DecayedVaList for [T; 1] {
 impl<T> DecayedVaList for *mut T {
     /// A pointer parameter stays exactly as it is.
     type Arg = *mut T;
+}
+
+/// Linux on AArch64 passes `va_list` by value, and bindgen spells it as the
+/// opaque array it uses for structures whose fields it was not asked to lay
+/// out. That array is already what the generated prototypes take, so there is
+/// nothing to decay.
+///
+/// Linux only: Apple's AArch64 bindings spell `va_list` as a pointer, which
+/// the `*mut T` implementation above already covers, and bindgen does not
+/// emit an opaque array there for this name to refer to.
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+impl<T: Copy, const N: usize> DecayedVaList for sys::__BindgenOpaqueArray<T, N> {
+    type Arg = Self;
 }
 
 /// What the callback receives and `av_log_format_line2` consumes.

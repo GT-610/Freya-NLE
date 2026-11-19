@@ -70,7 +70,7 @@ jobs:
       source_ref: ${{ inputs.source_ref || github.sha }}
 
   linux-appimage:
-    name: Linux AppImage (portable)
+    name: Linux AppImage (${{ matrix.arch }})
     needs: [test]
     if: |
       !cancelled() &&
@@ -78,8 +78,24 @@ jobs:
       (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-appimage')
     # The glibc an ELF asks for is fixed at build time, so the portable track is
     # built on the oldest Ubuntu GitHub still hosts: 22.04 carries glibc 2.35.
-    # Building it on the default 24.04 runner would ask for 2.39 instead.
-    runs-on: ubuntu-22.04
+    # Building it on the default 24.04 runner would ask for 2.39 instead. Each
+    # architecture gets a runner of its own rather than crossing either way: the
+    # FFmpeg and the toolchain are built by the same compiler that produces the
+    # binary, and an emulated x86_64-on-arm64 (or the reverse) build would take
+    # hours to produce the same result.
+    strategy:
+      # One architecture failing must not hide whether the other one builds:
+      # both are release requirements, so both results are worth seeing.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            triple: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -91,12 +107,18 @@ jobs:
         with:
           version: ${{ inputs.version }}
       - name: Install build dependencies
+        # The runner image happens to carry clang and fontconfig, but the arm64
+        # image is not the x86_64 one and nothing here should depend on which
+        # development packages it inherited. Everything the container recipe
+        # installs is named here too, so both architectures fail the same way
+        # when one of them is missing.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             build-essential curl pkg-config zstd xz-utils \
             nasm libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev \
-            libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin
+            libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin \
+            libfontconfig-dev libclang-dev
       - uses: dtolnay/rust-toolchain@1.99.1
       # Restore and save are separate steps so a later packaging failure cannot
       # throw away a finished FFmpeg build.
@@ -106,25 +128,29 @@ jobs:
         with:
           # No `restore-keys`: `build-ffmpeg.sh` reuses any prefix that holds a
           # pkg-config file, so a stale entry would silently link an FFmpeg this
-          # commit did not pin. The script's hash covers both source revisions.
-          path: .build_tmp/ffmpeg/x86_64-unknown-linux-gnu
-          key: linux-appimage-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+          # commit did not pin. The script's hash covers both source revisions,
+          # and the architecture is in the key so the two legs cannot share one.
+          path: .build_tmp/ffmpeg/${{ matrix.triple }}
+          key: linux-appimage-${{ matrix.arch }}-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
       - name: Build the pinned FFmpeg
         run: |
           bash scripts/build-ffmpeg.sh \
-            --target x86_64-unknown-linux-gnu \
-            --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
-          echo "FFMPEG_DIR=$GITHUB_WORKSPACE/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+            --target ${{ matrix.triple }} \
+            --prefix "$GITHUB_WORKSPACE/.build_tmp/ffmpeg/${{ matrix.triple }}"
+          echo "FFMPEG_DIR=$GITHUB_WORKSPACE/.build_tmp/ffmpeg/${{ matrix.triple }}" >> "$GITHUB_ENV"
       - name: Save the pinned FFmpeg
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: .build_tmp/ffmpeg/x86_64-unknown-linux-gnu
-          key: linux-appimage-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+          path: .build_tmp/ffmpeg/${{ matrix.triple }}
+          key: linux-appimage-${{ matrix.arch }}-ffmpeg-${{ hashFiles('scripts/build-ffmpeg.sh') }}
       - name: Build and package
-        # Already inside the pinned container, so BUILD.py must not open another.
-        run: python3 BUILD.py --appimage --no-container
+        # Already on the pinned runner, so BUILD.py must not open a container.
+        # The triple is what names the artifact after the architecture being
+        # built rather than after the machine that happens to host it.
+        run: python3 BUILD.py --appimage --no-container --target ${{ matrix.triple }}
       - name: Verify the image
+        id: name
         run: |
           artifact="$(ls dist/*.AppImage)"
           test -n "$artifact"
@@ -132,10 +158,12 @@ jobs:
           # Run the image itself, not the staging tree: this proves the runtime,
           # the AppRun wrapper, and the bundled libraries all resolve.
           "$artifact" --appimage-extract-and-run --version
-        id: name
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
+          # One artifact per architecture: `download-artifact` merges them by
+          # file name at release time, and a shared name would overwrite one
+          # image with the other.
+          name: linux-appimage-${{ matrix.arch }}
           path: dist/*.AppImage
           if-no-files-found: error
 

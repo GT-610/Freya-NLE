@@ -46,6 +46,8 @@ ARCH_LINUX_IMAGE = (
 # The AppImage is built on the oldest distribution the toolchain supports, so
 # the binary asks for the lowest glibc it can rather than Arch's current one.
 # Ubuntu 22.04 carries glibc 2.35, which is what the AppImage's ELF floor is.
+# The digest names a multi-architecture index, so the same pin gives the image
+# for every architecture the portable build is produced for.
 APPIMAGE_BASE_IMAGE = (
     "docker.io/library/ubuntu@sha256:"
     "076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11"
@@ -76,6 +78,28 @@ def normalize_macos_architecture(machine: str) -> str:
     normalized = {"aarch64": "arm64", "amd64": "x86_64", "x64": "x86_64"}.get(normalized, normalized)
     if normalized not in {"arm64", "x86_64"}:
         raise RuntimeError(f"Unsupported macOS architecture: {machine}")
+    return normalized
+
+
+# The architecture names an artifact carries, mapped to the three other
+# spellings the build has to use for the same thing. None of them agree with
+# each other: Rust says `aarch64`, AppImage says `aarch64` but writes `x86_64`
+# where OCI says `amd64`, and OCI says `arm64` where the artifact name does.
+LINUX_ARCHES = {
+    "x86_64": {
+        "triple": "x86_64-unknown-linux-gnu", "appimage": "x86_64", "oci": "amd64",
+    },
+    "arm64": {
+        "triple": "aarch64-unknown-linux-gnu", "appimage": "aarch64", "oci": "arm64",
+    },
+}
+
+
+def normalize_linux_architecture(machine: str) -> str:
+    normalized = machine.strip().lower()
+    normalized = {"aarch64": "arm64", "amd64": "x86_64", "x64": "x86_64"}.get(normalized, normalized)
+    if normalized not in LINUX_ARCHES:
+        raise RuntimeError(f"Unsupported Linux architecture: {machine}")
     return normalized
 
 
@@ -750,6 +774,17 @@ class PlatformBuilder:
             "--", "bash", "-lc", inner,
         ]
 
+    def container_platform(self) -> str:
+        """The `--platform` the build container is started with.
+
+        The pinned images are multi-architecture indexes, and podman defaults to
+        the architecture of the machine it runs on. A build that produces a
+        different architecture therefore has to ask for that manifest, or it
+        would compile natively and silently label the result with the wrong
+        architecture.
+        """
+        return "linux/amd64"
+
     def create_podman_container(self):
         """Create the long-lived container the podman path executes into.
 
@@ -781,7 +816,7 @@ class PlatformBuilder:
             "podman", "run", "--detach",
             "--name", self.podman_container,
             "--security-opt", "label=disable",
-            "--platform", "linux/amd64",
+            "--platform", self.container_platform(),
             "-v", f"{self.config.source_dir}:/src:Z",
             "-w", "/src",
             # Keep the container alive between commands; `exec` supplies the work.
@@ -975,6 +1010,41 @@ class AppImageBuilder(LinuxBuilderBase):
         # the same isolation without one.
         self.container_engine = "podman"
 
+    def platform_architecture(self) -> str:
+        """The architecture this image is built for.
+
+        The default is the x86_64 build the portable track has always been, and
+        it stays that on every host: the image is produced inside a container
+        pinned to `linux/amd64`, so the machine running the build decides
+        nothing. An arm64 image is asked for with a target triple, the same way
+        the Intel macOS bundle is.
+        """
+        if self.config.target_triple:
+            return normalize_linux_architecture(self.config.target_triple.split("-")[0])
+        return self.PLATFORM_ARCH
+
+    def appimage_architecture(self) -> str:
+        """The architecture spelling `appimagetool` and the runtime use.
+
+        The tool only recognises `x86_64`, `i686`, `armhf` and `aarch64`; it
+        rejects `arm64` as an unknown value and refuses to guess when the
+        AppDir's libraries do not settle the question.
+        """
+        return LINUX_ARCHES[self.platform_architecture()]["appimage"]
+
+    def ffmpeg_target(self) -> str:
+        """The Rust triple that names this build's pinned FFmpeg prefix."""
+        return LINUX_ARCHES[self.platform_architecture()]["triple"]
+
+    def container_platform(self) -> str:
+        """The `--platform` the build container has to be started with.
+
+        The image is a multi-architecture index, so an arm64 build has to ask
+        for the arm64 manifest explicitly: podman defaults to the host's
+        architecture, which is the wrong one for a cross build.
+        """
+        return f"linux/{LINUX_ARCHES[self.platform_architecture()]['oci']}"
+
     def install_dependencies(self):
         if not self.use_container:
             self.logger.log("Host mode: skipping system package installation")
@@ -1003,7 +1073,17 @@ class AppImageBuilder(LinuxBuilderBase):
             "apt-get install -y -qq --no-install-recommends "
             "build-essential nasm curl ca-certificates git pkg-config zstd xz-utils "
             "libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev "
-            "libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin",
+            "libxcursor-dev libxi-dev libxrandr-dev file librsvg2-bin "
+            # `fontique` asks `yeslogic-fontconfig-sys` for fontconfig at build
+            # time, and the pinned image ships only the runtime half of it. The
+            # development package provides the `fontconfig.pc` the build script
+            # needs; without it the compile stops in a dependency, not in this
+            # project, which is why the message is so hard to act on.
+            "libfontconfig-dev "
+            # `ffmpeg-sys-the-third` runs bindgen, which looks for `libclang.so`.
+            # A GitHub runner image already carries it, so only the container
+            # path needs this -- and only the container path was failing.
+            "libclang-dev",
         ])
         self.install_rust()
         # Ubuntu's own FFmpeg is far older than the crate accepts, so the container
@@ -1037,14 +1117,31 @@ class AppImageBuilder(LinuxBuilderBase):
         return match.group(1) if match else "stable"
 
     def build_ffmpeg(self):
-        """Build the pinned FFmpeg inside the same container as the application."""
-        prefix = "/src/.build_tmp/ffmpeg/x86_64-unknown-linux-gnu"
+        """Build the pinned FFmpeg inside the same container as the application.
+
+        The prefix is named after the architecture so one checkout can hold
+        both a native and a cross-built FFmpeg: packaging picks the prefix up
+        through `FFMPEG_DIR`, and a shared directory would hand an arm64 image
+        the x86_64 libraries this project just built.
+
+        The container's prefix also sits apart from a host build's. The
+        checkout is shared through the mount, so a prefix named only after the
+        target would let the container reuse an FFmpeg the host compiled
+        against its own glibc — the script's reuse check only asks whether the
+        prefix holds a pkg-config file. `WORK_DIR` moves x264 and the source
+        checkout for the same reason; repeated container builds still reuse
+        everything under the container's own directory.
+        """
+        target = self.ffmpeg_target()
+        prefix = f"/src/.build_tmp/ffmpeg/container/{target}"
         self.run_cmd([
-            "bash", "/src/scripts/build-ffmpeg.sh",
-            "--target", "x86_64-unknown-linux-gnu", "--prefix", prefix,
+            "bash", "-c",
+            "WORK_DIR=/src/.build_tmp/ffmpeg/container "
+            f"bash /src/scripts/build-ffmpeg.sh --target {target} --prefix {prefix}",
         ])
-        self.env["FFMPEG_DIR"] = str(self.config.temp_base / "ffmpeg"
-                                     / "x86_64-unknown-linux-gnu")
+        self.env["FFMPEG_DIR"] = str(
+            self.config.temp_base / "ffmpeg" / "container" / target
+        )
 
     def package(self):
         super().package()
@@ -1163,24 +1260,48 @@ class AppImageBuilder(LinuxBuilderBase):
         ])
         shutil.copy2(target, appdir / f"{self.DESKTOP_ID}.png")
 
-    IMAGE_TOOL = "appimagetool-x86_64.AppImage"
     # A tagged release, not `continuous`: a rolling asset can be replaced under
     # the pinned checksum, which would fail every build until the constant moved.
-    IMAGE_TOOL_URL = "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
-    IMAGE_TOOL_SHA256 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+    # The tool is itself an AppImage built for one architecture, and it runs
+    # inside the build container, so the architecture the image is built for
+    # decides which one has to be downloaded.
+    IMAGE_TOOL_RELEASE = "https://github.com/AppImage/appimagetool/releases/download/1.9.1"
+    IMAGE_TOOLS = {
+        "x86_64": {
+            "name": "appimagetool-x86_64.AppImage",
+            "sha256": "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",
+        },
+        "aarch64": {
+            "name": "appimagetool-aarch64.AppImage",
+            "sha256": "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158",
+        },
+    }
+
+    def image_tool(self) -> dict:
+        """The pinned tool that packs this architecture's image."""
+        try:
+            return self.IMAGE_TOOLS[self.appimage_architecture()]
+        except KeyError:
+            raise RuntimeError(
+                f"No pinned appimagetool for {self.platform_architecture()}"
+            ) from None
+
+    def image_tool_url(self) -> str:
+        return f"{self.IMAGE_TOOL_RELEASE}/{self.image_tool()['name']}"
 
     def appimagetool_path(self) -> Path:
-        tool = self.config.temp_base / self.IMAGE_TOOL
-        if tool.is_file() and self.sha256_of(tool) == self.IMAGE_TOOL_SHA256:
+        spec = self.image_tool()
+        tool = self.config.temp_base / spec["name"]
+        if tool.is_file() and self.sha256_of(tool) == spec["sha256"]:
             return tool
         tool.parent.mkdir(parents=True, exist_ok=True)
         tool.unlink(missing_ok=True)
-        self.download(self.IMAGE_TOOL_URL, tool)
+        self.download(self.image_tool_url(), tool)
         actual = self.sha256_of(tool)
-        if actual != self.IMAGE_TOOL_SHA256:
+        if actual != spec["sha256"]:
             tool.unlink(missing_ok=True)
             raise RuntimeError(
-                f"appimagetool checksum mismatch: expected {self.IMAGE_TOOL_SHA256}, got {actual}"
+                f"appimagetool checksum mismatch: expected {spec['sha256']}, got {actual}"
             )
         tool.chmod(0o755)
         return tool
@@ -1207,11 +1328,12 @@ class AppImageBuilder(LinuxBuilderBase):
             raise FileNotFoundError(f"AppDir was not staged: {appdir}")
         tool = self.appimagetool_path()
         destination = self.config.dist_dir / f"{archive_name}.AppImage"
-        # appimagetool refuses to run without an explicit architecture when it
-        # cannot infer one from the host. `run_cmd` passes `self.env`, so this is
-        # where the value has to go to reach the tool; `container_environment()`
-        # is what carries it the rest of the way into a container.
-        self.env["ARCH"] = self.PLATFORM_ARCH
+        # appimagetool refuses to guess when the AppDir's libraries do not settle
+        # the architecture, and it only understands its own spelling of it — so
+        # this has to be `aarch64`, not the `arm64` the artifact name carries.
+        # `run_cmd` passes `self.env`, so this is where the value has to go to
+        # reach the tool; `container_environment()` carries it into a container.
+        self.env["ARCH"] = self.appimage_architecture()
         # The tool is itself a Linux AppImage; extracting it avoids needing FUSE.
         # It runs wherever the build runs: a macOS host cannot execute it at all,
         # and a Linux host with a container already has a Linux one.
@@ -2160,7 +2282,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--strict-deployment-target", action="store_true",
                         help="Fail when a macOS dependency needs a newer system than targeted")
     parser.add_argument("--target", type=str, default="",
-                        help="Rust target triple, for a cross build (e.g. x86_64-apple-darwin)")
+                        help="Rust target triple, for a cross build\n"
+                             "(e.g. aarch64-unknown-linux-gnu, x86_64-apple-darwin)")
     return parser.parse_args()
 
 
