@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -1650,19 +1651,90 @@ class TestLinuxArm64Recipe(unittest.TestCase):
         self.assertNotIn("--host=x86_64-linux-gnu", self.script)
         self.assertIn('"--host=$TARGET"', self.script)
 
-    def test_linux_targets_are_native_only_and_rejected_before_the_cache(self):
+    def run_recipe(self, *, host_system, host_machine, target, cached):
+        """Run the real script against a controlled host and cached prefix."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(SOURCE_DIR / "scripts" / "build-ffmpeg.sh", scripts)
+            # A stand-in `uname` keeps the host out of the test: the guard has
+            # to answer from these two values alone.
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text(
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                '  -s) echo "$FAKE_UNAME_S" ;;\n'
+                '  -m) echo "$FAKE_UNAME_M" ;;\n'
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            uname.chmod(0o755)
+            prefix = root / "prefix"
+            if cached:
+                pkgconfig = prefix / "lib" / "pkgconfig"
+                pkgconfig.mkdir(parents=True)
+                (pkgconfig / "libavcodec.pc").write_text("", encoding="utf-8")
+            env = {
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                "HOME": os.environ.get("HOME", str(root)),
+                "JOBS": "1",
+                "WORK_DIR": str(root / "work"),
+                "FAKE_UNAME_S": host_system,
+                "FAKE_UNAME_M": host_machine,
+            }
+            return subprocess.run(
+                [
+                    "bash",
+                    str(scripts / "build-ffmpeg.sh"),
+                    "--target", target,
+                    "--prefix", str(prefix),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+    def test_a_mismatched_linux_target_fails_before_the_cache_is_reused(self):
         # There is no cross toolchain here, so the wrong host would compile the
         # host architecture into the target's prefix and only fail much later,
         # at the link — or not at all, if a cached prefix then satisfied the
-        # reuse check. The refusal has to come first.
-        self.assertIn("Linux builds are native-only", self.script)
-        reuse = self.script.index("Reusing the FFmpeg install")
-        refusal = self.script.index("Linux builds are native-only")
-        self.assertLess(refusal, reuse)
-        # macOS keeps its cross build: clang there crosses Apple architectures
-        # by design, so the check may not reject the Darwin triples.
-        darwin = self.script.index("aarch64-apple-darwin|x86_64-apple-darwin)")
-        self.assertGreater(darwin, refusal)
+        # reuse check. The refusal still has to come first.
+        completed = self.run_recipe(
+            host_system="Linux",
+            host_machine="x86_64",
+            target="aarch64-unknown-linux-gnu",
+            cached=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("Linux builds are native-only", completed.stderr)
+        self.assertNotIn("Reusing the FFmpeg install", completed.stdout)
+
+    def test_a_matching_linux_target_reaches_the_cached_install(self):
+        completed = self.run_recipe(
+            host_system="Linux",
+            host_machine="aarch64",
+            target="aarch64-unknown-linux-gnu",
+            cached=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Reusing the FFmpeg install", completed.stdout)
+
+    def test_a_darwin_target_is_not_held_to_the_host_architecture(self):
+        # clang there crosses Apple architectures by design, so the Linux
+        # refusal may not reach the Darwin triples.
+        completed = self.run_recipe(
+            host_system="Linux",
+            host_machine="x86_64",
+            target="aarch64-apple-darwin",
+            cached=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Reusing the FFmpeg install", completed.stdout)
 
 
 class TestVendoredCrates(unittest.TestCase):

@@ -1446,6 +1446,16 @@ mod tests {
     }
 
     #[test]
+    fn tuid_hex_rejects_a_multibyte_character_across_a_pair_boundary() {
+        // `€` is three bytes; starting it at index 1 puts its continuation
+        // bytes across the first pair boundary, where a string index would
+        // panic and a valid-looking parse must not come out the other side.
+        let split = format!("0€{}", "0".repeat(28));
+        assert_eq!(split.len(), 32);
+        assert!(hex_to_tuid(&split).is_none());
+    }
+
+    #[test]
     fn char8_skips_trailing_nul() {
         let mut arr = [0 as c_char; 16];
         for (i, &b) in b"Hello".iter().enumerate() {
