@@ -499,8 +499,26 @@ class PlatformBuilder:
         return ""
 
     def git_commit(self) -> str:
-        output = self.command_output(["git", "rev-parse", "HEAD"])
-        return output.splitlines()[0].strip() if output else ""
+        output = self.command_output([
+            "git", "-c", "safe.directory=*", "rev-parse", "HEAD",
+        ])
+        if output:
+            return output.splitlines()[0].strip()
+        # A container can make git refuse the checkout even though the files
+        # are there; the HEAD file still names the commit that was built.
+        git_dir = self.config.source_dir / ".git"
+        try:
+            value = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        if value.startswith("ref: "):
+            try:
+                value = (git_dir / value.removeprefix("ref: ")).read_text(
+                    encoding="utf-8"
+                ).strip()
+            except OSError:
+                return ""
+        return value
 
     def source_date_epoch(self) -> Optional[int]:
         """The time every archive entry is stamped with.
@@ -515,7 +533,9 @@ class PlatformBuilder:
                 return int(epoch)
             except ValueError:
                 pass
-        output = self.command_output(["git", "log", "-1", "--format=%ct"])
+        output = self.command_output([
+            "git", "-c", "safe.directory=*", "log", "-1", "--format=%ct",
+        ])
         try:
             return int(output.strip())
         except ValueError:

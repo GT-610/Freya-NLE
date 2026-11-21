@@ -414,6 +414,29 @@ class TestArchiveContents(unittest.TestCase):
             self.assertIn("commit", info)
             self.assertIn("ffmpeg", info)
 
+    def test_git_commit_falls_back_to_the_checkout_head(self):
+        # A container can make git refuse the worktree; the HEAD file still
+        # names the commit the archive was built from.
+        commit = "4cefd8a0819682c7b170c0d159819f60f98f430d"
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            git = source / ".git"
+            git.mkdir()
+            builder = WindowsTestBuilder(
+                config_for(source, target="msvc"),
+                Logger(lambda _message: None, lambda *_args: None),
+            )
+            (git / "HEAD").write_text(commit + "\n", encoding="utf-8")
+            with patch.object(builder, "command_output", return_value=""):
+                self.assertEqual(builder.git_commit(), commit)
+
+            (git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            ref = git / "refs" / "heads" / "main"
+            ref.parent.mkdir(parents=True)
+            ref.write_text(commit + "\n", encoding="utf-8")
+            with patch.object(builder, "command_output", return_value=""):
+                self.assertEqual(builder.git_commit(), commit)
+
     def test_a_cross_build_records_the_target_cargo_was_given(self):
         # One arm64 runner builds the Intel bundle; `rustc -vV` would describe
         # the runner, not the archive.
@@ -1225,7 +1248,7 @@ class TestContainerBuild(unittest.TestCase):
             builder = self.builder(Path(temporary))
             builder.env.pop("SOURCE_DATE_EPOCH", None)
             builder.command_output = (
-                lambda command: "1700000123\n" if command[1] == "log" else ""
+                lambda command: "1700000123\n" if "log" in command else ""
             )
             members = self.packed_members(builder)
             self.assertEqual({member.mtime for member in members.values()}, {1700000123})
