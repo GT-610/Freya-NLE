@@ -23,7 +23,7 @@
 
 ## What is Freya NLE?
 
-<img src="./assets/screenshot.webp" alt="Freya NLE screenshot">
+<img src="./assets/screenshot.webp" alt="Freya NLE merged workspace with the preview, timeline, and media library">
 
 A video editor built around the operability of **AviUtl 1.10** and **ExEdit 0.92**, with **performance that goes past what AviUtl can do**.
 

@@ -21,7 +21,7 @@
 
 ## [Freya NLE](https://github.com/GT-610/freya-nle)とは
 
-<img src="../../assets/screenshot.webp" alt="Freya NLEのスクリーンショット">
+<img src="../../assets/screenshot.webp" alt="プレビュー、タイムライン、メディアライブラリを表示したFreya NLEの統合ワークスペース">
 
 **AviUtl 1.10** & **ExEdit 0.92**の操作感を踏襲しつつ、**AviUtlを超える性能**を持つ動画編集ソフトを開発するプロジェクトです。
 

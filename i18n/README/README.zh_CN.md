@@ -21,7 +21,7 @@
 
 ## 什么是 [Freya NLE](https://github.com/GT-610/freya-nle)？
 
-<img src="../../assets/screenshot.webp" alt="Freya NLE 界面截图">
+<img src="../../assets/screenshot.webp" alt="Freya NLE 合并工作区，显示预览、时间线和媒体库">
 
 一个旨在继承 **AviUtl 1.10** 和 **ExEdit 0.92** 的操作体验，同时拥有**超越 AviUtl 性能**的视频编辑软件项目。
 
