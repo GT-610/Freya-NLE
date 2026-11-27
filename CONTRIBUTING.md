@@ -110,14 +110,37 @@ is reported explicitly:
 ```sh
 # FFmpeg CLI on PATH; linked FFmpeg must provide libx264 and aac.
 cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-media -p freya-nle-audio -- --ignored
-# Installed Carla libraries; the plugin-processing test also needs AVIQTL_CARLA_TEST_LADSPA.
+# Installed Carla libraries. The plugin-processing test also needs AVIQTL_CARLA_TEST_LADSPA.
 cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-carla -- --ignored
+# Set AVIUTL_SAMPLES to an AviUtl installation with .exo files to check import structure.
+cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-app --test exo_samples -- --ignored
 ```
 
 Carla tests without its libraries remain unverified, not passed. The GPU compositing
-tests that used to sit in `freya-nle-preview` were removed: they asked for an adapter no
-CI runner provides, so they never ran anywhere. Check
-the compositor by running the editor and exporting a frame.
+unit tests that used to sit in `freya-nle-preview` were removed because CI runners do not
+provide a reliable hardware adapter. A focused end-to-end acceptance is available for
+maintainers on a GPU-backed host:
+
+```sh
+# Requires a GPU-backed wgpu adapter, FFmpeg CLI with libx264, ffprobe, and linked
+# FFmpeg encoders libx264 + AAC. Generates short source clips in a temp directory.
+cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle --test stable_workflow -- --ignored --nocapture
+# Requires a GPU-backed adapter and linked FFmpeg encoders libx264 + AAC.
+cargo test --manifest-path rust/Cargo.toml --locked -p freya-nle-export visual_decode_failure -- --ignored --nocapture
+```
+
+The first test saves a project, moves it together with its relative-path media, reopens
+it, and exports through `PreviewPlanner` and the GPU-backed `ExportManager`. It checks
+both streams with `ffprobe` and decodes the output with FFmpeg to verify every frame
+and the non-silent audio. The second test checks that an unreadable clip in a nested
+scene stops the export and preserves an existing video or removes a partial image
+sequence.
+
+Record the tested commit, OS, GPU and backend (Metal, DX12, or Vulkan), and result on
+each release platform. A missing adapter or required encoder fails an explicitly
+started test. Record any tests that cannot run as unverified. Use the published
+package to separately check native file dialogs, media drops, IME, and recovery after
+an interrupted session.
 
 ## Versions and Releases
 

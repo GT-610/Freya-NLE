@@ -1780,6 +1780,7 @@ dependencies = [
  "slint",
  "slint-build",
  "sys-locale",
+ "tempfile",
  "tracing",
  "webbrowser",
  "winresource",

@@ -38,6 +38,7 @@ webbrowser = "1.2.4"
 
 [dev-dependencies]
 i-slint-backend-testing = "=1.17.1"
+tempfile = "3.27"
 
 [build-dependencies]
 serde_json = "1.0"
