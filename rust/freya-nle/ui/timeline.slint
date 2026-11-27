@@ -57,6 +57,7 @@ export component TimelineWindow inherits Window {
     // Object-list rows after filtering, plus the filter's own state. The list
     // is built here rather than in the panel so the rule stays testable.
     in property <[TimelineObjectData]> object-rows;
+    in property <int> object-rows-generation;
     in property <[string]> object-kind-filters;
     in-out property <string> object-kind-filter-value: "";
     in-out property <string> object-kind-label: "";
@@ -1487,7 +1488,7 @@ export component TimelineWindow inherits Window {
                     width: max(abs(root.box-current-frame - root.box-start-frame) * root.pixels-per-frame * 1px, 1px);
                     height: max((abs(root.box-current-layer - root.box-start-layer) + 1) * root.timeline-track-height * 1px, 1px);
                     background: AppTheme.selection-background;
-                    border-width: 1px;
+                    border-width: 2px;
                     border-color: AppTheme.accent;
                 }
                 if root.skimmer-visible : Rectangle {
@@ -1563,6 +1564,7 @@ export component TimelineWindow inherits Window {
                     width: parent.width;
                     vertical-stretch: 1;
                     objects: root.object-rows;
+                    row-generation: root.object-rows-generation;
                     kind-filters: root.object-kind-filters;
                     kind-filter-value: root.object-kind-label;
                     filter-kinds(kind) => { root.filter-object-kinds(kind); }

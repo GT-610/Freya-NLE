@@ -340,6 +340,7 @@ impl LifecycleUi {
         }) else {
             return;
         };
+        dialog.set_validation_message(SharedString::new());
         dialog.set_target_layer(layer);
         dialog.set_layer_name(SharedString::from(input.name));
         dialog.set_layer_background(SharedString::from(input.background));

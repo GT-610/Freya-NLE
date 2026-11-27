@@ -213,6 +213,9 @@ msgstr "比特率"
 msgid "Bitrate:"
 msgstr "比特率："
 
+msgid "Blocked"
+msgstr "无法放置"
+
 msgid "Bring editor windows onto this screen"
 msgstr "将编辑窗口移回当前屏幕"
 

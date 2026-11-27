@@ -807,6 +807,7 @@ pub(super) fn project_defaults(settings: &SettingsStore) -> ProjectDefaults {
 }
 
 pub(super) fn sync_project_settings(window: &ProjectSettingsWindow, input: &ProjectSettingsInput) {
+    window.set_validation_message(SharedString::new());
     window.set_project_width(input.width);
     window.set_project_height(input.height);
     window.set_project_fps(SharedString::from(input.fps.to_string()));
@@ -819,6 +820,7 @@ pub(super) fn sync_scene_settings(
     scene_id: i32,
     input: &SceneSettingsInput,
 ) {
+    window.set_validation_message(SharedString::new());
     window.set_creation_mode(creation_mode);
     window.set_target_scene_id(scene_id);
     window.set_scene_name(SharedString::from(input.name.clone()));

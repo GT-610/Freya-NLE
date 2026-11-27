@@ -47,13 +47,15 @@ fn main() {
         "system" => (760u32, 680u32),
         "confirm" => (460u32, 200u32),
         "mark" => (440u32, 190u32),
+        "project" => (450u32, 260u32),
+        "scene" => (450u32, 550u32),
         "layer" => (460u32, 430u32),
         "backup" => (520u32, 420u32),
         "export" => (620u32, 760u32),
         "packages" => (760u32, 520u32),
         other => {
             eprintln!(
-                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm`, `mark`, `layer` or `backup`"
+                "unknown window {other:?}; expected `timeline`, `main`, `settings`, `system`, `export`, `packages`, `confirm`, `mark`, `project`, `scene`, `layer` or `backup`"
             );
             std::process::exit(2);
         }
@@ -115,13 +117,22 @@ fn main() {
             // and completion choice can be reviewed.
             if std::env::var("UI_SNAPSHOT_BATCH").is_ok() {
                 ui.set_batch_items(ModelRc::new(VecModel::from(vec![
-                    StandardListViewItem::from("1. harbor_sunrise_scene1 → /tmp/out/scene1.mkv · done"),
-                    StandardListViewItem::from("2. harbor_sunrise_scene2 → /tmp/out/scene2.mkv · running"),
+                    StandardListViewItem::from(
+                        "1. harbor_sunrise_scene1 → /tmp/out/scene1.mkv · done",
+                    ),
+                    StandardListViewItem::from(
+                        "2. harbor_sunrise_scene2 → /tmp/out/scene2.mkv · running",
+                    ),
                     StandardListViewItem::from("3. harbor_sunrise_still → /tmp/out/stills"),
                 ])));
                 ui.set_batch_current(1);
                 ui.set_batch_running(true);
                 ui.set_batch_status("Exporting item 2/3".into());
+            }
+            if std::env::var_os("UI_SNAPSHOT_EXPORTING").is_some() {
+                ui.set_exporting(true);
+                ui.set_export_progress(42.0);
+                ui.set_progress_label("126 / 300 frames, 00:08 remaining".into());
             }
             ui.show().expect("show the export window");
             save(&window, width, height, &output_name("export", preference));
@@ -189,6 +200,24 @@ fn main() {
             ui.show().expect("show the backup history window");
             let name = if all { "backup-all" } else { "backup" };
             save(&window, width, height, &output_name(name, preference));
+        }
+        "project" => {
+            let ui = ProjectSettingsWindow::new().expect("create the project settings window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            if std::env::var_os("UI_SNAPSHOT_INVALID").is_some() {
+                ui.set_project_fps("0".into());
+                ui.set_validation_message("Enter FPS in the range 1 to 240.".into());
+            }
+            ui.show().expect("show the project settings window");
+            save(&window, width, height, &output_name("project", preference));
+        }
+        "scene" => {
+            let ui = SceneSettingsWindow::new().expect("create the scene settings window");
+            ui.global::<AppTheme>().set_preference_index(preference);
+            ui.set_scene_name("Opening title".into());
+            ui.set_grid_mode_index(1);
+            ui.show().expect("show the scene settings window");
+            save(&window, width, height, &output_name("scene", preference));
         }
         "layer" => {
             let ui = LayerSettingsWindow::new().expect("create the layer settings window");
@@ -339,9 +368,54 @@ fn main() {
                 ui.set_preview_image(image);
             }
             ui.show().expect("show the timeline window");
+            if let Ok(mode) = std::env::var("UI_SNAPSHOT_MOVE") {
+                snapshot_timeline_move(&ui, &mode);
+            }
             save(&window, width, height, &output_name("timeline", preference));
         }
     }
+}
+
+fn snapshot_timeline_move(ui: &TimelineWindow, mode: &str) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use slint::LogicalPosition;
+
+    let valid = match mode {
+        "valid" => true,
+        "blocked" => false,
+        _ => panic!("UI_SNAPSHOT_MOVE must be valid or blocked"),
+    };
+    let previewed = Rc::new(std::cell::Cell::new(false));
+    let observed = previewed.clone();
+    ui.on_preview_clip_drag(move |kind, clip_id, _, _, _| {
+        assert_eq!(kind, "move");
+        assert_eq!(clip_id, 1);
+        observed.set(true);
+        TimelineDragFeedback {
+            valid,
+            start: 60,
+            duration: 210,
+            layer: 4,
+            snap_frame: -1,
+            ..Default::default()
+        }
+    });
+    // The default timeline fixture puts clip 1 on row 1 at x=96..432.
+    let source = LogicalPosition::new(160.0, 116.0);
+    let destination = LogicalPosition::new(256.0, if valid { 244.0 } else { 149.0 });
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: source });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: source,
+        button: PointerEventButton::Left,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: destination,
+    });
+    assert!(
+        previewed.get(),
+        "the snapshot pointer must reach the unlocked clip"
+    );
 }
 
 fn output_name(window: &str, preference: i32) -> String {
@@ -605,7 +679,11 @@ fn populate_timeline(ui: &TimelineWindow) {
                 visible: index != 5,
                 locked: index == 6,
                 selected: index == 0,
-                name: if index == 2 { "Titles".into() } else { "".into() },
+                name: if index == 2 {
+                    "Titles".into()
+                } else {
+                    "".into()
+                },
                 background: if index == 3 {
                     Color::from_rgb_u8(0x30, 0x40, 0xe0)
                 } else {
