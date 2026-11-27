@@ -1770,28 +1770,28 @@ fn sync_clip_midpoints(clip: &mut ClipDocument, before: &ClipDocument) {
         clip.extra.remove(crate::midpoint::MIDPOINTS_KEY);
         return;
     }
-    let shifted = if clip.duration == before.duration {
-        existing.clone()
-    } else {
+    let duration_changed = clip.duration != before.duration;
+    let shifted = if duration_changed {
         crate::midpoint::shift_by_start_delta(&existing, before.start.saturating_sub(clip.start))
+    } else {
+        existing.clone()
     };
     let sanitized = crate::midpoint::sanitize(shifted, clip.duration);
-    let mapped: Vec<_> = existing
-        .frames()
-        .iter()
-        .filter_map(|old_frame| {
-            let new_frame = if clip.duration == before.duration {
-                *old_frame
-            } else {
-                old_frame.saturating_add(before.start.saturating_sub(clip.start))
-            };
-            (new_frame != *old_frame || new_frame <= 0 || new_frame >= clip.duration).then_some((
-                *old_frame,
-                (new_frame > 0 && new_frame < clip.duration).then_some(new_frame),
-            ))
-        })
-        .collect();
-    remap_midpoint_tracks(clip, &mapped);
+    // Re-sample every generated point on a duration change, even when its frame stays
+    // put. Authored points may have entered or left the clip's sampled range.
+    if duration_changed {
+        let start_delta = before.start.saturating_sub(clip.start);
+        let mapping: Vec<_> = existing
+            .frames()
+            .iter()
+            .map(|&old_frame| {
+                let new_frame = old_frame.saturating_add(start_delta);
+                let target = (new_frame > 0 && new_frame < clip.duration).then_some(new_frame);
+                (old_frame, target)
+            })
+            .collect();
+        remap_midpoint_tracks(clip, &mapping);
+    }
     crate::midpoint::write_midpoints(&mut clip.extra, &sanitized);
 }
 
@@ -3547,24 +3547,57 @@ mod tests {
             }
         }
 
-        let extend = state
-            .plan(EditRequest::UpdateClipGeometry {
-                clip_id: 1,
-                layer: 0,
-                start: 0,
-                duration: 45,
-            })
-            .expect("extension plans");
-        state.apply_patch(&extend.forward).expect("apply");
-        let clip = &state.document.clips[0];
-        for (track, expected) in [
-            (&clip.effects[0].keyframes.as_ref().unwrap()["x"], 80.0),
-            (&clip.audio_plugins[0].keyframes.as_ref().unwrap()["0"], 0.5),
-        ] {
-            assert_eq!(
-                crate::keyframe_document::evaluate_document_track(track, &json!(0.0), 45, 40),
-                json!(expected),
-            );
+        // This midpoint sits after the last currently visible authored point on both tracks.
+        // It must follow the curve once the keyframes at frame 40 become active.
+        apply_midpoint(&mut state, MidpointOperation::Add { frame: 17 });
+        let compare_curves = |clip: &ClipDocument| {
+            for (track, before) in [
+                (
+                    &clip.effects[0].keyframes.as_ref().unwrap()["x"],
+                    &original.effects[0].keyframes.as_ref().unwrap()["x"],
+                ),
+                (
+                    &clip.audio_plugins[0].keyframes.as_ref().unwrap()["0"],
+                    &original.audio_plugins[0].keyframes.as_ref().unwrap()["0"],
+                ),
+            ] {
+                assert!(track["points"].as_array().unwrap().iter().any(|point| {
+                    point["frame"] == json!(17) && point["_midpointFrame"] == json!(true)
+                }));
+                for frame in 0..clip.duration {
+                    let evaluate = |track: &Value| {
+                        crate::keyframe_document::evaluate_document_track(
+                            track,
+                            &json!(0.0),
+                            clip.duration,
+                            frame,
+                        )
+                        .as_f64()
+                        .expect("numeric track")
+                    };
+                    let actual = evaluate(track);
+                    let expected = evaluate(before);
+                    assert!(
+                        (actual - expected).abs() < 1e-10,
+                        "duration {} frame {frame}: {actual} differs from authored value {expected}",
+                        clip.duration
+                    );
+                }
+            }
+        };
+        compare_curves(&state.document.clips[0]);
+
+        for duration in [45, 20] {
+            let resize = state
+                .plan(EditRequest::UpdateClipGeometry {
+                    clip_id: 1,
+                    layer: 0,
+                    start: 0,
+                    duration,
+                })
+                .expect("resize plans");
+            state.apply_patch(&resize.forward).expect("apply");
+            compare_curves(&state.document.clips[0]);
         }
     }
 

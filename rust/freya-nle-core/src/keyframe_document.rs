@@ -415,6 +415,18 @@ pub(crate) fn evaluate_document_track(
 
 const MIDPOINT_MARKER: &str = "_midpointFrame";
 
+fn is_midpoint_keyframe(point: &Value) -> bool {
+    point.get(MIDPOINT_MARKER) == Some(&Value::Bool(true))
+}
+
+fn stored_points_mut(track: &mut Value) -> Option<&mut Vec<Value>> {
+    match track {
+        Value::Array(points) => Some(points),
+        Value::Object(track) => track.get_mut("points").and_then(Value::as_array_mut),
+        _ => None,
+    }
+}
+
 /// Inserts a keyframe that marks an object midpoint. Only linear and stepped segments can be
 /// split without changing their interpolation semantics.
 pub(crate) fn insert_midpoint_keyframe(
@@ -455,18 +467,16 @@ pub(crate) fn insert_midpoint_keyframe(
     keyframe.insert("interp".to_owned(), Value::String(interpolation.to_owned()));
     keyframe.insert(MIDPOINT_MARKER.to_owned(), Value::Bool(true));
 
-    // The sampling view is clipped to the current duration. Keep authored points that can
-    // become visible after an extension, including when upgrading a legacy array track.
-    let mut updated = if is_structured(track) {
-        track.clone()
-    } else {
-        normalize_track(track, fallback, i32::MAX)
-    };
-    let points = updated
-        .as_object_mut()?
-        .entry("points")
-        .or_insert_with(|| Value::Array(Vec::new()))
-        .as_array_mut()?;
+    // Sample the current clip, but keep the entire stored track. In particular, keeping
+    // legacy arrays avoids losing frame-zero controls or changing how they are interpreted.
+    let mut updated = track.clone();
+    if is_structured(&updated) {
+        updated
+            .as_object_mut()?
+            .entry("points")
+            .or_insert_with(|| Value::Array(Vec::new()));
+    }
+    let points = stored_points_mut(&mut updated)?;
     points.push(Value::Object(keyframe));
     sort_points(points);
     Some(updated)
@@ -479,46 +489,21 @@ pub(crate) fn remap_midpoint_keyframes(
     mapping: &[(i32, Option<i32>)],
 ) -> Value {
     let mut remapped = track.clone();
-    let Some(points) = remapped
-        .as_object_mut()
-        .and_then(|track| track.get_mut("points"))
-        .and_then(Value::as_array_mut)
-    else {
+    let Some(points) = stored_points_mut(&mut remapped) else {
         return remapped;
     };
-    let manual_frames: Vec<_> = points
-        .iter()
-        .filter(|point| {
-            point
-                .as_object()
-                .and_then(|point| point.get(MIDPOINT_MARKER))
-                != Some(&Value::Bool(true))
-        })
-        .map(point_frame)
-        .collect();
     let targets: Vec<_> = mapping
         .iter()
         .filter_map(|(source, target)| {
+            let target = (*target)?;
             points
                 .iter()
-                .any(|point| {
-                    point_frame(point) == *source
-                        && point
-                            .as_object()
-                            .and_then(|point| point.get(MIDPOINT_MARKER))
-                            == Some(&Value::Bool(true))
-                })
-                .then_some(*target)
-                .flatten()
+                .any(|point| point_frame(point) == *source && is_midpoint_keyframe(point))
+                .then_some(target)
         })
-        .filter(|target| !manual_frames.contains(target))
         .collect();
     points.retain(|point| {
-        let generated = point
-            .as_object()
-            .and_then(|point| point.get(MIDPOINT_MARKER))
-            == Some(&Value::Bool(true));
-        !generated
+        !is_midpoint_keyframe(point)
             || !mapping
                 .iter()
                 .any(|(source, _)| point_frame(point) == *source)
@@ -559,7 +544,18 @@ fn normalize_track(track: &Value, fallback: &Value, duration: i32) -> Value {
     sort_points(&mut legacy);
     let mut start = Map::new();
     start.insert("frame".to_owned(), Value::from(0));
-    start.insert("value".to_owned(), evaluate_track(&legacy, 0, fallback));
+    // A generated point must not influence the synthetic start of a legacy array.
+    let start_value = if legacy.iter().any(is_midpoint_keyframe) {
+        let authored: Vec<_> = legacy
+            .iter()
+            .filter(|point| !is_midpoint_keyframe(point))
+            .cloned()
+            .collect();
+        evaluate_track(&authored, 0, fallback)
+    } else {
+        evaluate_track(&legacy, 0, fallback)
+    };
+    start.insert("value".to_owned(), start_value);
     let start_interpolation = legacy
         .iter()
         .find(|point| point_frame(point) == 0)
@@ -779,7 +775,10 @@ fn apply(request: Request) -> Response {
             new_duration,
         } => {
             let was_structured = is_structured(&track);
-            let mut normalized = if was_structured {
+            let was_legacy = track.is_array();
+            let mut normalized = if was_legacy {
+                track.clone()
+            } else if was_structured {
                 let mut track = track.as_object().cloned().unwrap_or_default();
                 let mut start = track
                     .get("start")
@@ -803,19 +802,14 @@ fn apply(request: Request) -> Response {
                     ("points".to_owned(), Value::Array(Vec::new())),
                 ]))
             };
-            let mut changed = !was_structured;
+            let mut changed = !was_structured && !was_legacy;
             if old_duration > 0 && old_duration != new_duration {
-                let Some(points) = normalized
-                    .as_object_mut()
-                    .and_then(|track| track.get_mut("points"))
-                    .and_then(Value::as_array_mut)
-                else {
+                let Some(points) = stored_points_mut(&mut normalized) else {
                     return response(track, false, false);
                 };
-                if let Some(point) = points
-                    .iter_mut()
-                    .find(|point| point_frame(point) == old_duration)
-                {
+                if let Some(point) = points.iter_mut().find(|point| {
+                    point_frame(point) == old_duration && !is_midpoint_keyframe(point)
+                }) {
                     let Some(point) = point.as_object_mut() else {
                         return response(track, false, false);
                     };
@@ -1045,15 +1039,30 @@ mod tests {
     }
 
     #[test]
-    fn midpoint_samples_the_active_clip_but_keeps_future_legacy_points() {
+    fn midpoint_preserves_legacy_controls_and_future_points() {
         let track = json!([
-            {"frame": 0, "value": 0.0, "interp": "linear"},
+            {"frame": 0, "value": 0.0, "interp": "custom",
+                "points": [0.25, 0.0, 0.75, 0.0], "modeParams": {"amplitude": 0.5}},
             {"frame": 4, "value": 10.0, "interp": "linear"},
             {"frame": 40, "value": 80.0, "interp": "linear"}
         ]);
-        let updated = insert_midpoint_keyframe(&track, &json!(0.0), 20, 6).expect("insert");
-        assert_eq!(updated["points"][1]["value"], json!(10.0));
-        assert_eq!(updated["points"][2], track[2]);
+        let fallback = json!(0.0);
+        let updated = insert_midpoint_keyframe(&track, &fallback, 20, 6).expect("insert");
+        assert_eq!(updated[0], track[0]);
+        assert_eq!(updated[2]["value"], json!(10.0));
+        assert_eq!(updated[3], track[2]);
+        for frame in 0..20 {
+            assert_eq!(
+                evaluate_document_track(&updated, &fallback, 20, frame),
+                evaluate_document_track(&track, &fallback, 20, frame)
+            );
+        }
+        let extended = sync_track(updated, fallback.clone(), 20, 45);
+        assert_eq!(extended[0], track[0]);
+        assert_eq!(
+            remap_midpoint_keyframes(&extended, &fallback, 45, &[(6, None)]),
+            track
+        );
     }
 
     #[test]
