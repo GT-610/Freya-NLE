@@ -287,6 +287,7 @@ impl ExportManager {
             active.failure_override = Some(message);
             active.awaiting_decode = false;
             active.ready_for_frame = false;
+            active.pending_audio = None;
             let _ = active.commands.send(WorkerCommand::Cancel);
         }
     }
@@ -313,6 +314,18 @@ impl ExportManager {
             return;
         };
         if !active.awaiting_decode {
+            return;
+        }
+        if !batch.errors.is_empty() {
+            // The preview can skip an unreadable layer to keep editing responsive.
+            // An export with that layer missing must fail before the worker
+            // publishes its video or keeps the previously written sequence frames.
+            let message = format!(
+                "Frame render error: could not decode visual content at frame {}:\n{}",
+                active.next_frame,
+                batch.errors.join("\n")
+            );
+            self.fail_current_frame(message);
             return;
         }
         self.preview.compose(&batch.scene, batch.generation);
@@ -979,6 +992,121 @@ mod tests {
             start_frame: 0,
             end_frame: 300,
         }
+    }
+
+    #[test]
+    #[ignore = "requires a GPU-backed wgpu adapter and the FFmpeg libx264/AAC encoders"]
+    fn visual_decode_failure_preserves_existing_video_and_cleans_partial_sequence() {
+        use freya_nle_core::api::TimelineState;
+        use freya_nle_preview::{PreviewContent, PreviewPlanner, PreviewSource};
+
+        let temp = tempfile::tempdir().unwrap();
+        let media_dir = temp.path().join("media");
+        let export_dir = temp.path().join("export");
+        fs::create_dir(&media_dir).unwrap();
+        fs::create_dir(&export_dir).unwrap();
+        fs::write(media_dir.join("broken.mp4"), b"invalid video data").unwrap();
+        let document = TimelineState::from_json(
+            br#"{
+                "version": 3,
+                "settings": {"width": 64, "height": 64, "fps": 24, "sampleRate": 48000},
+                "scenes": [{"id": 1, "name": "Root", "width": 64, "height": 64,
+                           "fps": 24, "duration": 2}],
+                "clips": [{"id": 71, "sceneId": 1, "type": "video", "start": 1,
+                           "duration": 1, "layer": 1, "effects": [{"id": "video",
+                           "params": {"path": "broken.mp4"}}]}]
+            }"#,
+        )
+        .unwrap()
+        .snapshot();
+        let mut planner = PreviewPlanner::with_media_directory(&document, Some(media_dir));
+        let empty = planner.build(&document, 1, 0).unwrap().scene;
+        assert!(empty.layers.is_empty());
+        let mut nested = planner.build(&document, 1, 1).unwrap().scene;
+        assert_eq!(nested.layers.len(), 1);
+        assert_eq!(nested.layers[0].clip_id, 71);
+        nested.instance_key = 2;
+        // Nest the unreadable clip to exercise diagnostic propagation out of a child scene.
+        let mut broken = empty.clone();
+        broken.layers.push(PreviewSource {
+            clip_id: 82,
+            content: PreviewContent::Scene {
+                scene: Box::new(nested),
+            },
+            timeline_layer: 1,
+            transform: Default::default(),
+            blend_mode: Default::default(),
+            crop: Default::default(),
+            mask: None,
+            effects: Vec::new(),
+        });
+
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+            .expect("a GPU-backed adapter is required");
+        assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))
+            .expect("the adapter can create an export device");
+        let mut manager = ExportManager::new(device, queue, Arc::new(|| {}));
+        let project = ExportProject {
+            width: 64,
+            height: 64,
+            fps: 24.0,
+            duration: 2,
+            sample_rate: 48_000,
+        };
+        let old_video = export_dir.join("existing.mp4");
+        let sequence = export_dir.join("sequence");
+        fs::write(&old_video, b"previous export").unwrap();
+        for (mode, path) in [
+            (ExportMode::Video, &old_video),
+            (ExportMode::ImageSequence, &sequence),
+        ] {
+            assert_eq!(
+                manager
+                    .start(
+                        1,
+                        project,
+                        export_request(mode, path.clone()),
+                        Default::default()
+                    )
+                    .unwrap(),
+                2
+            );
+            let deadline = Instant::now() + std::time::Duration::from_secs(15);
+            let result = loop {
+                assert!(Instant::now() < deadline, "{mode:?} timed out");
+                if let Some(request) = manager.next_frame_request() {
+                    let scene = match request.frame {
+                        0 => empty.clone(),
+                        1 => {
+                            if mode == ExportMode::ImageSequence {
+                                assert!(sequence.join("frame_000000.png").is_file());
+                            }
+                            broken.clone()
+                        }
+                        frame => panic!("unexpected export frame {frame}"),
+                    };
+                    manager.submit_scene(scene, Vec::new(), None);
+                }
+                if let Some(result) = manager.poll().into_iter().find_map(|event| match event {
+                    ExportEvent::Finished(result) => Some(result),
+                    ExportEvent::Progress(_) => None,
+                }) {
+                    break result;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            };
+            assert!(!result.success, "{mode:?} reported success: {result:?}");
+            assert!(result.message.contains("frame 1"), "{result:?}");
+            assert!(result.message.contains("clip #71"), "{result:?}");
+            assert!(result.message.contains("broken.mp4"), "{result:?}");
+            assert_eq!(result.notice, None);
+            assert!(!manager.is_exporting());
+        }
+        assert_eq!(fs::read(&old_video).unwrap(), b"previous export");
+        assert!(!sequence.exists());
+        assert_eq!(fs::read_dir(&export_dir).unwrap().count(), 1);
     }
 
     #[test]

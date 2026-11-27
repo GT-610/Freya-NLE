@@ -1846,6 +1846,7 @@ dependencies = [
  "freya-nle-core",
  "freya-nle-media",
  "freya-nle-preview",
+ "pollster",
  "tempfile",
  "wgpu",
 ]
