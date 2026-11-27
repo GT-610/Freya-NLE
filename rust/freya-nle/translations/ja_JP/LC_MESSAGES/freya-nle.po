@@ -1715,3 +1715,9 @@ msgstr "ログフォルダを開く"
 
 msgid "Save Log..."
 msgstr "ログを保存..."
+
+msgid "Panels"
+msgstr "パネル"
+
+msgid "Media actions"
+msgstr "素材の操作"

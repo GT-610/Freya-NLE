@@ -1715,3 +1715,9 @@ msgstr "打开日志文件夹"
 
 msgid "Save Log..."
 msgstr "保存日志..."
+
+msgid "Panels"
+msgstr "面板"
+
+msgid "Media actions"
+msgstr "素材操作"

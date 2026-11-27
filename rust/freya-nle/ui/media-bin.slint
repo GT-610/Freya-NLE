@@ -4,6 +4,7 @@ import { AppTheme } from "theme.slint";
 
 export component MediaBinPanel inherits Rectangle {
     in property <[MediaBinEntryData]> entries;
+    in property <bool> compact: false;
     in property <[MediaBinGroupData]> groups;
     in-out property <string> filter: "";
     in-out property <int> group-filter: -2;
@@ -44,8 +45,44 @@ export component MediaBinPanel inherits Rectangle {
         HorizontalLayout {
             height: 28px;
             spacing: 4px;
-            Button { text: @tr("Add Media..."); clicked => { root.add-media(); } }
             Button {
+                horizontal-stretch: 1;
+                text: @tr("Add Media...");
+                clicked => { root.add-media(); }
+            }
+            if root.compact : actions := ContextMenuArea {
+                width: 32px;
+                Menu {
+                    MenuItem {
+                        title: @tr("Remove");
+                        enabled: root.selected-id >= 0;
+                        activated => { root.remove-media(root.selected-id); }
+                    }
+                    MenuSeparator { }
+                    MenuItem { title: @tr("+ Group"); activated => { root.create-group(); } }
+                    MenuItem {
+                        title: @tr("Rename group");
+                        enabled: root.group-filter >= 0;
+                        activated => { rename-field.visible = true; rename-field.focus(); }
+                    }
+                    MenuItem {
+                        title: @tr("Remove Current Group");
+                        enabled: root.group-filter >= 0;
+                        activated => {
+                            root.remove-group(root.group-filter);
+                            root.group-filter = -2;
+                        }
+                    }
+                }
+                Button {
+                    width: 100%;
+                    height: 100%;
+                    text: "…";
+                    accessible-label: @tr("Media actions");
+                    clicked => { actions.show({ x: 0px, y: self.height }); }
+                }
+            }
+            if !root.compact : Button {
                 text: @tr("Remove");
                 enabled: root.selected-id >= 0;
                 clicked => { root.remove-media(root.selected-id); }
@@ -81,9 +118,9 @@ export component MediaBinPanel inherits Rectangle {
                     }
                 }
             }
-            Button { text: @tr("+ Group"); clicked => { root.create-group(); } }
+            if !root.compact : Button { text: @tr("+ Group"); clicked => { root.create-group(); } }
         }
-        if root.group-filter >= 0: HorizontalLayout {
+        if !root.compact && root.group-filter >= 0 : HorizontalLayout {
             height: 28px;
             spacing: 4px;
             Button {
@@ -102,6 +139,7 @@ export component MediaBinPanel inherits Rectangle {
         }
         rename-field := LineEdit {
             visible: false;
+            height: self.visible ? 28px : 0px;
             placeholder-text: @tr("Group name");
             accessible-label: @tr("Rename group");
             accepted(value) => {
@@ -116,7 +154,7 @@ export component MediaBinPanel inherits Rectangle {
         }
         ScrollView {
             vertical-stretch: 1;
-            min-height: 120px;
+            min-height: root.compact ? 72px : 120px;
             accessible-role: list;
             accessible-label: @tr("Media Library");
             VerticalLayout {
@@ -232,6 +270,7 @@ export component MediaBinPanel inherits Rectangle {
                         Text { text: @tr("Group"); width: 32px; vertical-alignment: center; }
                         ComboBox {
                             horizontal-stretch: 1;
+                            min-width: 0px;
                             model: root.group-names;
                             current-index: entry.group-id < 0 ? 1 : entry.group-index + 2;
                             private property <int> projected: entry.group-id < 0 ? 1 : entry.group-index + 2;
@@ -248,7 +287,20 @@ export component MediaBinPanel inherits Rectangle {
                             }
                         }
                     }
-                    HorizontalLayout {
+                    if root.compact : insert-menu := ContextMenuArea {
+                        height: 28px;
+                        Menu {
+                            MenuItem { title: @tr("Insert at Playhead"); activated => { root.insert-media(entry.id, false); } }
+                            MenuItem { title: @tr("Overwrite"); activated => { root.insert-media(entry.id, true); } }
+                        }
+                        Button {
+                            width: 100%;
+                            height: 100%;
+                            text: @tr("Insert at Playhead") + " ▾";
+                            clicked => { insert-menu.show({ x: 0px, y: self.height }); }
+                        }
+                    }
+                    if !root.compact : HorizontalLayout {
                         height: 30px;
                         spacing: 4px;
                         Button {

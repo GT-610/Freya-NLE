@@ -93,8 +93,10 @@ pub(super) fn ensure_timeline_height_for_preview(timeline: &TimelineWindow) {
     }
     let window = timeline.window();
     let logical = window.size().to_logical(window.scale_factor());
-    if logical.height < 640.0 {
-        window.set_size(LogicalSize::new(logical.width, 720.0));
+    // Match the merged minimum in TimelineWindow so restoring a compact
+    // layout only grows it as far as the editor needs.
+    if logical.height < 500.0 {
+        window.set_size(LogicalSize::new(logical.width, 500.0));
     }
 }
 
