@@ -27,13 +27,23 @@ export component TimelineWindow inherits Window {
     title: @tr("Timeline");
     preferred-width: 1280px;
     preferred-height: 340px;
-    min-width: 720px;
+    min-width: 480px;
     // The dock needs room for the list and the selected entry's editor; a shorter window would
     // show neither. Collapsing the library gives the height back.
     min-height: root.preview-visible
-        ? 640px
+        ? 500px
         : root.media-bin-visible ? 470px : 300px;
     forward-focus: timeline-shortcuts;
+    // Record the window width after layout so responsive controls do not feed
+    // the window's own preferred width back into its layout constraints.
+    private property <length> workspace-width: 1280px;
+    private property <length> workspace-height: 500px;
+    init => {
+        root.workspace-width = root.width;
+        root.workspace-height = root.height;
+    }
+    changed width => { root.workspace-width = root.width; }
+    changed height => { root.workspace-height = root.height; }
     private property <bool> drag-active: false;
     private property <TimelineDragFeedback> drag-feedback;
     callback preview-clip-drag(string, int, float, float, bool) -> TimelineDragFeedback;
@@ -118,18 +128,9 @@ export component TimelineWindow inherits Window {
     // updates the value; a fixed length keeps the binding out of the layout's
     // own height calculation (a ratio read of `root.height` there forms a loop).
     in-out property <length> preview-pane-height: 320px;
-    // The pane keeps its height while the window is resized, so a window that
-    // got shorter would otherwise leave the ruler and the layers with less than
-    // the 240px the layout reserves for them.
-    changed height => {
-        if (root.preview-visible) {
-            root.preview-pane-height = clamp(
-                root.preview-pane-height,
-                120px,
-                root.preview-height-ceiling()
-            );
-        }
-    }
+    // Keep the requested height when a temporary resize constrains the pane.
+    private property <length> visible-preview-height:
+        clamp(root.preview-pane-height, 120px, root.preview-height-ceiling());
     // Footer readings. The host projects the selected scene alongside the
     // playhead, mirroring AviUtl2's footer format (style.conf [Format]):
     // time/frame on the left, scene/resolution/rate on the right.
@@ -235,10 +236,8 @@ export component TimelineWindow inherits Window {
     // Tallest the merged preview pane may get. It shares the window with the
     // ruler and the layer area, which keep 240px, and is capped at 720px on its
     // own; the 120px floor holds even in a window too short for the subtraction.
-    // Only event handlers call this: a binding that read `root.height` here would
-    // feed the layout's own height calculation.
     pure function preview-height-ceiling() -> length {
-        return clamp(root.height - 240px, 120px, 720px);
+        return clamp(root.workspace-height - 240px, 120px, 720px);
     }
 
     pure function footer-left-text() -> string {
@@ -318,6 +317,9 @@ export component TimelineWindow inherits Window {
     callback begin-scrub();
     callback scrub-to(float);
     callback end-scrub();
+    public function focus-editing-surface() {
+        timeline-shortcuts.focus();
+    }
     // The menu bar follows the focused window on macOS, so this window carries
     // its own copy of the shared bar; the callbacks forward to the same app
     // commands the preview window uses (see the wiring in callbacks.rs).
@@ -481,7 +483,7 @@ export component TimelineWindow inherits Window {
                 enabled: root.preview-visible;
                 activated => {
                     root.preview-pane-height = clamp(
-                        root.preview-pane-height + 40px,
+                        root.visible-preview-height + 40px,
                         120px,
                         root.preview-height-ceiling()
                     );
@@ -492,7 +494,7 @@ export component TimelineWindow inherits Window {
                 title: @tr("Shorter preview");
                 enabled: root.preview-visible;
                 activated => {
-                    root.preview-pane-height = clamp(root.preview-pane-height - 40px, 120px, 720px);
+                    root.preview-pane-height = clamp(root.visible-preview-height - 40px, 120px, 720px);
                     root.preview-height-changed(root.preview-pane-height / 1px);
                 }
             }
@@ -849,6 +851,7 @@ export component TimelineWindow inherits Window {
             min-height: 0px;
             VerticalLayout {
                 horizontal-stretch: 1;
+                min-width: 0px;
                 spacing: 0px;
                 if root.preview-visible && root.project-tabs.length > 1 : Rectangle {
                 height: root.project-tab-height * 1px;
@@ -945,23 +948,34 @@ export component TimelineWindow inherits Window {
                         }
                     }
                 }
-                Button {
-                    width: 64px;
+                if root.workspace-width < 900px : panel-menu := ContextMenuArea {
+                    width: panel-button.preferred-width;
+                    height: 100%;
+                    Menu {
+                        MenuItem { title: @tr("Media Library"); checkable: true; checked <=> root.media-bin-visible; }
+                        MenuItem { title: @tr("Object List"); checkable: true; checked <=> root.object-list-visible; }
+                    }
+                    panel-button := Button {
+                        height: 100%;
+                        text: @tr("Panels") + " ▾";
+                        clicked => { panel-menu.show({ x: 0px, y: self.height }); }
+                    }
+                }
+                if root.workspace-width >= 900px : Button {
                     text: root.media-bin-visible ? "◀ " + @tr("Media") : "▶ " + @tr("Media");
                     checkable: true;
                     checked <=> root.media-bin-visible;
                     accessible-label: @tr("Show or hide the media library");
                 }
-                Button {
-                    width: 74px;
+                if root.workspace-width >= 900px : Button {
                     text: root.object-list-visible ? "◀ " + @tr("Objects") : "▶ " + @tr("Objects");
                     checkable: true;
                     checked <=> root.object-list-visible;
                     accessible-label: @tr("Show or hide the object list");
                 }
                 ComboBox {
-                    min-width: 124px;
-                    max-width: 124px;
+                    min-width: root.workspace-width < 720px ? 88px : 124px;
+                    max-width: root.workspace-width < 720px ? 88px : 124px;
                     model: [@tr("Selection Tool"), @tr("Ripple Trim"), @tr("Roll Edit"), @tr("Slide Clip"), @tr("Slip Media")];
                     current-index: root.edit-tool-index();
                     selected(value) => {
@@ -972,7 +986,7 @@ export component TimelineWindow inherits Window {
         }
             if root.preview-visible : Rectangle {
                 width: 100%;
-                height: root.preview-pane-height;
+                height: root.visible-preview-height;
                 background: AppTheme.canvas-background;
                 VerticalLayout {
                     width: 100%;
@@ -1013,7 +1027,7 @@ export component TimelineWindow inherits Window {
                     pointer-event(event) => {
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                             self.start-y = self.absolute-position.y + self.mouse-y;
-                            self.start-height = root.preview-pane-height;
+                            self.start-height = root.visible-preview-height;
                             self.dragging = true;
                         }
                         if event.kind == PointerEventKind.move && self.dragging {
@@ -1524,7 +1538,7 @@ export component TimelineWindow inherits Window {
         }
         }
             if root.media-bin-visible: VerticalLayout {
-                width: 280px;
+                width: clamp(root.workspace-width * 0.32, 196px, 280px);
                 spacing: 0px;
                 PanelHeader {
                     title: @tr("Media Library");
@@ -1538,6 +1552,7 @@ export component TimelineWindow inherits Window {
                     }
                 }
                 MediaBinPanel {
+                    compact: root.workspace-width < 830px;
                     width: parent.width;
                     vertical-stretch: 1;
                 entries: root.media-entries;
@@ -1558,7 +1573,7 @@ export component TimelineWindow inherits Window {
                 }
             }
             if root.object-list-visible : VerticalLayout {
-                width: 240px;
+                width: min(240px, max(160px, root.workspace-width * 0.28));
                 spacing: 0px;
                 ObjectListPanel {
                     width: parent.width;

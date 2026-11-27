@@ -364,6 +364,7 @@ fn main() {
             // The merged preview pane is a mode, not the default layout.
             ui.set_preview_visible(std::env::var("UI_SNAPSHOT_PREVIEW").is_ok());
             ui.set_object_list_visible(std::env::var("UI_SNAPSHOT_OBJECTS").is_ok());
+            ui.set_media_bin_visible(std::env::var_os("UI_SNAPSHOT_MEDIA").is_some());
             if let Some(image) = load_preview() {
                 ui.set_preview_image(image);
             }
@@ -473,6 +474,9 @@ fn output_dir() -> std::path::PathBuf {
 }
 
 fn save(window: &Rc<MinimalSoftwareWindow>, width: u32, height: u32, name: &str) {
+    window.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(width as f32, height as f32),
+    });
     // A component needs a few event-loop turns before its layout and images
     // settle; the first frames can otherwise be blank.
     for _ in 0..6 {
@@ -583,20 +587,20 @@ fn populate_settings(ui: &ObjectSettingsWindow) {
     ])));
     ui.set_setting_rows(ModelRc::new(VecModel::from(vec![
         row("effect", "動画ファイル [映像再生]", ""),
-        row("number", "X", "X  [直線移動]"),
-        row("number", "Y", "Y  [直線移動]"),
-        row("number", "Z", "Z  [直線移動]"),
-        row("number", "拡大率", "拡大率  [直線移動]"),
-        row("integer", "再生位置", "再生位置  [直線移動]"),
+        row("number", "X", ""),
+        row("number", "Y", "直線"),
+        row("number", "Z", ""),
+        row("number", "拡大率", "加減速（サイン）"),
+        row("integer", "再生位置", ""),
         row("boolean", "ループ再生", ""),
         row("option", "合成モード", ""),
         row("text", "テキスト", ""),
         row("header", "ぼかし", ""),
-        row("number", "範囲", "範囲  [直線移動]"),
+        row("number", "範囲", "直線"),
     ])));
 }
 
-fn row(kind: &str, label: &str, button: &str) -> ObjectSettingRowData {
+fn row(kind: &str, label: &str, easing: &str) -> ObjectSettingRowData {
     let numeric = kind == "number" || kind == "integer";
     ObjectSettingRowData {
         effect_id: "video_input".into(),
@@ -616,16 +620,16 @@ fn row(kind: &str, label: &str, button: &str) -> ObjectSettingRowData {
         removable: false,
         interactive: true,
         checked: kind == "boolean",
-        keyframed: false,
-        range_mode: false,
-        right_interactive: true,
+        keyframed: !easing.is_empty(),
+        range_mode: !easing.is_empty(),
+        right_interactive: !easing.is_empty(),
         start_interactive: true,
         start_frame: 0,
         end_frame: 240,
         current_frame: 120,
         clip_duration: 240,
         interpolation: "linear".into(),
-        parameter_button_label: button.into(),
+        easing_label: easing.into(),
         number_value: 0.0,
         end_number_value: 0.0,
         minimum: -2000.0,

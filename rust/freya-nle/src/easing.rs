@@ -75,11 +75,13 @@ pub(super) fn easing_name_at(index: i32) -> &'static str {
         .unwrap_or("none")
 }
 
-pub(super) fn parameter_button_label(label: &str, keyframed: bool, interpolation: &str) -> String {
-    if keyframed && !matches!(interpolation, "" | "constant" | "none") {
-        format!("{label} ({})", easing_label(interpolation))
+pub(super) fn parameter_easing_label(keyframed: bool, interpolation: &str) -> String {
+    if !keyframed {
+        String::new()
+    } else if matches!(interpolation, "" | "constant" | "none") {
+        localized("No movement", "无移动", "移動なし").to_owned()
     } else {
-        label.to_owned()
+        easing_label(interpolation)
     }
 }
 

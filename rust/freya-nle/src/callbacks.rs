@@ -647,6 +647,18 @@ pub(super) fn install_callbacks(
         font_families,
         settings: settings.clone(),
     };
+    let return_timeline = timeline.as_weak();
+    object_settings.on_return_to_timeline(move || {
+        if let Some(timeline) = return_timeline.upgrade() {
+            if !timeline.window().is_visible() {
+                let _ = show_and_redraw(&timeline);
+            }
+            timeline.invoke_focus_editing_surface();
+            timeline
+                .window()
+                .with_winit_window(|window| window.focus_window());
+        }
+    });
     let object_select_ui = object_settings_ui.clone();
     object_settings.on_select_effect(move |index, control, shift| {
         let _ = object_select_ui
