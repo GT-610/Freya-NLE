@@ -413,6 +413,109 @@ pub(crate) fn evaluate_document_track(
     evaluate_resolved_track(&points, frame, fallback)
 }
 
+const MIDPOINT_MARKER: &str = "_midpointFrame";
+
+fn is_midpoint_keyframe(point: &Value) -> bool {
+    point.get(MIDPOINT_MARKER) == Some(&Value::Bool(true))
+}
+
+fn stored_points_mut(track: &mut Value) -> Option<&mut Vec<Value>> {
+    match track {
+        Value::Array(points) => Some(points),
+        Value::Object(track) => track.get_mut("points").and_then(Value::as_array_mut),
+        _ => None,
+    }
+}
+
+/// Inserts a keyframe that marks an object midpoint. Only linear and stepped segments can be
+/// split without changing their interpolation semantics.
+pub(crate) fn insert_midpoint_keyframe(
+    track: &Value,
+    fallback: &Value,
+    duration: i32,
+    frame: i32,
+) -> Option<Value> {
+    let flattened = resolve_track(track, fallback, duration);
+    if flattened.iter().any(|point| point_frame(point) == frame) {
+        return None;
+    }
+    let left = flattened
+        .iter()
+        .rposition(|point| point_frame(point) < frame)?;
+    let left_point = flattened[left].as_object()?;
+    let interpolation = left_point
+        .get("interp")
+        .and_then(Value::as_str)
+        .unwrap_or("linear");
+    if interpolation != "none" {
+        if interpolation != "linear" {
+            return None;
+        }
+        let numeric_values = flattened[left..]
+            .iter()
+            .take(2)
+            .filter_map(|point| point_value(point))
+            .all(|value| payload(value).as_f64().is_some());
+        if !numeric_values {
+            return None;
+        }
+    }
+    let value = evaluate_track(&flattened, frame, fallback);
+    let mut keyframe = Map::new();
+    keyframe.insert("frame".to_owned(), Value::from(frame));
+    keyframe.insert("value".to_owned(), value);
+    keyframe.insert("interp".to_owned(), Value::String(interpolation.to_owned()));
+    keyframe.insert(MIDPOINT_MARKER.to_owned(), Value::Bool(true));
+
+    // Sample the current clip, but keep the entire stored track. In particular, keeping
+    // legacy arrays avoids losing frame-zero controls or changing how they are interpreted.
+    let mut updated = track.clone();
+    if is_structured(&updated) {
+        updated
+            .as_object_mut()?
+            .entry("points")
+            .or_insert_with(|| Value::Array(Vec::new()));
+    }
+    let points = stored_points_mut(&mut updated)?;
+    points.push(Value::Object(keyframe));
+    sort_points(points);
+    Some(updated)
+}
+
+pub(crate) fn remap_midpoint_keyframes(
+    track: &Value,
+    fallback: &Value,
+    duration: i32,
+    mapping: &[(i32, Option<i32>)],
+) -> Value {
+    let mut remapped = track.clone();
+    let Some(points) = stored_points_mut(&mut remapped) else {
+        return remapped;
+    };
+    let targets: Vec<_> = mapping
+        .iter()
+        .filter_map(|(source, target)| {
+            let target = (*target)?;
+            points
+                .iter()
+                .any(|point| point_frame(point) == *source && is_midpoint_keyframe(point))
+                .then_some(target)
+        })
+        .collect();
+    points.retain(|point| {
+        !is_midpoint_keyframe(point)
+            || !mapping
+                .iter()
+                .any(|(source, _)| point_frame(point) == *source)
+    });
+    for target in targets {
+        if let Some(updated) = insert_midpoint_keyframe(&remapped, fallback, duration, target) {
+            remapped = updated;
+        }
+    }
+    remapped
+}
+
 fn normalize_track(track: &Value, fallback: &Value, duration: i32) -> Value {
     let duration = duration.max(1);
     if is_structured(track) {
@@ -441,7 +544,18 @@ fn normalize_track(track: &Value, fallback: &Value, duration: i32) -> Value {
     sort_points(&mut legacy);
     let mut start = Map::new();
     start.insert("frame".to_owned(), Value::from(0));
-    start.insert("value".to_owned(), evaluate_track(&legacy, 0, fallback));
+    // A generated point must not influence the synthetic start of a legacy array.
+    let start_value = if legacy.iter().any(is_midpoint_keyframe) {
+        let authored: Vec<_> = legacy
+            .iter()
+            .filter(|point| !is_midpoint_keyframe(point))
+            .cloned()
+            .collect();
+        evaluate_track(&authored, 0, fallback)
+    } else {
+        evaluate_track(&legacy, 0, fallback)
+    };
+    start.insert("value".to_owned(), start_value);
     let start_interpolation = legacy
         .iter()
         .find(|point| point_frame(point) == 0)
@@ -650,6 +764,7 @@ fn apply(request: Request) -> Response {
                 return response(track, false, false);
             };
             source_point.insert("frame".to_owned(), Value::from(new_frame));
+            source_point.remove(MIDPOINT_MARKER);
             sort_points(points);
             response(normalized, true, true)
         }
@@ -660,7 +775,10 @@ fn apply(request: Request) -> Response {
             new_duration,
         } => {
             let was_structured = is_structured(&track);
-            let mut normalized = if was_structured {
+            let was_legacy = track.is_array();
+            let mut normalized = if was_legacy {
+                track.clone()
+            } else if was_structured {
                 let mut track = track.as_object().cloned().unwrap_or_default();
                 let mut start = track
                     .get("start")
@@ -684,19 +802,14 @@ fn apply(request: Request) -> Response {
                     ("points".to_owned(), Value::Array(Vec::new())),
                 ]))
             };
-            let mut changed = !was_structured;
+            let mut changed = !was_structured && !was_legacy;
             if old_duration > 0 && old_duration != new_duration {
-                let Some(points) = normalized
-                    .as_object_mut()
-                    .and_then(|track| track.get_mut("points"))
-                    .and_then(Value::as_array_mut)
-                else {
+                let Some(points) = stored_points_mut(&mut normalized) else {
                     return response(track, false, false);
                 };
-                if let Some(point) = points
-                    .iter_mut()
-                    .find(|point| point_frame(point) == old_duration)
-                {
+                if let Some(point) = points.iter_mut().find(|point| {
+                    point_frame(point) == old_duration && !is_midpoint_keyframe(point)
+                }) {
                     let Some(point) = point.as_object_mut() else {
                         return response(track, false, false);
                     };
@@ -881,6 +994,88 @@ pub(crate) fn split_track(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn midpoint_keyframes_split_linear_tracks_without_changing_values() {
+        let track = json!({
+            "start": {"frame": 0, "value": 0.0, "interp": "linear"},
+            "points": [{"frame": 10, "value": 100.0, "interp": "linear"}]
+        });
+        let split = insert_midpoint_keyframe(&track, &json!(0.0), 11, 4).expect("linear split");
+        assert_eq!(
+            evaluate_document_track(&track, &json!(0.0), 11, 2),
+            evaluate_document_track(&split, &json!(0.0), 11, 2)
+        );
+        assert_eq!(
+            evaluate_document_track(&track, &json!(0.0), 11, 7),
+            evaluate_document_track(&split, &json!(0.0), 11, 7)
+        );
+        assert_eq!(split["points"][0]["value"], json!(40.0));
+        assert_eq!(split["points"][0][MIDPOINT_MARKER], json!(true));
+        let removed = remap_midpoint_keyframes(&split, &json!(0.0), 11, &[(4, None)]);
+        assert_eq!(
+            evaluate_document_track(&track, &json!(0.0), 11, 7),
+            evaluate_document_track(&removed, &json!(0.0), 11, 7)
+        );
+    }
+
+    #[test]
+    fn midpoint_does_not_overwrite_existing_points_and_rejects_curved_segments() {
+        let existing = json!({
+            "start": {"frame": 0, "value": 0.0, "interp": "linear"},
+            "points": [{"frame": 5, "value": 77.0, "interp": "linear"}]
+        });
+        assert!(insert_midpoint_keyframe(&existing, &json!(0.0), 6, 5).is_none());
+        let curved = json!({
+            "start": {"frame": 0, "value": 0.0, "interp": "ease_in_cubic"},
+            "points": [{"frame": 10, "value": 100.0, "interp": "linear"}]
+        });
+        assert!(insert_midpoint_keyframe(&curved, &json!(0.0), 11, 5).is_none());
+        let color = json!({
+            "start": {"frame": 0, "value": "#000000", "interp": "linear"},
+            "points": [{"frame": 10, "value": "#ffffff", "interp": "linear"}]
+        });
+        assert!(insert_midpoint_keyframe(&color, &json!("#000000"), 11, 5).is_none());
+    }
+
+    #[test]
+    fn midpoint_preserves_legacy_controls_and_future_points() {
+        let track = json!([
+            {"frame": 0, "value": 0.0, "interp": "custom",
+                "points": [0.25, 0.0, 0.75, 0.0], "modeParams": {"amplitude": 0.5}},
+            {"frame": 4, "value": 10.0, "interp": "linear"},
+            {"frame": 40, "value": 80.0, "interp": "linear"}
+        ]);
+        let fallback = json!(0.0);
+        let updated = insert_midpoint_keyframe(&track, &fallback, 20, 6).expect("insert");
+        assert_eq!(updated[0], track[0]);
+        assert_eq!(updated[2]["value"], json!(10.0));
+        assert_eq!(updated[3], track[2]);
+        for frame in 0..20 {
+            assert_eq!(
+                evaluate_document_track(&updated, &fallback, 20, frame),
+                evaluate_document_track(&track, &fallback, 20, frame)
+            );
+        }
+        let extended = sync_track(updated, fallback.clone(), 20, 45);
+        assert_eq!(extended[0], track[0]);
+        assert_eq!(
+            remap_midpoint_keyframes(&extended, &fallback, 45, &[(6, None)]),
+            track
+        );
+    }
+
+    #[test]
+    fn midpoint_removal_never_removes_an_unmarked_user_point() {
+        let track = json!({
+            "start": {"frame": 0, "value": 0.0, "interp": "linear"},
+            "points": [{"frame": 5, "value": 77.0, "interp": "linear"}]
+        });
+        assert_eq!(
+            remap_midpoint_keyframes(&track, &json!(0.0), 11, &[(5, None)]),
+            track
+        );
+    }
 
     #[test]
     fn normalizes_and_mutates_legacy_tracks() {

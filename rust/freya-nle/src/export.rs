@@ -862,24 +862,7 @@ fn fail_batch_item(
         (index + 1, queue.items().len(), queue.pause_requested())
     };
     if next >= total {
-        let (succeeded, failed) = batch.borrow().summary();
-        let notices = batch.borrow().notices();
-        let summary = batch_summary_message(succeeded, failed, &notices);
-        batch.borrow_mut().set_message(&summary);
-        sync_batch(window, &batch.borrow());
-        // The success path returns to the user's scene when the last item
-        // finishes; a failure has to do the same or the batch leaves them on
-        // whichever scene it was exporting.
-        restore_batch_scene(model, batch);
-        // A failure ends the run here, so it has to report the warnings that
-        // earlier items collected; otherwise only their rows remember them.
-        if !notices.is_empty() {
-            show_export_result(
-                window,
-                false,
-                &format!("{summary}\n\n{}", batch_notice_message(&notices)),
-            );
-        }
+        finish_batch(window, model, batch);
         return;
     }
     if pause {
@@ -902,15 +885,43 @@ fn restore_batch_scene(model: &Rc<RefCell<ApplicationModel>>, batch: &Rc<RefCell
     }
 }
 
+fn finish_batch(
+    window: &ExportWindow,
+    model: &Rc<RefCell<ApplicationModel>>,
+    batch: &Rc<RefCell<BatchQueue>>,
+) {
+    let (summary, failed, diagnostics) = {
+        let queue = batch.borrow();
+        let (succeeded, failed) = queue.summary();
+        (
+            batch_summary_message(succeeded, failed, queue.has_notices()),
+            failed,
+            queue.diagnostics(),
+        )
+    };
+    batch.borrow_mut().set_message(&summary);
+    sync_batch(window, &batch.borrow());
+    restore_batch_scene(model, batch);
+    if !diagnostics.is_empty() {
+        show_export_result(
+            window,
+            failed == 0,
+            &batch_result_message(summary, &diagnostics),
+        );
+    } else if window.get_batch_completion_index() == 1 {
+        let _ = slint::quit_event_loop();
+    }
+}
+
 /// The line the batch list shows once the run is over.
-fn batch_summary_message(succeeded: usize, failed: usize, notices: &[(String, String)]) -> String {
+fn batch_summary_message(succeeded: usize, failed: usize, has_notices: bool) -> String {
     let mut message = format!(
         "{}: {succeeded} {} · {failed} {}",
         localized("Batch finished", "批次完成", "バッチ完了"),
         localized("succeeded", "成功", "成功"),
         localized("failed", "失败", "失敗")
     );
-    if !notices.is_empty() {
+    if has_notices {
         message.push_str(" · ");
         message.push_str(localized(
             "some exports need review",
@@ -1137,19 +1148,7 @@ pub(super) fn update_export(
                     (index + 1, queue.items().len(), queue.pause_requested())
                 };
                 if next >= total {
-                    let (succeeded, failed) = batch.borrow().summary();
-                    // Successful exports can still carry a note, so the summary
-                    // says so and the details follow in the result overlay.
-                    let notices = batch.borrow().notices();
-                    let summary = batch_summary_message(succeeded, failed, &notices);
-                    batch.borrow_mut().set_message(&summary);
-                    sync_batch(&window, &batch.borrow());
-                    restore_batch_scene(model, batch);
-                    if window.get_batch_completion_index() == 1 {
-                        let _ = slint::quit_event_loop();
-                    } else if !notices.is_empty() {
-                        show_export_result(&window, true, &batch_notice_message(&notices));
-                    }
+                    finish_batch(&window, model, batch);
                 } else if pause {
                     batch.borrow_mut().pause_after(next);
                     batch.borrow_mut().set_message(format!(
@@ -1278,19 +1277,13 @@ fn export_progress_label(progress: freya_nle_export::ExportProgressPlan) -> Stri
     )
 }
 
-/// The overlay text for a batch whose exports succeeded with notices.
-fn batch_notice_message(notices: &[(String, String)]) -> String {
-    let mut message = localized(
-        "The batch finished, but these exports are not what was asked for:",
-        "批次已完成，但以下导出与预期不符：",
-        "バッチは完了しましたが、次の書き出しは意図した内容と異なります:",
-    )
-    .to_owned();
-    for (label, notice) in notices {
+/// The scrollable result shows every failed item and every export that needs review.
+fn batch_result_message(mut message: String, diagnostics: &[(String, String)]) -> String {
+    for (label, diagnostic) in diagnostics {
         message.push_str("\n\n");
         message.push_str(label);
         message.push('\n');
-        message.push_str(notice);
+        message.push_str(diagnostic);
     }
     message
 }

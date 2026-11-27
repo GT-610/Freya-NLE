@@ -418,8 +418,9 @@ pub fn evaluate_keyframe_track(
 
 /// Returns the object midpoints stored on a clip, in ascending order.
 ///
-/// An absent key reads as no midpoints, which is what keeps a project that never used the
-/// feature identical to its Qt form.
+/// An absent key reads as no midpoints, which keeps older projects unchanged. Timeline midpoint
+/// commands synchronize supported existing effect/audio-plugin keyframe tracks; tracks whose
+/// interpolation cannot be split without changing their curve are preserved unchanged.
 pub fn clip_midpoints(clip: &ClipDocument) -> Vec<i32> {
     crate::midpoint::read_midpoints(&clip.extra)
         .frames()

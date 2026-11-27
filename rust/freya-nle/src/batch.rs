@@ -190,15 +190,22 @@ impl BatchQueue {
         Some(index)
     }
 
-    /// The successful exports that carried a notice, with the row they belong to.
-    pub(super) fn notices(&self) -> Vec<(String, String)> {
+    /// Failed exports and successful exports with notices, in queue order.
+    pub(super) fn diagnostics(&self) -> Vec<(String, String)> {
         self.items
             .iter()
             .filter_map(|item| {
-                let notice = item.notice.as_ref()?;
-                Some((item.display_label(), notice.clone()))
+                let message = match item.outcome.as_ref()? {
+                    BatchOutcome::Failed(message) => message,
+                    BatchOutcome::Succeeded => item.notice.as_ref()?,
+                };
+                Some((item.display_label(), message.clone()))
             })
             .collect()
+    }
+
+    pub(super) fn has_notices(&self) -> bool {
+        self.items.iter().any(|item| item.notice.is_some())
     }
 
     pub(super) fn stop(&mut self) {
@@ -533,12 +540,11 @@ mod tests {
     }
 
     #[test]
-    fn a_successful_item_keeps_the_notice_its_export_reported() {
-        // A partly silent export still succeeds, so the outcome cannot carry the
-        // warning; the item has to keep it for the batch summary.
+    fn batch_diagnostics_keep_failures_and_notices_in_queue_order() {
         let mut queue = BatchQueue::default();
         queue.push("scene 1".to_owned(), 1, request("/tmp/a.mkv", 0, 10));
         queue.push("scene 2".to_owned(), 1, request("/tmp/b.mkv", 0, 10));
+        queue.push("scene 3".to_owned(), 1, request("/tmp/c.mkv", 0, 10));
         queue.begin(0);
         queue.finish_running(
             BatchOutcome::Succeeded,
@@ -546,22 +552,26 @@ mod tests {
         );
         queue.begin(1);
         queue.finish_running(BatchOutcome::Succeeded, None);
+        queue.begin(2);
+        queue.finish_running(
+            BatchOutcome::Failed("could not decode visual content at frame 3".to_owned()),
+            None,
+        );
 
-        assert_eq!(queue.summary(), (2, 0), "both exports succeeded");
-        let notices = queue.notices();
+        assert_eq!(queue.summary(), (2, 1));
+        assert!(queue.has_notices());
+        let diagnostics = queue.diagnostics();
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[0].0.contains("/tmp/a.mkv"), "{diagnostics:?}");
+        assert_eq!(diagnostics[0].1, "clip #7 is silent");
+        assert!(diagnostics[1].0.contains("/tmp/c.mkv"), "{diagnostics:?}");
         assert_eq!(
-            notices.len(),
-            1,
-            "only the export with a notice reports one"
+            diagnostics[1].1,
+            "could not decode visual content at frame 3"
         );
-        assert!(notices[0].0.contains("/tmp/a.mkv"), "{notices:?}");
-        assert_eq!(notices[0].1, "clip #7 is silent");
-        assert!(
-            queue.rows()[0].text.contains("needs review"),
-            "the row must not read as a clean success: {}",
-            queue.rows()[0].text
-        );
+        assert!(queue.rows()[0].text.contains("needs review"));
         assert!(!queue.rows()[1].text.contains("needs review"));
+        assert!(queue.rows()[2].text.contains("failed"));
     }
 
     #[test]
