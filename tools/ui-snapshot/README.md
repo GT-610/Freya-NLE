@@ -18,8 +18,13 @@ python3 -m pip install pillow
 
 Set `UI_SNAPSHOT_THEME=light` to render the light palette; the Rust tool then
 writes `timeline-light.*`, and `python3 snapshot.py` with no arguments picks the
-same names up. Other modes: `settings`, `system`, `confirm`, `mark`, `layer`,
-`backup`, `export`, `packages`. `UI_SNAPSHOT_PRESET=1` opens the save-preset dialog
+same names up. Other modes: `settings`, `system`, `confirm`, `mark`, `project`,
+`scene`, `layer`, `backup`, `export`, `packages`. `UI_SNAPSHOT_INVALID=1` gives
+`project` an invalid FPS value and its validation message.
+`UI_SNAPSHOT_EXPORTING=1` shows progress on the `export` render.
+At the default `timeline` size, `UI_SNAPSHOT_MOVE=valid` or `UI_SNAPSHOT_MOVE=blocked`
+renders the first clip mid-drag with a matching host response.
+`UI_SNAPSHOT_PRESET=1` opens the save-preset dialog
 and `UI_SNAPSHOT_EXPRESSION=1` the parameter-expression dialog
 on the `settings` render, `UI_SNAPSHOT_TAB=0` picks the preferences page
 the `system` render opens (default 2, Timeline), `UI_SNAPSHOT_SIZE=680x600`
