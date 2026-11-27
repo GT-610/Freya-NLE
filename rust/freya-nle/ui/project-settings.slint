@@ -1,22 +1,35 @@
-import { Button, LineEdit, SpinBox } from "std-widgets.slint";
+import { LineEdit, SpinBox } from "std-widgets.slint";
+import { SettingsDialogBody } from "chrome.slint";
+import { AppTheme } from "theme.slint";
 
 export component ProjectSettingsWindow inherits Window {
     title: @tr("Project Settings");
     preferred-width: 450px;
-    preferred-height: 240px;
+    preferred-height: 260px;
     min-width: 390px;
-    min-height: 220px;
+    min-height: 240px;
+
+    background: AppTheme.dialog-background;
+    forward-focus: dialog;
+
+    in-out property <string> validation-message;
+    callback apply-settings() -> bool;
+    callback close-window();
 
     in-out property <int> project-width: 1920;
     in-out property <int> project-height: 1080;
     in-out property <string> project-fps: "60";
     in-out property <int> project-sample-rate: 48000;
-    callback apply-settings() -> bool;
-    callback close-window();
 
-    VerticalLayout {
-        padding: 16px;
-        spacing: 14px;
+    dialog := SettingsDialogBody {
+        validation-message: root.validation-message;
+        apply-settings => {
+            let applied = root.apply-settings();
+            if !applied && root.validation-message != "" { fps-input.focus(); }
+            return applied;
+        }
+        close-window => { root.close-window(); }
+
         GridLayout {
             spacing: 10px;
             Row {
@@ -29,26 +42,17 @@ export component ProjectSettingsWindow inherits Window {
             }
             Row {
                 Text { text: @tr("FPS:"); vertical-alignment: center; }
-                LineEdit { text <=> root.project-fps; accessible-label: @tr("FPS:"); }
+                fps-input := LineEdit {
+                    text <=> root.project-fps;
+                    accessible-label: @tr("FPS:");
+                    accessible-description: root.validation-message;
+                    edited => { root.validation-message = ""; }
+                }
             }
             Row {
                 Text { text: @tr("Sample Rate:"); vertical-alignment: center; }
                 SpinBox { value <=> root.project-sample-rate; minimum: 8000; maximum: 192000; step-size: 1000; accessible-label: @tr("Sample Rate:"); }
             }
-        }
-        Rectangle { vertical-stretch: 1; }
-        HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
-            Button {
-                text: @tr("Apply");
-                clicked => {
-                    if root.apply-settings() {
-                        root.close-window();
-                    }
-                }
-            }
-            Button { text: @tr("Cancel"); clicked => { root.close-window(); } }
         }
     }
 }

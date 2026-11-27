@@ -1,4 +1,4 @@
-// Interaction regressions for the recovery and backup-history dialogs.
+// Interaction regressions for settings, recovery and backup-history dialogs.
 //
 // Both windows list many similar rows and repeated button text, so each row's
 // buttons carry an accessible label naming the snapshot or version they act on.
@@ -30,6 +30,54 @@ fn press_escape(window: &impl ComponentHandle) {
 fn settle_focus() {
     i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(2));
+}
+
+#[test]
+fn settings_validation_keeps_the_draft_open_and_returns_focus_to_fps() {
+    i_slint_backend_testing::init_no_event_loop();
+    let window = ProjectSettingsWindow::new().unwrap();
+    let closes = Rc::new(Cell::new(0));
+    let count = closes.clone();
+    window.on_close_window(move || count.set(count.get() + 1));
+    window.window().set_size(slint::PhysicalSize::new(390, 240));
+    window.show().unwrap();
+    window.set_project_fps("invalid".into());
+    let weak = window.as_weak();
+    window.on_apply_settings(move || {
+        weak.upgrade()
+            .unwrap()
+            .set_validation_message("Enter a number for FPS.".into());
+        false
+    });
+    settle_focus();
+
+    // Apply is pinned in the bottom-right corner, including at minimum size.
+    let position = slint::LogicalPosition::new(353.0, 214.0);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    assert_eq!(window.get_validation_message(), "Enter a number for FPS.");
+
+    // Typing immediately after validation should reach FPS without retabbing.
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed { text: "2".into() });
+    assert!(window.get_project_fps().contains('2'));
+    assert_eq!(window.get_validation_message(), "");
+    assert_eq!(closes.get(), 0);
+
+    press_escape(&window);
+    assert_eq!(closes.get(), 1);
 }
 
 fn recovery_entry(id: &str, name: &str, valid: bool) -> RecoveryEntryData {

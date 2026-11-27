@@ -2034,10 +2034,11 @@ pub(super) fn install_callbacks(
         let Some(window) = project_apply_window.upgrade() else {
             return false;
         };
+        window.set_validation_message(SharedString::new());
         let fps = match parse_required_f64(&window.get_project_fps(), "FPS", 1.0, 240.0) {
             Ok(fps) => fps,
             Err(message) => {
-                show_error_dialog(&message);
+                window.set_validation_message(SharedString::from(message));
                 return false;
             }
         };
@@ -2536,10 +2537,11 @@ pub(super) fn install_callbacks(
         let Some(window) = scene_apply_window.upgrade() else {
             return false;
         };
+        window.set_validation_message(SharedString::new());
         let fps = match parse_required_f64(&window.get_scene_fps(), "FPS", 1.0, 240.0) {
             Ok(fps) => fps,
             Err(message) => {
-                show_error_dialog(&message);
+                window.set_validation_message(SharedString::from(message));
                 return false;
             }
         };
@@ -2599,6 +2601,7 @@ pub(super) fn install_callbacks(
         let Some(window) = layer_apply_window.upgrade() else {
             return false;
         };
+        window.set_validation_message(SharedString::new());
         let volume_label = localized("Volume", "音量", "音量");
         let parsed = (|| {
             Ok::<(f64, f64, f64, f64), String>((
@@ -2631,7 +2634,7 @@ pub(super) fn install_callbacks(
         let (x, y, z, volume_percent) = match parsed {
             Ok(values) => values,
             Err(message) => {
-                show_error_dialog(&message);
+                window.set_validation_message(SharedString::from(message));
                 return false;
             }
         };
@@ -2651,15 +2654,14 @@ pub(super) fn install_callbacks(
         if updated {
             sync_weak_windows(&layer_apply_main, &layer_apply_timeline, &layer_apply_model);
         } else {
-            // A refused colour is reported by the workspace; show it here because
-            // the dialog covers the window that owns the status bar.
+            // The workspace supplies a message for invalid background colours.
             let message = layer_apply_model
                 .borrow()
                 .current_workspace()
                 .map(|workspace| workspace.status().to_owned())
                 .unwrap_or_default();
             if !message.is_empty() {
-                show_error_dialog(&message);
+                window.set_validation_message(SharedString::from(message));
             }
         }
         updated

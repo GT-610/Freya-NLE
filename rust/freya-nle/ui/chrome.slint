@@ -1,4 +1,5 @@
 import { AppTheme } from "theme.slint";
+import { Button, ScrollView } from "std-widgets.slint";
 
 // Frame-accurate timecode shared by the ruler, the footer and the transport.
 // AviUtl2 labels its ruler with absolute time beside the frame number; the
@@ -128,5 +129,61 @@ export component FooterBar inherits Rectangle {
         height: 3px;
         width: parent.width * clamp(root.progress, 0, 1);
         background: AppTheme.footer-progress;
+    }
+}
+
+// The native title bar identifies the dialog. Keep form content scrollable
+// and validation and actions in view, even when the body needs more room.
+export component SettingsDialogBody inherits FocusScope {
+    in property <string> apply-label: @tr("Apply");
+    in property <string> validation-message;
+    callback apply-settings() -> bool;
+    callback close-window();
+
+    key-pressed(event) => {
+        if event.text == Key.Escape {
+            root.close-window();
+            return accept;
+        }
+        return reject;
+    }
+
+    VerticalLayout {
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: self.visible-width;
+            VerticalLayout {
+                padding: max(12px, AppTheme.spacing-md);
+                spacing: AppTheme.spacing-md;
+                @children
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: AppTheme.subtle-border;
+        }
+        VerticalLayout {
+            padding: max(10px, AppTheme.spacing-md);
+            spacing: AppTheme.spacing-sm;
+            if root.validation-message != "" : Text {
+                text: root.validation-message;
+                color: AppTheme.danger;
+                wrap: word-wrap;
+                accessible-role: text;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: AppTheme.spacing-sm;
+                Button { text: @tr("Cancel"); clicked => { root.close-window(); } }
+                Button {
+                    text: root.apply-label;
+                    clicked => {
+                        if root.apply-settings() {
+                            root.close-window();
+                        }
+                    }
+                }
+            }
+        }
     }
 }

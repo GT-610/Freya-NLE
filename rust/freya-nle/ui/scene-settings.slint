@@ -1,4 +1,6 @@
-import { Button, CheckBox, ComboBox, GroupBox, LineEdit, ScrollView, SpinBox } from "std-widgets.slint";
+import { CheckBox, ComboBox, GroupBox, LineEdit, SpinBox } from "std-widgets.slint";
+import { SettingsDialogBody } from "chrome.slint";
+import { AppTheme } from "theme.slint";
 
 export component SceneSettingsWindow inherits Window {
     title: root.creation-mode ? @tr("Create New Scene") : @tr("Scene Settings");
@@ -6,6 +8,13 @@ export component SceneSettingsWindow inherits Window {
     preferred-height: 550px;
     min-width: 410px;
     min-height: 460px;
+
+    background: AppTheme.dialog-background;
+    forward-focus: dialog;
+
+    in-out property <string> validation-message;
+    callback apply-settings() -> bool;
+    callback close-window();
 
     in-out property <bool> creation-mode: false;
     in-out property <int> target-scene-id: -1;
@@ -22,98 +31,92 @@ export component SceneSettingsWindow inherits Window {
     in-out property <string> grid-subdivision: "4";
     in-out property <bool> enable-snap: true;
     in-out property <int> magnetic-snap-range: 10;
-    callback apply-settings() -> bool;
-    callback close-window();
 
-    ScrollView {
-        VerticalLayout {
-            padding: 15px;
-            spacing: 14px;
-            GroupBox {
-                title: @tr("Basic Settings");
-                GridLayout {
-                    padding: 10px;
-                    spacing: 9px;
-                    Row {
-                        Text { text: @tr("Scene Name:"); vertical-alignment: center; }
-                        LineEdit { text <=> root.scene-name; accessible-label: @tr("Scene Name:"); }
+    dialog := SettingsDialogBody {
+        apply-label: "OK";
+        validation-message: root.validation-message;
+        apply-settings => {
+            let applied = root.apply-settings();
+            if !applied && root.validation-message != "" { fps-input.focus(); }
+            return applied;
+        }
+        close-window => { root.close-window(); }
+
+        GroupBox {
+            title: @tr("Basic Settings");
+            GridLayout {
+                padding: 10px;
+                spacing: 9px;
+                Row {
+                    Text { text: @tr("Scene Name:"); vertical-alignment: center; }
+                    LineEdit { text <=> root.scene-name; accessible-label: @tr("Scene Name:"); }
+                }
+                Row {
+                    Text { text: @tr("Label:"); vertical-alignment: center; }
+                    LineEdit {
+                        text <=> root.scene-label;
+                        placeholder-text: @tr("Optional label for filtering");
+                        accessible-label: @tr("Label:");
                     }
-                    Row {
-                        Text { text: @tr("Label:"); vertical-alignment: center; }
-                        LineEdit {
-                            text <=> root.scene-label;
-                            placeholder-text: @tr("Optional label for filtering");
-                            accessible-label: @tr("Label:");
-                        }
-                    }
-                    Row {
-                        Text { text: @tr("settings-width" => "Width:"); vertical-alignment: center; }
-                        SpinBox { value <=> root.scene-width; minimum: 1; maximum: 8000; accessible-label: @tr("settings-width" => "Width:"); }
-                    }
-                    Row {
-                        Text { text: @tr("settings-height" => "Height:"); vertical-alignment: center; }
-                        SpinBox { value <=> root.scene-height; minimum: 1; maximum: 8000; accessible-label: @tr("settings-height" => "Height:"); }
-                    }
-                    Row {
-                        Text { text: @tr("FPS:"); vertical-alignment: center; }
-                        LineEdit { text <=> root.scene-fps; accessible-label: @tr("FPS:"); }
+                }
+                Row {
+                    Text { text: @tr("settings-width" => "Width:"); vertical-alignment: center; }
+                    SpinBox { value <=> root.scene-width; minimum: 1; maximum: 8000; accessible-label: @tr("settings-width" => "Width:"); }
+                }
+                Row {
+                    Text { text: @tr("settings-height" => "Height:"); vertical-alignment: center; }
+                    SpinBox { value <=> root.scene-height; minimum: 1; maximum: 8000; accessible-label: @tr("settings-height" => "Height:"); }
+                }
+                Row {
+                    Text { text: @tr("FPS:"); vertical-alignment: center; }
+                    fps-input := LineEdit {
+                        text <=> root.scene-fps;
+                        accessible-label: @tr("FPS:");
+                        accessible-description: root.validation-message;
+                        edited => { root.validation-message = ""; }
                     }
                 }
             }
-            GroupBox {
-                title: @tr("Editing and Snap");
-                GridLayout {
-                    padding: 10px;
-                    spacing: 9px;
-                    Row {
-                        Text { text: @tr("Enable Snap:"); vertical-alignment: center; }
-                        CheckBox { checked <=> root.enable-snap; accessible-label: @tr("Enable Snap:"); }
-                    }
-                    Row {
-                        Text { text: @tr("Magnetic Snap Range:"); vertical-alignment: center; }
-                        SpinBox { value <=> root.magnetic-snap-range; minimum: 1; maximum: 100; accessible-label: @tr("Magnetic Snap Range:"); }
-                    }
-                    Row {
-                        Text { text: @tr("Grid Mode:"); vertical-alignment: center; }
-                        ComboBox {
-                            model: [@tr("Auto (Seconds/Frames)"), @tr("BPM (Music)"), @tr("Fixed Frame Count")];
-                            current-index <=> root.grid-mode-index;
-                            accessible-label: @tr("Grid Mode:");
-                        }
+        }
+        GroupBox {
+            title: @tr("Editing and Snap");
+            GridLayout {
+                padding: 10px;
+                spacing: 9px;
+                Row {
+                    Text { text: @tr("Enable Snap:"); vertical-alignment: center; }
+                    CheckBox { checked <=> root.enable-snap; accessible-label: @tr("Enable Snap:"); }
+                }
+                Row {
+                    Text { text: @tr("Magnetic Snap Range:"); vertical-alignment: center; }
+                    SpinBox { value <=> root.magnetic-snap-range; minimum: 1; maximum: 100; accessible-label: @tr("Magnetic Snap Range:"); }
+                }
+                Row {
+                    Text { text: @tr("Grid Mode:"); vertical-alignment: center; }
+                    ComboBox {
+                        model: [@tr("Auto (Seconds/Frames)"), @tr("BPM (Music)"), @tr("Fixed Frame Count")];
+                        current-index <=> root.grid-mode-index;
+                        accessible-label: @tr("Grid Mode:");
                     }
                 }
             }
-            if root.grid-mode-index == 1 : GroupBox {
-                title: @tr("BPM Settings");
-                GridLayout {
-                    padding: 10px;
-                    spacing: 9px;
-                    Row { Text { text: @tr("BPM:"); vertical-alignment: center; } LineEdit { text <=> root.grid-bpm; accessible-label: @tr("BPM:"); } }
-                    Row { Text { text: @tr("Time Signature (Subdivisions):"); vertical-alignment: center; } LineEdit { text <=> root.grid-subdivision; accessible-label: @tr("Time Signature (Subdivisions):"); } }
-                    Row { Text { text: @tr("Offset (Seconds):"); vertical-alignment: center; } LineEdit { text <=> root.grid-offset; accessible-label: @tr("Offset (Seconds):"); } }
-                }
+        }
+        if root.grid-mode-index == 1 : GroupBox {
+            title: @tr("BPM Settings");
+            GridLayout {
+                padding: 10px;
+                spacing: 9px;
+                Row { Text { text: @tr("BPM:"); vertical-alignment: center; } LineEdit { text <=> root.grid-bpm; accessible-label: @tr("BPM:"); } }
+                Row { Text { text: @tr("Time Signature (Subdivisions):"); vertical-alignment: center; } LineEdit { text <=> root.grid-subdivision; accessible-label: @tr("Time Signature (Subdivisions):"); } }
+                Row { Text { text: @tr("Offset (Seconds):"); vertical-alignment: center; } LineEdit { text <=> root.grid-offset; accessible-label: @tr("Offset (Seconds):"); } }
             }
-            if root.grid-mode-index == 2 : GroupBox {
-                title: @tr("Frame Settings");
-                GridLayout {
-                    padding: 10px;
-                    spacing: 9px;
-                    Row { Text { text: @tr("Interval (Frames):"); vertical-alignment: center; } LineEdit { text <=> root.grid-interval; accessible-label: @tr("Interval (Frames):"); } }
-                }
-            }
-            Rectangle { vertical-stretch: 1; }
-            HorizontalLayout {
-                alignment: end;
-                spacing: 8px;
-                Button { text: @tr("Cancel"); clicked => { root.close-window(); } }
-                Button {
-                    text: "OK";
-                    clicked => {
-                        if root.apply-settings() {
-                            root.close-window();
-                        }
-                    }
-                }
+        }
+        if root.grid-mode-index == 2 : GroupBox {
+            title: @tr("Frame Settings");
+            GridLayout {
+                padding: 10px;
+                spacing: 9px;
+                Row { Text { text: @tr("Interval (Frames):"); vertical-alignment: center; } LineEdit { text <=> root.grid-interval; accessible-label: @tr("Interval (Frames):"); } }
             }
         }
     }
