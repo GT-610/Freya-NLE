@@ -930,17 +930,33 @@ impl TimelineState {
                 let duration = clip.duration;
                 let updated = match midpoint {
                     MidpointOperation::Add { frame } => {
-                        crate::midpoint::add(&existing, frame, duration)
+                        let updated = crate::midpoint::add(&existing, frame, duration)
+                            .ok_or(StateError::InvalidArgument)?;
+                        edit_midpoint_tracks(&mut clip, |track, fallback, duration| {
+                            crate::keyframe_document::insert_midpoint_keyframe(
+                                track, fallback, duration, frame,
+                            )
+                        });
+                        updated
                     }
                     MidpointOperation::Remove { frame } => {
-                        crate::midpoint::remove(&existing, frame)
+                        let updated = crate::midpoint::remove(&existing, frame)
+                            .ok_or(StateError::InvalidArgument)?;
+                        remap_midpoint_tracks(&mut clip, &[(frame, None)]);
+                        updated
                     }
                     MidpointOperation::Move {
                         old_frame,
                         new_frame,
-                    } => crate::midpoint::move_midpoint(&existing, old_frame, new_frame, duration),
-                }
-                .ok_or(StateError::InvalidArgument)?;
+                    } => {
+                        let updated = crate::midpoint::move_midpoint(
+                            &existing, old_frame, new_frame, duration,
+                        )
+                        .ok_or(StateError::InvalidArgument)?;
+                        remap_midpoint_tracks(&mut clip, &[(old_frame, Some(new_frame))]);
+                        updated
+                    }
+                };
                 crate::midpoint::write_midpoints(&mut clip.extra, &updated);
                 plan_clip_replacements(&self.document, vec![(clip_id, clip)])
             }
@@ -1709,6 +1725,39 @@ fn sync_clip_tracks(clip: &mut ClipDocument, old_duration: i32) {
     }
 }
 
+fn edit_midpoint_tracks(
+    clip: &mut ClipDocument,
+    edit: impl Fn(&Value, &Value, i32) -> Option<Value>,
+) {
+    let duration = clip.duration;
+    let edit_tracks = |keyframes: &mut Option<Map<String, Value>>, params: &Map<String, Value>| {
+        if let Some(tracks) = keyframes {
+            for (name, track) in tracks {
+                let fallback = params.get(name).unwrap_or(&Value::Null);
+                if let Some(updated) = edit(track, fallback, duration) {
+                    *track = updated;
+                }
+            }
+        }
+    };
+    for effect in &mut clip.effects {
+        edit_tracks(&mut effect.keyframes, &effect.params);
+    }
+    for plugin in &mut clip.audio_plugins {
+        edit_tracks(&mut plugin.keyframes, &plugin.params);
+    }
+}
+
+fn remap_midpoint_tracks(clip: &mut ClipDocument, mapping: &[(i32, Option<i32>)]) {
+    if !mapping.is_empty() {
+        edit_midpoint_tracks(clip, |track, fallback, duration| {
+            Some(crate::keyframe_document::remap_midpoint_keyframes(
+                track, fallback, duration, mapping,
+            ))
+        });
+    }
+}
+
 /// Keeps object midpoints valid across a frame-domain edit. A midpoint is a time boundary, so a
 /// start trim keeps it at the same timeline moment: the clip origin moves by `clip.start -
 /// before.start`, and the midpoint shifts by the opposite amount to stay put. A duration change
@@ -1722,17 +1771,28 @@ fn sync_clip_midpoints(clip: &mut ClipDocument, before: &ClipDocument) {
         return;
     }
     let shifted = if clip.duration == before.duration {
-        existing
+        existing.clone()
     } else {
-        // The clip origin moved to `clip.start`; shifting back by that keeps the midpoint on the
-        // same timeline moment a start trim must preserve. The subtraction saturates so an
-        // out-of-range pair of starts cannot overflow before the document is validated.
         crate::midpoint::shift_by_start_delta(&existing, before.start.saturating_sub(clip.start))
     };
-    crate::midpoint::write_midpoints(
-        &mut clip.extra,
-        &crate::midpoint::sanitize(shifted, clip.duration),
-    );
+    let sanitized = crate::midpoint::sanitize(shifted, clip.duration);
+    let mapped: Vec<_> = existing
+        .frames()
+        .iter()
+        .filter_map(|old_frame| {
+            let new_frame = if clip.duration == before.duration {
+                *old_frame
+            } else {
+                old_frame.saturating_add(before.start.saturating_sub(clip.start))
+            };
+            (new_frame != *old_frame || new_frame <= 0 || new_frame >= clip.duration).then_some((
+                *old_frame,
+                (new_frame > 0 && new_frame < clip.duration).then_some(new_frame),
+            ))
+        })
+        .collect();
+    remap_midpoint_tracks(clip, &mapped);
+    crate::midpoint::write_midpoints(&mut clip.extra, &sanitized);
 }
 
 /// Divides the object's midpoints across a split. Midpoints are clip-relative, so the first
@@ -3390,6 +3450,80 @@ mod tests {
     }
 
     #[test]
+    fn midpoint_commands_split_supported_tracks_and_undo_redo_atomically() {
+        let mut state = TimelineState::new(document(), 2, 1).expect("valid state");
+        let transaction = state
+            .plan(EditRequest::SetClipMidpoints {
+                clip_id: 1,
+                midpoint: MidpointOperation::Add { frame: 6 },
+            })
+            .expect("midpoint plans");
+        state.apply_patch(&transaction.forward).expect("apply");
+        let clip = &state.document.clips[0];
+        assert_eq!(
+            clip.effects[0].keyframes.as_ref().unwrap()["x"]["points"][0]["frame"],
+            json!(6)
+        );
+        assert_eq!(
+            clip.effects[0].keyframes.as_ref().unwrap()["x"]["points"][0]["value"],
+            json!(6.0)
+        );
+        assert_eq!(
+            clip.audio_plugins[0].keyframes.as_ref().unwrap()["0"]["points"][0]["frame"],
+            json!(6)
+        );
+        state.apply_patch(&transaction.inverse).expect("undo");
+        assert_eq!(
+            state.document.clips[0].effects[0]
+                .keyframes
+                .as_ref()
+                .unwrap()["x"]["points"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        state.apply_patch(&transaction.forward).expect("redo");
+        assert_eq!(
+            state.document.clips[0].effects[0]
+                .keyframes
+                .as_ref()
+                .unwrap()["x"]["points"][0]["frame"],
+            json!(6)
+        );
+    }
+
+    #[test]
+    fn midpoint_keeps_unsupported_curves_and_manual_keyframes_intact() {
+        let mut document = document();
+        let track = &mut document.clips[0].effects[0].keyframes.as_mut().unwrap()["x"];
+        track["start"]["interp"] = json!("ease_in_cubic");
+        let mut state = TimelineState::new(document, 2, 1).expect("valid state");
+        apply_midpoint(&mut state, MidpointOperation::Add { frame: 6 });
+        let clip = &state.document.clips[0];
+        assert_eq!(
+            clip.effects[0].keyframes.as_ref().unwrap()["x"]["points"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            clip.audio_plugins[0].keyframes.as_ref().unwrap()["0"]["points"][0]["frame"],
+            json!(6)
+        );
+        apply_midpoint(&mut state, MidpointOperation::Remove { frame: 6 });
+        let clip = &state.document.clips[0];
+        assert_eq!(
+            clip.effects[0].keyframes.as_ref().unwrap()["x"]["points"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn midpoints_are_added_removed_and_moved_within_the_open_interval() {
         let mut state = TimelineState::new(document(), 2, 1).expect("valid state");
         assert!(
@@ -3538,6 +3672,13 @@ mod tests {
             .apply_patch(&transaction.forward)
             .expect("trim applies");
         assert_eq!(midpoint_frames(&state.document.clips[0]), [2]);
+        assert_eq!(
+            state.document.clips[0].effects[0]
+                .keyframes
+                .as_ref()
+                .unwrap()["x"]["points"][0]["frame"],
+            json!(2)
+        );
 
         // A trim that shrinks the clip pushes a midpoint out of the open interval: the origin
         // moves 8 to 3 and duration shrinks to 4, so the midpoint at 2 shifts to 7 and is dropped
@@ -3554,6 +3695,60 @@ mod tests {
             .apply_patch(&transaction.forward)
             .expect("trim applies");
         assert!(midpoint_frames(&state.document.clips[0]).is_empty());
+    }
+
+    #[test]
+    fn geometry_remaps_multiple_midpoint_tracks_simultaneously_without_curve_drift() {
+        let mut state = TimelineState::new(document(), 2, 1).expect("valid state");
+        let transaction = state
+            .plan(EditRequest::UpdateClipGeometry {
+                clip_id: 1,
+                layer: 0,
+                start: 5,
+                duration: 20,
+            })
+            .expect("initial placement plans");
+        state
+            .apply_patch(&transaction.forward)
+            .expect("initial placement applies");
+        apply_midpoint(&mut state, MidpointOperation::Add { frame: 4 });
+        apply_midpoint(&mut state, MidpointOperation::Add { frame: 8 });
+        let original_track = state.document.clips[0].effects[0]
+            .keyframes
+            .as_ref()
+            .unwrap()["x"]
+            .clone();
+
+        let transaction = state
+            .plan(EditRequest::UpdateClipGeometry {
+                clip_id: 1,
+                layer: 0,
+                start: 1,
+                duration: 16,
+            })
+            .expect("geometry remap plans");
+        state
+            .apply_patch(&transaction.forward)
+            .expect("geometry remap applies");
+        let clip = &state.document.clips[0];
+        assert_eq!(midpoint_frames(clip), [8, 12]);
+        let track = &clip.effects[0].keyframes.as_ref().unwrap()["x"];
+        assert_eq!(track["points"][0]["frame"], json!(8));
+        assert_eq!(track["points"][0]["value"], json!(8.0));
+        assert_eq!(track["points"][1]["frame"], json!(12));
+        assert_eq!(track["points"][1]["value"], json!(12.0));
+        for frame in [1, 3, 6, 9, 11, 14] {
+            assert_eq!(
+                crate::keyframe_document::evaluate_document_track(
+                    &original_track,
+                    &json!(0.0),
+                    20,
+                    frame
+                ),
+                crate::keyframe_document::evaluate_document_track(track, &json!(0.0), 16, frame),
+                "curve changed at relative frame {frame}"
+            );
+        }
     }
 
     #[test]

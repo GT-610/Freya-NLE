@@ -4,6 +4,11 @@ All notable changes to Freya NLE are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Object midpoints now divide existing effect and audio-plugin keyframe tracks
+  across numeric linear and stepped segments. Other curves keep their original
+  timing, and manually placed or edited keyframes remain independent.
+
 ### Fixed
 - Video and image-sequence exports stop on the first frame with unreadable visual
   content and identify the affected frame and objects. A failed export preserves

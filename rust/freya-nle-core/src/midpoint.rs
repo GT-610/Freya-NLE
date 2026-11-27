@@ -5,9 +5,13 @@
 //! into independently parameterised halves. ExEdit implements it by adding a keyframe at that
 //! frame to every animatable parameter, so the whole object changes parameterisation at once.
 //!
-//! This module owns the clip-level list only. It deliberately does not create or shear
-//! parameter tracks; see `docs/batch4-design.md` section 1 for why that half of the feature is
-//! a separate step that needs the desktop suite.
+//! This module owns the clip-level list. Timeline commands also add generated points to existing
+//! effect and audio-plugin tracks when the segment can be split without changing its curve:
+//! numeric linear segments and stepped segments are supported. Other interpolation modes and
+//! non-numeric linear tracks remain untouched; a midpoint can therefore be present without a
+//! generated point on every parameter. Generated points are sampled from the existing track and
+//! are resampled when a midpoint moves with clip geometry. User-edited points become independent
+//! keyframes and are not removed with their midpoint.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
