@@ -423,18 +423,10 @@ pub(crate) fn insert_midpoint_keyframe(
     duration: i32,
     frame: i32,
 ) -> Option<Value> {
-    let mut normalized = normalize_track(track, fallback, duration);
-    let object = normalized.as_object_mut()?;
-    let start = object.get("start").and_then(Value::as_object)?.clone();
-    let points = object.get_mut("points").and_then(Value::as_array_mut)?;
-    if points.iter().any(|point| point_frame(point) == frame)
-        || integer(start.get("frame"), 0) == frame
-    {
-        return Some(normalized);
+    let flattened = resolve_track(track, fallback, duration);
+    if flattened.iter().any(|point| point_frame(point) == frame) {
+        return None;
     }
-    let mut flattened = vec![Value::Object(start)];
-    flattened.extend(points.iter().cloned());
-    sort_points(&mut flattened);
     let left = flattened
         .iter()
         .rposition(|point| point_frame(point) < frame)?;
@@ -462,9 +454,22 @@ pub(crate) fn insert_midpoint_keyframe(
     keyframe.insert("value".to_owned(), value);
     keyframe.insert("interp".to_owned(), Value::String(interpolation.to_owned()));
     keyframe.insert(MIDPOINT_MARKER.to_owned(), Value::Bool(true));
+
+    // The sampling view is clipped to the current duration. Keep authored points that can
+    // become visible after an extension, including when upgrading a legacy array track.
+    let mut updated = if is_structured(track) {
+        track.clone()
+    } else {
+        normalize_track(track, fallback, i32::MAX)
+    };
+    let points = updated
+        .as_object_mut()?
+        .entry("points")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()?;
     points.push(Value::Object(keyframe));
     sort_points(points);
-    Some(normalized)
+    Some(updated)
 }
 
 pub(crate) fn remap_midpoint_keyframes(
@@ -1026,10 +1031,7 @@ mod tests {
             "start": {"frame": 0, "value": 0.0, "interp": "linear"},
             "points": [{"frame": 5, "value": 77.0, "interp": "linear"}]
         });
-        assert_eq!(
-            insert_midpoint_keyframe(&existing, &json!(0.0), 6, 5),
-            Some(existing.clone())
-        );
+        assert!(insert_midpoint_keyframe(&existing, &json!(0.0), 6, 5).is_none());
         let curved = json!({
             "start": {"frame": 0, "value": 0.0, "interp": "ease_in_cubic"},
             "points": [{"frame": 10, "value": 100.0, "interp": "linear"}]
@@ -1040,6 +1042,18 @@ mod tests {
             "points": [{"frame": 10, "value": "#ffffff", "interp": "linear"}]
         });
         assert!(insert_midpoint_keyframe(&color, &json!("#000000"), 11, 5).is_none());
+    }
+
+    #[test]
+    fn midpoint_samples_the_active_clip_but_keeps_future_legacy_points() {
+        let track = json!([
+            {"frame": 0, "value": 0.0, "interp": "linear"},
+            {"frame": 4, "value": 10.0, "interp": "linear"},
+            {"frame": 40, "value": 80.0, "interp": "linear"}
+        ]);
+        let updated = insert_midpoint_keyframe(&track, &json!(0.0), 20, 6).expect("insert");
+        assert_eq!(updated["points"][1]["value"], json!(10.0));
+        assert_eq!(updated["points"][2], track[2]);
     }
 
     #[test]

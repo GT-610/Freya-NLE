@@ -3494,6 +3494,81 @@ mod tests {
     }
 
     #[test]
+    fn midpoint_edits_preserve_keyframes_beyond_the_clip_end() {
+        let mut state = TimelineState::new(document(), 2, 1).expect("valid state");
+        let set_keyframes = state
+            .plan_batch(vec![
+                EditRequest::SetEffectKeyframe {
+                    clip_id: 1,
+                    effect_index: 0,
+                    param_name: "x".to_owned(),
+                    frame: 40,
+                    value: json!(80.0),
+                    options: json!({"interp": "linear"}),
+                },
+                EditRequest::SetAudioPluginKeyframe {
+                    clip_id: 1,
+                    plugin_index: 0,
+                    param_name: "0".to_owned(),
+                    frame: 40,
+                    value: json!(0.5),
+                    options: json!({"interp": "none"}),
+                },
+            ])
+            .expect("keyframe edits plan");
+        state.apply_patch(&set_keyframes.forward).expect("apply");
+        let original = state.document.clips[0].clone();
+
+        for (operation, frame) in [
+            (MidpointOperation::Add { frame: 6 }, 6),
+            (
+                MidpointOperation::Move {
+                    old_frame: 6,
+                    new_frame: 8,
+                },
+                8,
+            ),
+        ] {
+            apply_midpoint(&mut state, operation);
+            let clip = &state.document.clips[0];
+            for (track, before) in [
+                (
+                    &clip.effects[0].keyframes.as_ref().unwrap()["x"],
+                    &original.effects[0].keyframes.as_ref().unwrap()["x"],
+                ),
+                (
+                    &clip.audio_plugins[0].keyframes.as_ref().unwrap()["0"],
+                    &original.audio_plugins[0].keyframes.as_ref().unwrap()["0"],
+                ),
+            ] {
+                let points = track["points"].as_array().unwrap();
+                assert_eq!(points[0]["frame"], json!(frame));
+                assert_eq!(&points[1..], before["points"].as_array().unwrap());
+            }
+        }
+
+        let extend = state
+            .plan(EditRequest::UpdateClipGeometry {
+                clip_id: 1,
+                layer: 0,
+                start: 0,
+                duration: 45,
+            })
+            .expect("extension plans");
+        state.apply_patch(&extend.forward).expect("apply");
+        let clip = &state.document.clips[0];
+        for (track, expected) in [
+            (&clip.effects[0].keyframes.as_ref().unwrap()["x"], 80.0),
+            (&clip.audio_plugins[0].keyframes.as_ref().unwrap()["0"], 0.5),
+        ] {
+            assert_eq!(
+                crate::keyframe_document::evaluate_document_track(track, &json!(0.0), 45, 40),
+                json!(expected),
+            );
+        }
+    }
+
+    #[test]
     fn midpoint_keeps_unsupported_curves_and_manual_keyframes_intact() {
         let mut document = document();
         let track = &mut document.clips[0].effects[0].keyframes.as_mut().unwrap()["x"];
