@@ -56,7 +56,7 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         update_vec_model(&timeline.get_objects(), Vec::new());
         // The object-list dock reads this model, so it has to be cleared with
         // `objects` or the closed project's rows stay on screen.
-        update_vec_model(&timeline.get_object_rows(), Vec::new());
+        sync_object_rows(timeline, Vec::new());
         // The scene-label flag menu appears whenever its list is non-empty, and
         // the object-list kind combo reads these too; none of them is gated on
         // a project being open, so all of them have to go with it.
@@ -198,7 +198,7 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
         })
         .collect::<Vec<_>>();
     update_vec_model(&timeline.get_objects(), objects.clone());
-    update_vec_model(&timeline.get_object_rows(), objects);
+    sync_object_rows(timeline, objects);
     let selected_layer = workspace.selected_layer();
     let scene = workspace.selected_scene_document();
     let layer_settings = workspace.layer_settings();
@@ -221,6 +221,22 @@ pub(super) fn sync_windows(main: &MainWindow, timeline: &TimelineWindow, model: 
     update_vec_model(&timeline.get_layers(), layers);
     sync_media_bin(timeline, workspace);
     sync_transport(main, timeline, model);
+}
+
+fn sync_object_rows(timeline: &TimelineWindow, rows: Vec<TimelineObjectData>) {
+    let model = timeline.get_object_rows();
+    // Selection and label updates can reuse a row without interrupting a drag.
+    // If membership or layer order changes, invalidate the pressed row before
+    // replacing its data in place.
+    if model.row_count() != rows.len()
+        || model
+            .iter()
+            .zip(&rows)
+            .any(|(old, new)| old.clip_id != new.clip_id || old.layer != new.layer)
+    {
+        timeline.set_object_rows_generation(timeline.get_object_rows_generation().wrapping_add(1));
+    }
+    update_vec_model(&model, rows);
 }
 
 pub(super) fn sync_media_bin(timeline: &TimelineWindow, workspace: &freya_nle_app::WorkspaceModel) {
@@ -592,4 +608,79 @@ pub(super) fn mark_label(frame: i32, rate: i32, note: &str) -> String {
         label.push('…');
     }
     label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::platform::{PointerEventButton::Left, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, PhysicalSize};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    fn object(clip_id: i32, layer: i32, locked: bool) -> TimelineObjectData {
+        TimelineObjectData {
+            clip_id,
+            layer,
+            locked,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn object_list_drops_only_on_an_unlocked_row_in_the_current_order() {
+        i_slint_backend_testing::init_no_event_loop();
+        let timeline = TimelineWindow::new().unwrap();
+        timeline.set_object_rows(ModelRc::new(VecModel::default()));
+        timeline.set_object_list_visible(true);
+        timeline.window().set_size(PhysicalSize::new(1280, 460));
+        let rows = || vec![object(1, 2, false), object(2, 4, true), object(3, 7, false)];
+        sync_object_rows(&timeline, rows());
+        timeline.show().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(Duration::ZERO);
+
+        let moved = Rc::new(Cell::new(None));
+        let result = Rc::clone(&moved);
+        timeline.on_move_object_layer(move |source, target| result.set(Some((source, target))));
+        let window = timeline.window();
+        // The list occupies the right-hand dock. Rows are 29 px apart,
+        // including the gap, and the fixture has no kind filter.
+        let source = LogicalPosition::new(1150.0, 75.0);
+        let locked = LogicalPosition::new(source.x, source.y + 29.0);
+        let unlocked = LogicalPosition::new(source.x, source.y + 58.0);
+        let drag_to = |position| {
+            window.dispatch_event(WindowEvent::PointerMoved { position: source });
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: source,
+                button: Left,
+            });
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+        };
+        let release = |position| {
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: Left,
+            });
+        };
+
+        drag_to(locked);
+        release(locked);
+        assert_eq!(moved.get(), None, "locked destination");
+
+        drag_to(unlocked);
+        let mut relabeled = rows();
+        relabeled[0].label = "New name".into();
+        sync_object_rows(&timeline, relabeled);
+        release(unlocked);
+        assert_eq!(moved.take(), Some((2, 7)), "same rows with updated labels");
+
+        drag_to(unlocked);
+        let mut shifted = rows();
+        // The source remains in the same row, but its old target index now
+        // points to a different, unlocked layer.
+        shifted.insert(2, object(4, 6, false));
+        sync_object_rows(&timeline, shifted);
+        release(unlocked);
+        assert_eq!(moved.get(), None, "rows changed between press and release");
+    }
 }
