@@ -1716,6 +1716,18 @@ msgstr "ログフォルダを開く"
 msgid "Save Log..."
 msgstr "ログを保存..."
 
+msgid "Animate"
+msgstr "動きを設定"
+
+msgid "Animation for {}"
+msgstr "{}の動き"
+
+msgid "Back to Timeline (F6)"
+msgstr "タイムラインに戻る (F6)"
+
+msgid "Keyframes"
+msgstr "キーフレーム"
+
 msgid "Panels"
 msgstr "パネル"
 

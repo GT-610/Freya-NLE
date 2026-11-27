@@ -2,7 +2,7 @@
 
 use crate::dialogs::{show_and_redraw, show_error_dialog, slint_color};
 use crate::easing::{
-    parameter_button_label, sync_easing_catalog, sync_easing_preview, sync_easing_window,
+    parameter_easing_label, sync_easing_catalog, sync_easing_preview, sync_easing_window,
 };
 use crate::localization::{
     localized, localized_effect_categories, localized_effect_metadata, status_line,
@@ -1619,7 +1619,7 @@ fn push_object_settings_rows(
         current_frame: 0,
         clip_duration: 0,
         interpolation: SharedString::new(),
-        parameter_button_label: SharedString::new(),
+        easing_label: SharedString::new(),
         number_value: 0.0,
         end_number_value: 0.0,
         minimum: 0.0,
@@ -1683,7 +1683,7 @@ fn push_object_settings_rows(
             audio_plugin,
             effect_index: index as i32,
             param_name: SharedString::from(control.param.clone().unwrap_or_default()),
-            label: SharedString::from(localized_label.clone()),
+            label: SharedString::from(localized_label),
             effect_enabled: enabled,
             header_toggle_visible,
             selected,
@@ -1704,8 +1704,7 @@ fn push_object_settings_rows(
             current_frame: control.relative_frame,
             clip_duration: control.clip_duration,
             interpolation: SharedString::from(control.start_interpolation.clone()),
-            parameter_button_label: SharedString::from(parameter_button_label(
-                &localized_label,
+            easing_label: SharedString::from(parameter_easing_label(
                 control.keyframed,
                 &control.start_interpolation,
             )),
@@ -1735,7 +1734,6 @@ fn push_object_settings_rows(
         if supports_track {
             rows.push(ObjectSettingRowData {
                 row_kind: SharedString::from("keyframes"),
-                label: SharedString::new(),
                 ..parameter_row
             });
         }

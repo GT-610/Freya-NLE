@@ -1716,6 +1716,18 @@ msgstr "打开日志文件夹"
 msgid "Save Log..."
 msgstr "保存日志..."
 
+msgid "Animate"
+msgstr "动画"
+
+msgid "Animation for {}"
+msgstr "{}的动画"
+
+msgid "Back to Timeline (F6)"
+msgstr "返回时间线 (F6)"
+
+msgid "Keyframes"
+msgstr "关键帧"
+
 msgid "Panels"
 msgstr "面板"
 

@@ -160,7 +160,7 @@ use crate::dialogs::{
 };
 use crate::easing::{
     easing_catalog_rows, easing_label, easing_name_at, easing_options, easing_preview_path,
-    easing_tangent_path, parameter_button_label,
+    easing_tangent_path, parameter_easing_label,
 };
 use crate::export::{export_workspace_for_frame, selected_codec, selected_codec_index};
 use crate::lifecycle::{RecentProject, merge_recent_project, recent_projects_from_value};
@@ -406,24 +406,17 @@ fn effect_metadata_follows_the_selected_ui_language() {
 }
 
 #[test]
-fn dual_slider_button_uses_the_localized_property_and_easing_names() {
+fn animation_button_distinguishes_static_and_keyframed_parameters() {
     CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::English));
-    assert_eq!(
-        parameter_button_label(&localized_effect_metadata("拡大率"), true, "linear"),
-        "Scale (Linear)"
-    );
+    assert_eq!(parameter_easing_label(false, "linear"), "");
+    assert_eq!(parameter_easing_label(true, "constant"), "No movement");
+    assert_eq!(parameter_easing_label(true, "linear"), "Linear");
 
     CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::SimplifiedChinese));
-    assert_eq!(
-        parameter_button_label(&localized_effect_metadata("拡大率"), true, "linear"),
-        "缩放率 (线性)"
-    );
+    assert_eq!(parameter_easing_label(true, "linear"), "线性");
 
     CURRENT_UI_LANGUAGE.with(|language| language.set(UiLanguage::Japanese));
-    assert_eq!(
-        parameter_button_label(&localized_effect_metadata("拡大率"), true, "linear"),
-        "拡大率 (直線)"
-    );
+    assert_eq!(parameter_easing_label(true, "linear"), "直線");
 }
 
 #[test]

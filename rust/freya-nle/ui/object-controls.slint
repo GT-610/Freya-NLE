@@ -567,6 +567,7 @@ export component OverlayNumber inherits Rectangle {
 
 export component ObjectSettingRow inherits Rectangle {
     in property <ObjectSettingRowData> row-data;
+    private property <length> label-column-width: clamp(self.width * 0.24, AppTheme.setting-label-width, 152px);
     callback activate-effect(bool, int);
     callback set-effect-enabled(bool, int, bool);
     callback remove-effect(bool, int);
@@ -693,7 +694,7 @@ export component ObjectSettingRow inherits Rectangle {
         // column of booleans lines up with the choices and text fields. It is
         // part of the toggle target, as the whole row used to be.
         Rectangle {
-            width: AppTheme.setting-label-width;
+            width: root.label-column-width;
             height: 100%;
             background: transparent;
             Text {
@@ -781,20 +782,49 @@ export component ObjectSettingRow inherits Rectangle {
         if root.row-data.keyframed : Text { text: "KF"; color: AppTheme.warning; vertical-alignment: center; }
     }
 
-    // One row, five columns, like Qt's ParamControl: start slider, start
-    // value, the easing/label button, end value, end slider. The button used
-    // to live on its own line, which pushed it above the fields it labels.
     if root.row-data.row-kind == "number" || root.row-data.row-kind == "integer" : HorizontalLayout {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 6px;
 
-        if root.row-data.audio-plugin : Text {
-            text: root.row-data.label;
-            width: AppTheme.setting-label-width;
+        Text {
+            text: root.row-data.unit == "" ? root.row-data.label
+                : root.row-data.label + " (" + root.row-data.unit + ")";
+            width: root.label-column-width;
             color: AppTheme.foreground;
             overflow: elide;
             vertical-alignment: center;
+        }
+        OverlayNumber {
+            width: 70px;
+            height: 26px;
+            mixed: root.row-data.mixed;
+            text-value: root.row-data.text-value;
+            enabled: root.row-data.interactive && root.row-data.start-interactive;
+            opacity: root.row-data.start-interactive ? 1 : 0.45;
+            label: root.row-data.label + @tr(" start value");
+            // An interval start belongs to one object's keyframe track; the projection turns this
+            // off when several objects are selected so the field cannot edit just the primary.
+            preview(value) => {
+                if root.row-data.audio-plugin {
+                    root.set-number(true, root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, value);
+                } else if root.row-data.range-mode {
+                    root.set-start-number(root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, root.row-data.end-frame, value);
+                } else {
+                    root.set-number(false, root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, value);
+                }
+            }
+            commit(value) => {
+                root.set-text(
+                    root.row-data.audio-plugin,
+                    root.row-data.effect-index,
+                    root.row-data.param-name,
+                    root.row-data.start-frame,
+                    value
+                );
+            }
+            finish-edit => { root.finish-edit(); }
+            cancel-edit => { root.cancel-edit(); }
         }
         Slider {
             height: 26px;
@@ -843,46 +873,9 @@ export component ObjectSettingRow inherits Rectangle {
                 }
             }
         }
-        OverlayNumber {
-            width: 70px;
-            height: 26px;
-            mixed: root.row-data.mixed;
-            text-value: root.row-data.text-value;
-            enabled: root.row-data.interactive && root.row-data.start-interactive;
-            opacity: root.row-data.start-interactive ? 1 : 0.45;
-            label: root.row-data.label + @tr(" start value");
-            // An interval start belongs to one object's keyframe track; the projection turns this
-            // off when several objects are selected so the field cannot edit just the primary.
-            preview(value) => {
-                if root.row-data.audio-plugin {
-                    root.set-number(true, root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, value);
-                } else if root.row-data.range-mode {
-                    root.set-start-number(root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, root.row-data.end-frame, value);
-                } else {
-                    root.set-number(false, root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, value);
-                }
-            }
-            commit(value) => {
-                root.set-text(
-                    root.row-data.audio-plugin,
-                    root.row-data.effect-index,
-                    root.row-data.param-name,
-                    root.row-data.start-frame,
-                    value
-                );
-            }
-            finish-edit => { root.finish-edit(); }
-            cancel-edit => { root.cancel-edit(); }
-        }
-        if root.row-data.mixed : Text {
-            text: @tr("Mixed values");
-            color: AppTheme.warning;
-            vertical-alignment: center;
-        }
         if root.row-data.audio-plugin : Button {
-            width: 24px;
             height: 26px;
-            text: "K";
+            text: @tr("Keyframes");
             enabled: root.row-data.interactive && !root.row-data.mixed;
             accessible-label: root.row-data.label + @tr(": create keyframes at the start and end");
             clicked => {
@@ -893,58 +886,11 @@ export component ObjectSettingRow inherits Rectangle {
                 );
             }
         }
-        if !root.row-data.audio-plugin : quick-easing-menu := ContextMenuArea {
-            // Qt's ParamControl puts the five controls on one line and lets
-            // the label button keep a fixed 100 px so the value fields of
-            // neighbouring rows line up.
-            width: 100px;
+        if root.row-data.right-interactive : ScrubNumberEdit {
+            width: 86px;
             height: 26px;
-            Menu {
-                MenuItem { title: @tr("No movement"); activated => { root.choose-easing("none"); } }
-                MenuItem { title: @tr("Linear"); activated => { root.choose-easing("linear"); } }
-                MenuItem { title: @tr("Ease in"); activated => { root.choose-easing("ease_in_quad"); } }
-                MenuItem { title: @tr("Ease out"); activated => { root.choose-easing("ease_out_quad"); } }
-                MenuItem { title: @tr("Ease in and out"); activated => { root.choose-easing("ease_in_out_quad"); } }
-                MenuSeparator { }
-                MenuItem { title: @tr("Advanced curve..."); activated => { root.open-easing(root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, root.row-data.end-frame); } }
-                MenuSeparator { }
-                MenuItem {
-                    title: @tr("Set Expression...");
-                    activated => { root.edit-parameter-expression(root.row-data.effect-index, root.row-data.param-name); }
-                }
-                MenuItem {
-                    title: @tr("Clear Expression");
-                    enabled: root.row-data.has-expression;
-                    activated => { root.clear-parameter-expression(root.row-data.effect-index, root.row-data.param-name); }
-                }
-            }
-            // Slint's Button sizes its text to the whole label, so a long
-            // "{param} (ease in and out)" label used to draw past this fixed
-            // 100 px column and over the value fields beside it. The wrapper
-            // pins the button to the column and clips whatever the label would
-            // have spilled, keeping the columns of neighbouring rows aligned
-            // like Qt's ParamControl.
-            Rectangle {
-                width: parent.width;
-                height: parent.height;
-                clip: true;
-                Button {
-                    width: parent.width;
-                    height: parent.height;
-                    text: root.row-data.parameter-button-label;
-                    enabled: root.row-data.interactive;
-                    clicked => { quick-easing-menu.show({ x: 0px, y: self.height }); }
-                }
-            }
-        }
-        if !root.row-data.audio-plugin : ScrubNumberEdit {
-            width: 70px;
-            height: 26px;
-            source-text: root.row-data.right-interactive
-                ? root.row-data.end-text-value
-                : root.row-data.text-value;
-            enabled: root.row-data.interactive && root.row-data.right-interactive;
-            opacity: root.row-data.right-interactive ? 1 : 0.45;
+            source-text: root.row-data.end-text-value;
+            enabled: root.row-data.interactive;
             label: root.row-data.label + @tr(" end value");
             value: root.row-data.end-number-value;
             minimum: root.row-data.minimum;
@@ -964,24 +910,19 @@ export component ObjectSettingRow inherits Rectangle {
                 );
             }
         }
-        if !root.row-data.audio-plugin : Slider {
+        if root.row-data.right-interactive : Slider {
             height: 26px;
             horizontal-stretch: 1;
             accessible-label: root.row-data.label + @tr(" end value");
-            value: root.row-data.right-interactive
-                ? root.row-data.end-number-value
-                : root.row-data.number-value;
+            value: root.row-data.end-number-value;
             minimum: root.row-data.minimum;
             maximum: root.row-data.maximum;
             step: root.row-data.step;
-            private property <float> projected: root.row-data.right-interactive
-                ? root.row-data.end-number-value
-                : root.row-data.number-value;
+            private property <float> projected: root.row-data.end-number-value;
             changed projected => { self.value = self.projected; }
             released => { root.finish-edit(); }
             changed has-focus => { if !self.has-focus { root.finish-edit(); } }
-            enabled: root.row-data.interactive && root.row-data.right-interactive;
-            opacity: root.row-data.right-interactive ? 1 : 0.45;
+            enabled: root.row-data.interactive;
             changed(value) => {
                 root.set-number(
                     root.row-data.audio-plugin,
@@ -992,20 +933,78 @@ export component ObjectSettingRow inherits Rectangle {
                 );
             }
         }
-        if root.row-data.unit != "" : Text {
-            text: root.row-data.unit;
-            color: AppTheme.muted-foreground;
-            vertical-alignment: center;
-        }
-        if root.row-data.keyframed && !root.row-data.mixed : Text {
-            text: "KF";
-            color: AppTheme.warning;
-            vertical-alignment: center;
-        }
-        if root.row-data.mixed : Text {
-            text: @tr("Mixed keyframes");
-            color: AppTheme.warning;
-            vertical-alignment: center;
+        if !root.row-data.audio-plugin : quick-easing-menu := ContextMenuArea {
+            width: 116px;
+            height: 26px;
+            Menu {
+                MenuItem {
+                    title: @tr("No movement");
+                    checkable: true;
+                    checked: root.row-data.keyframed && !root.row-data.mixed && root.row-data.interpolation == "none";
+                    activated => { root.choose-easing("none"); }
+                }
+                MenuItem {
+                    title: @tr("Linear");
+                    checkable: true;
+                    checked: root.row-data.keyframed && !root.row-data.mixed && root.row-data.interpolation == "linear";
+                    activated => { root.choose-easing("linear"); }
+                }
+                MenuItem {
+                    title: @tr("Ease in");
+                    checkable: true;
+                    checked: root.row-data.keyframed && !root.row-data.mixed && root.row-data.interpolation == "ease_in_quad";
+                    activated => { root.choose-easing("ease_in_quad"); }
+                }
+                MenuItem {
+                    title: @tr("Ease out");
+                    checkable: true;
+                    checked: root.row-data.keyframed && !root.row-data.mixed && root.row-data.interpolation == "ease_out_quad";
+                    activated => { root.choose-easing("ease_out_quad"); }
+                }
+                MenuItem {
+                    title: @tr("Ease in and out");
+                    checkable: true;
+                    checked: root.row-data.keyframed && !root.row-data.mixed && root.row-data.interpolation == "ease_in_out_quad";
+                    activated => { root.choose-easing("ease_in_out_quad"); }
+                }
+                MenuSeparator { }
+                MenuItem { title: @tr("Advanced curve..."); activated => { root.open-easing(root.row-data.effect-index, root.row-data.param-name, root.row-data.start-frame, root.row-data.end-frame); } }
+                MenuSeparator { }
+                MenuItem {
+                    title: @tr("Set Expression...");
+                    activated => { root.edit-parameter-expression(root.row-data.effect-index, root.row-data.param-name); }
+                }
+                MenuItem {
+                    title: @tr("Clear Expression");
+                    enabled: root.row-data.has-expression;
+                    activated => { root.clear-parameter-expression(root.row-data.effect-index, root.row-data.param-name); }
+                }
+            }
+            Button {
+                width: 100%;
+                height: 100%;
+                enabled: root.row-data.interactive;
+                accessible-label: @tr("Animation for {}", root.row-data.label);
+                accessible-description: root.row-data.easing-label;
+                clicked => { quick-easing-menu.show({ x: 0px, y: self.height }); }
+            }
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 6px;
+                spacing: 4px;
+                Text {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    text: root.row-data.mixed ? @tr("Mixed values")
+                        : root.row-data.easing-label == "" ? @tr("Animate") : root.row-data.easing-label;
+                    color: !root.row-data.interactive ? AppTheme.muted-foreground
+                        : root.row-data.keyframed && !root.row-data.mixed ? AppTheme.accent : AppTheme.foreground;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                Text { text: "▾"; color: AppTheme.muted-foreground; vertical-alignment: center; }
+            }
         }
     }
 
@@ -1013,7 +1012,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: root.label-column-width; overflow: elide; vertical-alignment: center; }
         ComboBox {
             width: 220px;
             height: 26px;
@@ -1041,7 +1040,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: top; }
+        Text { text: root.row-data.label; width: root.label-column-width; overflow: elide; vertical-alignment: top; }
         CommitTextEdit {
             height: 62px;
             live-preview: true;
@@ -1074,7 +1073,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: root.label-column-width; overflow: elide; vertical-alignment: center; }
         CommitLineEdit {
             height: 26px;
             horizontal-stretch: 1;
@@ -1113,7 +1112,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: root.label-column-width; overflow: elide; vertical-alignment: center; }
         Button {
             horizontal-stretch: 1;
             height: 26px;
@@ -1143,7 +1142,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: root.label-column-width; overflow: elide; vertical-alignment: center; }
         Rectangle {
             width: 52px;
             height: 26px;
@@ -1284,7 +1283,7 @@ export component ObjectSettingRow inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 7px;
-        Text { text: root.row-data.label; width: AppTheme.setting-label-width; overflow: elide; vertical-alignment: center; }
+        Text { text: root.row-data.label; width: root.label-column-width; overflow: elide; vertical-alignment: center; }
         Text { text: root.row-data.text-value; color: AppTheme.muted-foreground; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
     }
 }
