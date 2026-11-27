@@ -368,18 +368,46 @@ export component ExportWindow inherits Window {
         TouchArea { }
         Rectangle {
             width: min(parent.width * 0.7, 430px);
-            height: 180px;
+            height: 192px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: transparent;
+            background: AppTheme.dialog-background;
+            border-width: 1px;
+            border-color: AppTheme.border;
+            border-radius: AppTheme.control-radius;
             VerticalLayout {
+                padding: 20px;
                 spacing: 16px;
-                Text { text: @tr("Exporting..."); color: white; font-size: 1.05rem; font-weight: 700; horizontal-alignment: center; }
-                ProgressIndicator { progress: root.export-progress / 100; }
-                Text { text: root.progress-label; color: #ffffffcc; horizontal-alignment: center; }
+                Text {
+                    text: @tr("Exporting...");
+                    color: AppTheme.dialog-foreground;
+                    font-size: 1.05rem;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                ProgressIndicator { progress: clamp(root.export-progress / 100, 0, 1); }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.progress-label;
+                        color: AppTheme.dialog-muted;
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: clamp(root.export-progress, 0, 100).round() + "%";
+                        color: AppTheme.dialog-foreground;
+                        vertical-alignment: center;
+                    }
+                }
                 HorizontalLayout {
                     alignment: center;
-                    Button { text: @tr("Cancel"); clicked => { root.request-cancel(); } }
+                    Button {
+                        text: @tr("Cancel Export");
+                        clicked => { root.request-cancel(); }
+                    }
                 }
             }
         }
