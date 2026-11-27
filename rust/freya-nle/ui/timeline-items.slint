@@ -182,6 +182,13 @@ export component LayerHeaderItem inherits Rectangle {
             }
         }
     }
+    if root.layer.selected : Rectangle {
+        x: parent.width - 2px;
+        y: 0px;
+        width: 2px;
+        height: 100%;
+        background: AppTheme.accent-foreground;
+    }
     Rectangle {
         y: parent.height - 1px;
         width: 100%;
@@ -253,19 +260,37 @@ export component TimelineClipItem inherits Rectangle {
         border-color: AppTheme.accent.transparentize(0.45);
     }
 
+    // Only the host can approve a destination. Keep the source in view and
+    // mark it as blocked when a move has no valid placement.
+    private property <bool> moving: root.active-drag == "move" && root.threshold-crossed;
+    private property <bool> blocked-move: root.moving && !root.preview-valid;
     clip-visual := Rectangle {
-        x: root.tool-dragging && root.tool-local-feedback.valid ? (root.tool-local-feedback.start - root.clip-data.start) * root.pixels-per-frame * 1px : root.preview-valid ? (root.feedback.start - root.clip-data.start) * root.pixels-per-frame * 1px : 0px;
-        y: root.preview-valid ? (root.feedback.layer - root.clip-data.layer) * root.track-height : 0px;
-        width: root.tool-dragging && root.tool-local-feedback.valid ? max(root.tool-local-feedback.duration * root.pixels-per-frame * 1px, 8px) : root.preview-valid ? max(root.feedback.duration * root.pixels-per-frame * 1px, 8px) : root.active-drag == "trim-start"
-            ? max(root.width - root.drag-x, 8px)
-            : root.active-drag == "trim-end"
-                ? max(root.width + root.drag-x, 8px)
-                : root.width;
+        x: root.tool-dragging && root.tool-local-feedback.valid
+            ? (root.tool-local-feedback.start - root.clip-data.start) * root.pixels-per-frame * 1px
+            : root.preview-valid
+                ? (root.feedback.start - root.clip-data.start) * root.pixels-per-frame * 1px
+                : 0px;
+        y: root.preview-valid
+            ? (root.feedback.layer - root.clip-data.layer) * root.track-height
+            : 0px;
+        width: root.tool-dragging && root.tool-local-feedback.valid
+            ? max(root.tool-local-feedback.duration * root.pixels-per-frame * 1px, 8px)
+            : root.preview-valid
+                ? max(root.feedback.duration * root.pixels-per-frame * 1px, 8px)
+                : root.active-drag == "trim-start"
+                    ? max(root.width - root.drag-x, 8px)
+                    : root.active-drag == "trim-end"
+                        ? max(root.width + root.drag-x, 8px)
+                        : root.width;
         height: root.height;
         border-radius: AppTheme.control-radius;
         background: root.clip-data.has-clip-color ? root.clip-data.clip-color : AppTheme.clip;
-        border-width: root.clip-data.primary ? 2px : root.clip-data.selected ? 1px : 0px;
-        border-color: AppTheme.accent-foreground;
+        border-width: root.moving
+            ? 2px
+            : root.clip-data.primary ? 2px : root.clip-data.selected ? 1px : 0px;
+        border-color: root.moving
+            ? root.preview-valid ? AppTheme.success : AppTheme.danger
+            : AppTheme.accent-foreground;
         animate background { duration: 120ms; }
         if root.clip-data.selected || clip-touch.has-hover : Rectangle {
             width: 100%;
@@ -274,6 +299,12 @@ export component TimelineClipItem inherits Rectangle {
             background: root.clip-data.selected
                 ? AppTheme.accent.transparentize(0.72)
                 : AppTheme.hover-background;
+        }
+        if root.clip-data.selected : Rectangle {
+            y: 0px;
+            width: 100%;
+            height: 2px;
+            background: AppTheme.accent-foreground;
         }
         if root.clip-data.audio : Rectangle {
             x: root.resize-handle-width;
@@ -314,11 +345,28 @@ export component TimelineClipItem inherits Rectangle {
                 vertical-alignment: center;
             }
         }
+        if root.blocked-move : Rectangle {
+            x: max(parent.width - 64px, 0px);
+            y: 1px;
+            width: min(parent.width, 64px);
+            height: 16px;
+            border-radius: 2px;
+            background: AppTheme.window-background.transparentize(0.12);
+            Text {
+                text: parent.width >= 48px ? @tr("Blocked") : "×";
+                color: AppTheme.danger;
+                font-size: 0.72rem;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
     }
     clip-touch := TouchArea {
             x: min(root.resize-handle-width, parent.width / 2);
             width: max(parent.width - 2 * root.resize-handle-width, 1px);
-            mouse-cursor: root.clip-data.locked ? not-allowed : move;
+            mouse-cursor: root.clip-data.locked || root.blocked-move ? not-allowed : move;
             accessible-role: list-item;
             accessible-label: root.clip-data.label;
             accessible-description: @tr("Clip: {}, layer {}, starts at frame {} for {} frames",

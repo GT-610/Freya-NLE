@@ -23,7 +23,15 @@ export component ObjectListPanel inherits Rectangle {
     // The row being dragged and how many rows the pointer has travelled. Rows
     // are fixed height, so the row count is the layer delta.
     private property <int> drag-source-layer: -1;
+    private property <int> drag-source-index: -1;
     private property <int> drag-delta-rows: 0;
+    private property <int> drag-target-index: root.drag-source-index + root.drag-delta-rows;
+
+    function clear-drag() {
+        root.drag-source-layer = -1;
+        root.drag-source-index = -1;
+        root.drag-delta-rows = 0;
+    }
     callback select(int);
     callback open(int);
     // Window coordinates, so the timeline can place the shared context menu.
@@ -98,9 +106,21 @@ export component ObjectListPanel inherits Rectangle {
                 spacing: 1px;
                 for object[index] in root.objects : Rectangle {
                     height: 28px;
-                    background: object.selected
-                        ? AppTheme.selection-background
-                        : object-touch.has-hover ? AppTheme.hover-background : transparent;
+                    private property <bool> drop-target: root.drag-source-index >= 0
+                        && root.drag-target-index == index
+                        && object.layer != root.drag-source-layer;
+                    background: self.drop-target
+                        ? AppTheme.accent.transparentize(0.82)
+                        : object.selected
+                            ? AppTheme.selection-background
+                            : object-touch.has-hover ? AppTheme.hover-background : transparent;
+                    border-width: self.drop-target ? 1px : 0px;
+                    border-color: AppTheme.accent-foreground;
+                    if object.selected : Rectangle {
+                        width: 2px;
+                        height: 100%;
+                        background: AppTheme.accent-foreground;
+                    }
                     HorizontalLayout {
                         padding-left: 6px;
                         padding-right: 6px;
@@ -130,8 +150,13 @@ export component ObjectListPanel inherits Rectangle {
                             overflow: elide;
                         }
                         Text {
-                            text: object.locked ? "L" : "";
-                            color: AppTheme.warning;
+                            text: object.locked
+                                ? "L"
+                                : root.drag-source-index == index
+                                    && (root.drag-target-index < 0 || root.drag-target-index >= root.objects.length)
+                                    ? "×"
+                                    : "";
+                            color: object.locked ? AppTheme.warning : AppTheme.danger;
                             font-size: 0.72rem;
                             vertical-alignment: center;
                         }
@@ -160,12 +185,12 @@ export component ObjectListPanel inherits Rectangle {
                                 );
                             } else if event.kind == PointerEventKind.down {
                                 root.drag-source-layer = object.layer;
+                                root.drag-source-index = index;
                                 root.drag-delta-rows = 0;
                             } else if event.kind == PointerEventKind.up {
                                 let delta = root.drag-delta-rows;
                                 let source = root.drag-source-layer;
-                                root.drag-source-layer = -1;
-                                root.drag-delta-rows = 0;
+                                root.clear-drag();
                                 // Rows are one per object, not one per layer, so
                                 // the destination layer is read from the row the
                                 // drag ended on rather than from the row count.
@@ -178,8 +203,10 @@ export component ObjectListPanel inherits Rectangle {
                                         root.objects[target-index].layer
                                     );
                                 }
+                            } else if event.kind == PointerEventKind.cancel {
+                                root.clear-drag();
                             } else if event.kind == PointerEventKind.move
-                                && root.drag-source-layer == object.layer {
+                                && root.drag-source-index == index {
                                 // Truncated, not rounded: a pointer that has
                                 // moved 15px is still inside the source row,
                                 // and rounding would land on the next row and

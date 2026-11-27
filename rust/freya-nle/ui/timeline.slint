@@ -1487,7 +1487,7 @@ export component TimelineWindow inherits Window {
                     width: max(abs(root.box-current-frame - root.box-start-frame) * root.pixels-per-frame * 1px, 1px);
                     height: max((abs(root.box-current-layer - root.box-start-layer) + 1) * root.timeline-track-height * 1px, 1px);
                     background: AppTheme.selection-background;
-                    border-width: 1px;
+                    border-width: 2px;
                     border-color: AppTheme.accent;
                 }
                 if root.skimmer-visible : Rectangle {

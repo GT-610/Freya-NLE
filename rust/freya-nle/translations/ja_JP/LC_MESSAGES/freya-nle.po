@@ -213,6 +213,9 @@ msgstr "ビットレート"
 msgid "Bitrate:"
 msgstr "ビットレート:"
 
+msgid "Blocked"
+msgstr "配置不可"
+
 msgid "Bring editor windows onto this screen"
 msgstr "編集ウィンドウをこの画面に移動"
 
